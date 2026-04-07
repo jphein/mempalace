@@ -124,7 +124,7 @@ def cmd_split(args):
     import sys
 
     # Rebuild argv for split_mega_files argparse
-    argv = [args.dir]
+    argv = ["--source", args.dir]
     if args.output_dir:
         argv += ["--output-dir", args.output_dir]
     if args.dry_run:
@@ -145,6 +145,77 @@ def cmd_status(args):
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     status(palace_path=palace_path)
+
+
+def cmd_repair(args):
+    """Rebuild palace vector index from SQLite metadata."""
+    import chromadb
+    import shutil
+
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+
+    if not os.path.isdir(palace_path):
+        print(f"\n  No palace found at {palace_path}")
+        return
+
+    print(f"\n{'=' * 55}")
+    print("  MemPalace Repair")
+    print(f"{'=' * 55}\n")
+    print(f"  Palace: {palace_path}")
+
+    # Try to read existing drawers
+    try:
+        client = chromadb.PersistentClient(path=palace_path)
+        col = client.get_collection("mempalace_drawers")
+        total = col.count()
+        print(f"  Drawers found: {total}")
+    except Exception as e:
+        print(f"  Error reading palace: {e}")
+        print("  Cannot recover — palace may need to be re-mined from source files.")
+        return
+
+    if total == 0:
+        print("  Nothing to repair.")
+        return
+
+    # Extract all drawers in batches
+    print("\n  Extracting drawers...")
+    batch_size = 5000
+    all_ids = []
+    all_docs = []
+    all_metas = []
+    offset = 0
+    while offset < total:
+        batch = col.get(limit=batch_size, offset=offset, include=["documents", "metadatas"])
+        all_ids.extend(batch["ids"])
+        all_docs.extend(batch["documents"])
+        all_metas.extend(batch["metadatas"])
+        offset += batch_size
+    print(f"  Extracted {len(all_ids)} drawers")
+
+    # Backup and rebuild
+    backup_path = palace_path + ".backup"
+    if os.path.exists(backup_path):
+        shutil.rmtree(backup_path)
+    print(f"  Backing up to {backup_path}...")
+    shutil.copytree(palace_path, backup_path)
+
+    print("  Rebuilding collection...")
+    client.delete_collection("mempalace_drawers")
+    new_col = client.create_collection("mempalace_drawers")
+
+    filed = 0
+    for i in range(0, len(all_ids), batch_size):
+        batch_ids = all_ids[i : i + batch_size]
+        batch_docs = all_docs[i : i + batch_size]
+        batch_metas = all_metas[i : i + batch_size]
+        new_col.add(documents=batch_docs, ids=batch_ids, metadatas=batch_metas)
+        filed += len(batch_ids)
+        print(f"  Re-filed {filed}/{len(all_ids)} drawers...")
+
+    print(f"\n  Repair complete. {filed} drawers rebuilt.")
+    print(f"  Backup saved at {backup_path}")
+    print(f"\n{'=' * 55}\n")
 
 
 def cmd_compress(args):
@@ -350,6 +421,12 @@ def main():
         help="Only split files containing at least N sessions (default: 2)",
     )
 
+    # repair
+    sub.add_parser(
+        "repair",
+        help="Rebuild palace vector index from stored data (fixes segfaults after corruption)",
+    )
+
     # status
     sub.add_parser("status", help="Show what's been filed")
 
@@ -366,6 +443,7 @@ def main():
         "search": cmd_search,
         "compress": cmd_compress,
         "wake-up": cmd_wakeup,
+        "repair": cmd_repair,
         "status": cmd_status,
     }
     dispatch[args.command](args)
