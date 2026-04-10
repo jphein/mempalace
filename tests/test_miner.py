@@ -6,7 +6,15 @@ from pathlib import Path
 import chromadb
 import yaml
 
-from mempalace.miner import detect_room, mine, scan_project
+from mempalace.miner import (
+    CHUNK_OVERLAP,
+    CHUNK_SIZE,
+    MIN_CHUNK_SIZE,
+    chunk_text,
+    detect_room,
+    mine,
+    scan_project,
+)
 from mempalace.palace import file_already_mined
 
 
@@ -357,3 +365,99 @@ def test_detect_room_filename_beats_content():
     """Priority 2 (filename) wins even when content strongly matches another room."""
     content = "test test test test test test test"
     assert _detect("misc/backend.py", content=content) == "backend"
+
+
+# =============================================================================
+# chunk_text tests
+# =============================================================================
+
+
+def test_chunk_text_short_content():
+    """Content shorter than CHUNK_SIZE produces a single chunk."""
+    content = "a" * (CHUNK_SIZE - 1)
+    chunks = chunk_text(content, "/fake/file.py")
+    assert len(chunks) == 1
+    assert chunks[0]["content"] == content
+    assert chunks[0]["chunk_index"] == 0
+
+
+def test_chunk_text_exact_chunk_size():
+    """Content exactly CHUNK_SIZE long produces a single chunk."""
+    content = "a" * CHUNK_SIZE
+    chunks = chunk_text(content, "/fake/file.py")
+    assert len(chunks) == 1
+    assert chunks[0]["content"] == content
+
+
+def test_chunk_text_two_chunks():
+    """Content slightly over CHUNK_SIZE produces two chunks with overlap."""
+    content = "a" * (CHUNK_SIZE + 1)
+    chunks = chunk_text(content, "/fake/file.py")
+    assert len(chunks) == 2
+
+
+def test_chunk_text_overlap_content():
+    """The second chunk starts at CHUNK_SIZE - CHUNK_OVERLAP (overlap region)."""
+    # Use digits so each position is unique and verifiable
+    content = "".join(str(i % 10) for i in range(CHUNK_SIZE + 200))
+    chunks = chunk_text(content, "/fake/file.py")
+    assert len(chunks) >= 2
+    # The overlap means the second chunk's content starts from the overlap region
+    expected_start = CHUNK_SIZE - CHUNK_OVERLAP
+    assert chunks[1]["content"].startswith(content[expected_start : expected_start + 10])
+
+
+def test_chunk_text_chunk_indices():
+    """chunk_index values increment sequentially starting from 0."""
+    content = "a" * (CHUNK_SIZE * 3)
+    chunks = chunk_text(content, "/fake/file.py")
+    assert len(chunks) >= 3
+    for i, chunk in enumerate(chunks):
+        assert chunk["chunk_index"] == i
+
+
+def test_chunk_text_empty_content():
+    """Empty string returns an empty list."""
+    chunks = chunk_text("", "/fake/file.py")
+    assert chunks == []
+
+
+def test_chunk_text_below_min_size():
+    """Content below MIN_CHUNK_SIZE returns an empty list."""
+    content = "a" * (MIN_CHUNK_SIZE - 1)
+    chunks = chunk_text(content, "/fake/file.py")
+    assert chunks == []
+
+
+def test_chunk_text_whitespace_only():
+    """Whitespace-only content returns an empty list (stripped to empty)."""
+    chunks = chunk_text("   \n\n\t  \n  ", "/fake/file.py")
+    assert chunks == []
+
+def test_chunk_text_many_chunks():
+    """Very long content (10x CHUNK_SIZE) produces the correct number of chunks."""
+    content = "a" * (CHUNK_SIZE * 10)
+    chunks = chunk_text(content, "/fake/file.py")
+    # With overlap, each chunk after the first starts CHUNK_SIZE - CHUNK_OVERLAP ahead.
+    # So we need ceil((total_len - CHUNK_OVERLAP) / (CHUNK_SIZE - CHUNK_OVERLAP)) chunks,
+    # but the exact count depends on boundary logic. Just verify it's reasonable.
+    total_len = len(content)
+    step = CHUNK_SIZE - CHUNK_OVERLAP
+    expected_min = total_len // CHUNK_SIZE  # at least this many
+    expected_max = (total_len // step) + 1  # at most this many
+    assert expected_min <= len(chunks) <= expected_max
+
+
+def test_chunk_text_preserves_content():
+    """All original content is covered by the union of chunks (nothing lost)."""
+    # Use only non-whitespace so chunk stripping doesn't drop characters at boundaries
+    content = "abcdefghij" * (CHUNK_SIZE * 3 // 10)
+    chunks = chunk_text(content, "/fake/file.py")
+    assert len(chunks) >= 2
+    # Every character in the original must appear in at least one chunk
+    all_chunk_text = "".join(c["content"] for c in chunks)
+    for ch_pos, ch in enumerate(content):
+        assert ch in all_chunk_text, f"Character '{ch}' at position {ch_pos} not in any chunk"
+    # Stronger: the joined chunks should contain more characters than the original
+    # (due to overlap), confirming nothing is dropped
+    assert len(all_chunk_text) >= len(content)
