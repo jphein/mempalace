@@ -155,15 +155,44 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
     return messages[-count:]
 
 
-def _save_diary_direct(transcript_path: str, session_id: str, toast: bool = False) -> int:
+_THEME_STOPWORDS = frozenset(
+    "the a an and or but in on at to for of is it i me my you your we our "
+    "this that with from by was were be been are not no yes can do did don't "
+    "will would should could have has had let's let just also like so if then "
+    "ok okay sure yeah hey hi here there what when where how why which some "
+    "all any each every about into out up down over after before between "
+    "get got make made need want use used using check look see run try "
+    "know think right now still already really very much more most too "
+    "file files code one two new first last next thing things way well".split()
+)
+
+
+def _extract_themes(messages: list[str], max_themes: int = 3) -> list[str]:
+    """Pull 2-3 distinctive topic words from recent messages."""
+    from collections import Counter
+    words: Counter[str] = Counter()
+    for msg in messages:
+        for word in msg.lower().split():
+            # Strip punctuation, keep words 4+ chars
+            clean = word.strip(".,;:!?\"'`()[]{}#<>/\\-_=+@$%^&*~")
+            if len(clean) >= 4 and clean not in _THEME_STOPWORDS and clean.isalpha():
+                words[clean] += 1
+    return [w for w, _ in words.most_common(max_themes)]
+
+
+def _save_diary_direct(
+    transcript_path: str, session_id: str, toast: bool = False,
+) -> dict:
     """Write a diary checkpoint directly via Python API (no MCP calls).
 
-    Returns the number of messages archived.
+    Returns {"count": N, "themes": [...]} on success, {"count": 0} on failure.
     """
     messages = _extract_recent_messages(transcript_path)
     if not messages:
         _log("No recent messages to save")
-        return 0
+        return {"count": 0}
+
+    themes = _extract_themes(messages)
 
     # Build a compressed diary entry from recent conversation
     now = datetime.now()
@@ -193,11 +222,12 @@ def _save_diary_direct(transcript_path: str, session_id: str, toast: bool = Fals
                 pass
             if toast:
                 _desktop_toast(f"Checkpoint saved \u2014 {len(messages)} messages archived")
+            return {"count": len(messages), "themes": themes}
         else:
             _log(f"Diary checkpoint failed: {result.get('error', 'unknown')}")
     except Exception as e:
         _log(f"Diary checkpoint error: {e}")
-    return len(messages)
+    return {"count": 0}
 
 
 def _ingest_transcript(transcript_path: str):
@@ -290,18 +320,26 @@ def hook_stop(data: dict, harness: str):
 
         if silent:
             # Save directly via Python API — systemMessage renders in terminal
-            saved = 0
+            result = {"count": 0}
             if transcript_path:
-                saved = _save_diary_direct(transcript_path, session_id, toast=toast)
+                result = _save_diary_direct(transcript_path, session_id, toast=toast)
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest()
             # Only advance save marker after successful save
-            if saved > 0:
+            count = result.get("count", 0)
+            if count > 0:
                 try:
                     last_save_file.write_text(str(exchange_count), encoding="utf-8")
                 except OSError:
                     pass
-                _output({"systemMessage": f"\u2726 {saved} messages filed away"})
+                themes = result.get("themes", [])
+                if themes:
+                    tag = " \u2014 " + ", ".join(themes)
+                else:
+                    tag = ""
+                _output({
+                    "systemMessage": f"\u2726 {count} memories woven into the palace{tag}",
+                })
             else:
                 _output({})
         else:
