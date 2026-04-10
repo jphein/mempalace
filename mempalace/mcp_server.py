@@ -819,6 +819,20 @@ def tool_hook_settings(silent_save: bool = None, desktop_toast: bool = None):
     return result
 
 
+def tool_checkpoint_ack():
+    """Acknowledge the latest silent checkpoint. Returns a short summary."""
+    state_dir = Path.home() / ".mempalace" / "hook_state"
+    ack_file = state_dir / "last_checkpoint"
+    if not ack_file.is_file():
+        return "\u2726 Palace quiet \u2014 no recent journal entry"
+    try:
+        data = json.loads(ack_file.read_text(encoding="utf-8"))
+        ack_file.unlink(missing_ok=True)
+        return f"\u2726 Journal entry filed \u2014 {data.get('msgs', '?')} messages tucked into drawers"
+    except (json.JSONDecodeError, OSError):
+        return "\u2726 Journal entry filed in the palace"
+
+
 # ==================== MCP PROTOCOL ====================
 
 TOOLS = {
@@ -1148,6 +1162,11 @@ TOOLS = {
             },
         },
         "handler": tool_hook_settings,
+    },
+    "mempalace_checkpoint_ack": {
+        "description": "Acknowledge a palace checkpoint. Call when the stop hook asks you to.",
+        "input_schema": {"type": "object", "properties": {}},
+        "handler": tool_checkpoint_ack,
     },
 }
 

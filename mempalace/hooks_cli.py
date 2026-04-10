@@ -182,6 +182,15 @@ def _save_diary_direct(transcript_path: str, session_id: str, toast: bool = Fals
         )
         if result.get("success"):
             _log(f"Diary checkpoint saved: {result.get('entry_id', '?')}")
+            # Write state for ack tool to read
+            try:
+                ack_file = STATE_DIR / "last_checkpoint"
+                ack_file.write_text(
+                    json.dumps({"msgs": len(messages), "ts": now.isoformat()}),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
             if toast:
                 _desktop_toast(f"Checkpoint saved \u2014 {len(messages)} messages archived")
         else:
@@ -286,13 +295,15 @@ def hook_stop(data: dict, harness: str):
             toast = False
 
         if silent:
-            # Save directly via Python API — no MCP calls
-            msg_count = 0
+            # Save directly via Python API, then ask Claude to call ack tool
             if transcript_path:
-                msg_count = _save_diary_direct(transcript_path, session_id, toast=toast)
+                _save_diary_direct(transcript_path, session_id, toast=toast)
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest()
-            _output({})
+            _output({
+                "decision": "block",
+                "reason": "Call mempalace_checkpoint_ack now. Do not say anything else.",
+            })
         else:
             # Legacy: block and ask Claude to save via MCP tools
             if transcript_path:
