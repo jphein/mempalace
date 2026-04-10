@@ -276,12 +276,6 @@ def hook_stop(data: dict, harness: str):
     _log(f"Session {session_id}: {exchange_count} exchanges, {since_last} since last save")
 
     if since_last >= SAVE_INTERVAL and exchange_count > 0:
-        # Update last save point
-        try:
-            last_save_file.write_text(str(exchange_count), encoding="utf-8")
-        except OSError:
-            pass
-
         _log(f"TRIGGERING SAVE at exchange {exchange_count}")
 
         # Read hook settings from config
@@ -301,12 +295,21 @@ def hook_stop(data: dict, harness: str):
                 saved = _save_diary_direct(transcript_path, session_id, toast=toast)
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest()
+            # Only advance save marker after successful save
             if saved > 0:
+                try:
+                    last_save_file.write_text(str(exchange_count), encoding="utf-8")
+                except OSError:
+                    pass
                 _output({"systemMessage": f"\u2726 {saved} messages filed away"})
             else:
                 _output({})
         else:
             # Legacy: block and ask Claude to save via MCP tools
+            try:
+                last_save_file.write_text(str(exchange_count), encoding="utf-8")
+            except OSError:
+                pass
             if transcript_path:
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest()
