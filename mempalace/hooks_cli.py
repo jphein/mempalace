@@ -19,6 +19,16 @@ STATE_DIR = Path.home() / ".mempalace" / "hook_state"
 
 _RECENT_MSG_COUNT = 30  # how many recent user messages to summarize
 
+STOP_BLOCK_REASON = (
+    "AUTO-SAVE checkpoint. Save key topics, decisions, quotes, and code "
+    "from this session to MemPalace using the MCP tools:\n"
+    "1. Use mempalace_diary_write to save a session summary (what was discussed, "
+    "key decisions, current state of work).\n"
+    "2. Use mempalace_add_drawer for each important decision, quote, or code "
+    "snippet — place in the appropriate wing and room.\n"
+    "Use verbatim quotes where possible. Continue conversation after saving."
+)
+
 PRECOMPACT_BLOCK_REASON = (
     "COMPACTION IMMINENT — detailed context will be lost. Save ALL topics, "
     "decisions, quotes, code, and important context to MemPalace using MCP tools:\n"
@@ -84,17 +94,18 @@ def _output(data: dict):
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def _notify(body: str, title: str = "MemPalace"):
-    """Send a desktop toast + short terminal line. Fails silently."""
+def _notify(body: str, title: str = "MemPalace", toast: bool = False):
+    """Send a terminal line and optionally a desktop toast. Fails silently."""
     print(f"\033[38;5;141m\u2726 {title}\033[0m \033[2m{body}\033[0m", file=sys.stderr)
-    try:
-        subprocess.Popen(
-            ["notify-send", "--app-name=MemPalace", "--icon=brain", title, body],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError:
-        pass
+    if toast:
+        try:
+            subprocess.Popen(
+                ["notify-send", "--app-name=MemPalace", "--icon=brain", title, body],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
 
 
 def _maybe_auto_ingest():
@@ -146,7 +157,7 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
     return messages[-count:]
 
 
-def _save_diary_direct(transcript_path: str, session_id: str):
+def _save_diary_direct(transcript_path: str, session_id: str, toast: bool = False):
     """Write a diary checkpoint directly via Python API (no MCP calls)."""
     messages = _extract_recent_messages(transcript_path)
     if not messages:
@@ -170,7 +181,7 @@ def _save_diary_direct(transcript_path: str, session_id: str):
         )
         if result.get("success"):
             _log(f"Diary checkpoint saved: {result.get('entry_id', '?')}")
-            _notify(f"Checkpoint saved \u2014 {len(messages)} messages archived")
+            _notify(f"Checkpoint saved \u2014 {len(messages)} messages archived", toast=toast)
         else:
             _log(f"Diary checkpoint failed: {result.get('error', 'unknown')}")
     except Exception as e:
@@ -261,16 +272,31 @@ def hook_stop(data: dict, harness: str):
 
         _log(f"TRIGGERING SAVE at exchange {exchange_count}")
 
-        # Save diary checkpoint directly (no MCP, no terminal clutter)
-        if transcript_path:
-            _save_diary_direct(transcript_path, session_id)
-            _ingest_transcript(transcript_path)
+        # Read hook settings from config
+        from .config import MempalaceConfig
+        try:
+            config = MempalaceConfig()
+            silent = config.hook_silent_save
+            toast = config.hook_desktop_toast
+        except Exception:
+            silent = True
+            toast = False
 
-        # Optional: auto-ingest project dir if MEMPAL_DIR is set
-        _maybe_auto_ingest()
-
-    # Never block — saving happens silently above
-    _output({})
+        if silent:
+            # Save directly via Python API — no MCP calls, no terminal clutter
+            if transcript_path:
+                _save_diary_direct(transcript_path, session_id, toast=toast)
+                _ingest_transcript(transcript_path)
+            _maybe_auto_ingest()
+            _output({})
+        else:
+            # Legacy: block and ask Claude to save via MCP tools
+            if transcript_path:
+                _ingest_transcript(transcript_path)
+            _maybe_auto_ingest()
+            _output({"decision": "block", "reason": STOP_BLOCK_REASON})
+    else:
+        _output({})
 
 
 def hook_session_start(data: dict, harness: str):

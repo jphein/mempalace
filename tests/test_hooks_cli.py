@@ -205,7 +205,7 @@ def test_stop_hook_saves_silently_at_interval(tmp_path):
         )
     # Never blocks — saves directly and passes through
     assert result == {}
-    mock_save.assert_called_once_with(str(transcript), "test")
+    mock_save.assert_called_once_with(str(transcript), "test", toast=False)
 
 
 def test_stop_hook_tracks_save_point(tmp_path):
