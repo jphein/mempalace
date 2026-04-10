@@ -819,18 +819,22 @@ def tool_hook_settings(silent_save: bool = None, desktop_toast: bool = None):
     return result
 
 
-def tool_checkpoint_ack():
+def tool_memories_filed_away():
     """Acknowledge the latest silent checkpoint. Returns a short summary."""
     state_dir = Path.home() / ".mempalace" / "hook_state"
     ack_file = state_dir / "last_checkpoint"
     if not ack_file.is_file():
-        return "\u2726 Palace quiet \u2014 no recent journal entry"
+        return {"palace": "quiet", "message": "No recent journal entry"}
     try:
         data = json.loads(ack_file.read_text(encoding="utf-8"))
         ack_file.unlink(missing_ok=True)
-        return f"\u2726 Journal entry filed \u2014 {data.get('msgs', '?')} messages tucked into drawers"
+        msgs = data.get("msgs", "?")
+        return {
+            "message": f"\u2726 {msgs} messages tucked into drawers",
+            "timestamp": data.get("ts", ""),
+        }
     except (json.JSONDecodeError, OSError):
-        return "\u2726 Journal entry filed in the palace"
+        return {"message": "\u2726 Journal entry filed in the palace"}
 
 
 # ==================== MCP PROTOCOL ====================
@@ -1163,10 +1167,10 @@ TOOLS = {
         },
         "handler": tool_hook_settings,
     },
-    "mempalace_checkpoint_ack": {
-        "description": "Acknowledge a palace checkpoint. Call when the stop hook asks you to.",
+    "memories_filed_away": {
+        "description": "Check if a recent palace checkpoint was saved. Returns message count and timestamp.",
         "input_schema": {"type": "object", "properties": {}},
-        "handler": tool_checkpoint_ack,
+        "handler": tool_memories_filed_away,
     },
 }
 
@@ -1200,7 +1204,8 @@ def handle_request(request):
                 "serverInfo": {"name": "mempalace", "version": __version__},
             },
         }
-    elif method == "notifications/initialized":
+    elif method.startswith("notifications/"):
+        # Notifications (no id) never get a response per JSON-RPC spec
         return None
     elif method == "tools/list":
         return {
@@ -1248,6 +1253,9 @@ def handle_request(request):
                 "error": {"code": -32000, "message": "Internal tool error"},
             }
 
+    # Notifications (missing id) must never get a response
+    if req_id is None:
+        return None
     return {
         "jsonrpc": "2.0",
         "id": req_id,

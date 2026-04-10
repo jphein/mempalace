@@ -203,8 +203,8 @@ def test_stop_hook_saves_silently_at_interval(tmp_path):
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
             state_dir=tmp_path,
         )
-    # Saves silently — no block
-    assert result == {}
+    # Saves silently — systemMessage notification, no block
+    assert result == {"systemMessage": "\u2726 15 messages filed away"}
     mock_save.assert_called_once_with(str(transcript), "test", toast=False)
 
 
@@ -216,10 +216,10 @@ def test_stop_hook_tracks_save_point(tmp_path):
     )
     data = {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)}
 
-    # First call saves silently
+    # First call saves silently with systemMessage notification
     with patch("mempalace.hooks_cli._save_diary_direct", return_value=15):
         result = _capture_hook_output(hook_stop, data, state_dir=tmp_path)
-    assert result == {}
+    assert result == {"systemMessage": "\u2726 15 messages filed away"}
 
     # Second call with same count passes through (already saved)
     with patch("mempalace.hooks_cli._save_diary_direct") as mock_save:
@@ -340,7 +340,7 @@ def test_stop_hook_oserror_on_last_save_read(tmp_path):
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
             state_dir=tmp_path,
         )
-    assert result == {}
+    assert result == {"systemMessage": "\u2726 15 messages filed away"}
 
 
 def test_stop_hook_oserror_on_write(tmp_path):
@@ -366,7 +366,7 @@ def test_stop_hook_oserror_on_write(tmp_path):
                     },
                     state_dir=tmp_path,
                 )
-    assert result == {}
+    assert result == {"systemMessage": "\u2726 15 messages filed away"}
 
 
 # --- hook_precompact with MEMPAL_DIR ---

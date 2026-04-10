@@ -295,12 +295,16 @@ def hook_stop(data: dict, harness: str):
             toast = False
 
         if silent:
-            # Save directly via Python API, then ask Claude to call ack tool
+            # Save directly via Python API — systemMessage renders in terminal
+            saved = 0
             if transcript_path:
-                _save_diary_direct(transcript_path, session_id, toast=toast)
+                saved = _save_diary_direct(transcript_path, session_id, toast=toast)
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest()
-            _output({})
+            if saved > 0:
+                _output({"systemMessage": f"\u2726 {saved} messages filed away"})
+            else:
+                _output({})
         else:
             # Legacy: block and ask Claude to save via MCP tools
             if transcript_path:
