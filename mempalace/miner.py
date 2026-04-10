@@ -857,16 +857,23 @@ def status(palace_path: str):
         print("  Run: mempalace init <dir> then mempalace mine <dir>")
         return
 
-    # Count by wing and room
-    r = col.get(limit=10000, include=["metadatas"])
-    metas = r["metadatas"]
-
+    # Paginate metadatas — col.get() silently caps at 10K rows, so a single
+    # call produces wrong totals and drops wings on larger palaces.
+    total = col.count()
     wing_rooms = defaultdict(lambda: defaultdict(int))
-    for m in metas:
-        wing_rooms[m.get("wing", "?")][m.get("room", "?")] += 1
+
+    offset = 0
+    while offset < total:
+        batch = col.get(limit=1000, offset=offset, include=["metadatas"])
+        batch_metas = batch["metadatas"]
+        if not batch_metas:
+            break
+        for m in batch_metas:
+            wing_rooms[m.get("wing", "?")][m.get("room", "?")] += 1
+        offset += len(batch_metas)
 
     print(f"\n{'=' * 55}")
-    print(f"  MemPalace Status — {len(metas)} drawers")
+    print(f"  MemPalace Status — {total} drawers")
     print(f"{'=' * 55}\n")
     for wing, rooms in sorted(wing_rooms.items()):
         print(f"  WING: {wing}")

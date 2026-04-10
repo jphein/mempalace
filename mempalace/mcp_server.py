@@ -932,6 +932,8 @@ TOOLS = {
                 "min_similarity": {
                     "type": "number",
                     "description": "Max L2 distance threshold — results further than this are dropped. Lower = stricter. Default 1.5 filters clearly irrelevant results. Set to 0 to disable filtering.",
+                    "minimum": 0,
+                    "maximum": 10,
                 },
             },
             "required": ["query"],

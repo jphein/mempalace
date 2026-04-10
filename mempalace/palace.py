@@ -5,6 +5,7 @@ Consolidates ChromaDB access patterns used by both miners and the MCP server.
 """
 
 import logging
+import math
 import os
 
 import chromadb
@@ -69,9 +70,12 @@ def file_already_mined(collection, source_file: str, check_mtime: bool = False) 
             if stored_mtime is None:
                 return False
             current_mtime = os.path.getmtime(source_file)
-            return abs(float(stored_mtime) - current_mtime) < 0.01
+            # JSON round-trip can lose float precision; 1 ms tolerance is tight
+            # enough for any filesystem while absorbing serialization drift.
+            return math.isclose(float(stored_mtime), current_mtime, abs_tol=0.001)
         return True
     except Exception:
+        logger.debug("file_already_mined: lookup failed for %s", source_file, exc_info=True)
         return False
 
 
