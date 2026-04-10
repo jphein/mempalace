@@ -94,18 +94,16 @@ def _output(data: dict):
     print(json.dumps(data, indent=2, ensure_ascii=False))
 
 
-def _notify(body: str, title: str = "MemPalace", toast: bool = False):
-    """Send a terminal line and optionally a desktop toast. Fails silently."""
-    print(f"\033[38;5;141m\u2726 {title}\033[0m \033[2m{body}\033[0m", file=sys.stderr)
-    if toast:
-        try:
-            subprocess.Popen(
-                ["notify-send", "--app-name=MemPalace", "--icon=brain", title, body],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError:
-            pass
+def _desktop_toast(body: str, title: str = "MemPalace"):
+    """Send a desktop notification via notify-send. Fails silently."""
+    try:
+        subprocess.Popen(
+            ["notify-send", "--app-name=MemPalace", "--icon=brain", title, body],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
+        pass
 
 
 def _maybe_auto_ingest():
@@ -157,12 +155,15 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
     return messages[-count:]
 
 
-def _save_diary_direct(transcript_path: str, session_id: str, toast: bool = False):
-    """Write a diary checkpoint directly via Python API (no MCP calls)."""
+def _save_diary_direct(transcript_path: str, session_id: str, toast: bool = False) -> int:
+    """Write a diary checkpoint directly via Python API (no MCP calls).
+
+    Returns the number of messages archived.
+    """
     messages = _extract_recent_messages(transcript_path)
     if not messages:
         _log("No recent messages to save")
-        return
+        return 0
 
     # Build a compressed diary entry from recent conversation
     now = datetime.now()
@@ -181,11 +182,13 @@ def _save_diary_direct(transcript_path: str, session_id: str, toast: bool = Fals
         )
         if result.get("success"):
             _log(f"Diary checkpoint saved: {result.get('entry_id', '?')}")
-            _notify(f"Checkpoint saved \u2014 {len(messages)} messages archived", toast=toast)
+            if toast:
+                _desktop_toast(f"Checkpoint saved \u2014 {len(messages)} messages archived")
         else:
             _log(f"Diary checkpoint failed: {result.get('error', 'unknown')}")
     except Exception as e:
         _log(f"Diary checkpoint error: {e}")
+    return len(messages)
 
 
 def _ingest_transcript(transcript_path: str):
@@ -283,12 +286,20 @@ def hook_stop(data: dict, harness: str):
             toast = False
 
         if silent:
-            # Save directly via Python API — no MCP calls, no terminal clutter
+            # Save directly via Python API — no MCP calls
+            msg_count = 0
             if transcript_path:
-                _save_diary_direct(transcript_path, session_id, toast=toast)
+                msg_count = _save_diary_direct(transcript_path, session_id, toast=toast)
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest()
-            _output({})
+            # Block with short notification so it appears in terminal
+            _output({
+                "decision": "block",
+                "reason": (
+                    f"\u2726 MemPalace checkpoint saved — {msg_count} messages archived. "
+                    "Continue what you were doing."
+                ),
+            })
         else:
             # Legacy: block and ask Claude to save via MCP tools
             if transcript_path:

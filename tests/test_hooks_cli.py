@@ -197,14 +197,16 @@ def test_stop_hook_saves_silently_at_interval(tmp_path):
         transcript,
         [{"message": {"role": "user", "content": f"msg {i}"}} for i in range(SAVE_INTERVAL)],
     )
-    with patch("mempalace.hooks_cli._save_diary_direct") as mock_save:
+    with patch("mempalace.hooks_cli._save_diary_direct", return_value=15) as mock_save:
         result = _capture_hook_output(
             hook_stop,
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
             state_dir=tmp_path,
         )
-    # Never blocks — saves directly and passes through
-    assert result == {}
+    # Blocks with short notification (save already happened)
+    assert result["decision"] == "block"
+    assert "\u2726" in result["reason"]
+    assert "Continue" in result["reason"]
     mock_save.assert_called_once_with(str(transcript), "test", toast=False)
 
 
@@ -216,12 +218,12 @@ def test_stop_hook_tracks_save_point(tmp_path):
     )
     data = {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)}
 
-    # First call saves silently
-    with patch("mempalace.hooks_cli._save_diary_direct"):
+    # First call saves and blocks with notification
+    with patch("mempalace.hooks_cli._save_diary_direct", return_value=15):
         result = _capture_hook_output(hook_stop, data, state_dir=tmp_path)
-    assert result == {}
+    assert result["decision"] == "block"
 
-    # Second call with same count skips save (already saved)
+    # Second call with same count passes through (already saved)
     with patch("mempalace.hooks_cli._save_diary_direct") as mock_save:
         result = _capture_hook_output(hook_stop, data, state_dir=tmp_path)
     assert result == {}
@@ -334,13 +336,13 @@ def test_stop_hook_oserror_on_last_save_read(tmp_path):
     )
     # Write invalid content to last save file
     (tmp_path / "test_last_save").write_text("not_a_number")
-    with patch("mempalace.hooks_cli._save_diary_direct"):
+    with patch("mempalace.hooks_cli._save_diary_direct", return_value=15):
         result = _capture_hook_output(
             hook_stop,
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
             state_dir=tmp_path,
         )
-    assert result == {}
+    assert result["decision"] == "block"
 
 
 def test_stop_hook_oserror_on_write(tmp_path):
@@ -355,7 +357,7 @@ def test_stop_hook_oserror_on_write(tmp_path):
         raise OSError("disk full")
 
     with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
-        with patch("mempalace.hooks_cli._save_diary_direct"):
+        with patch("mempalace.hooks_cli._save_diary_direct", return_value=15):
             with patch.object(Path, "write_text", bad_write_text):
                 result = _capture_hook_output(
                     hook_stop,
@@ -366,7 +368,7 @@ def test_stop_hook_oserror_on_write(tmp_path):
                     },
                     state_dir=tmp_path,
                 )
-    assert result == {}
+    assert result["decision"] == "block"
 
 
 # --- hook_precompact with MEMPAL_DIR ---
