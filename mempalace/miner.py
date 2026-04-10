@@ -8,6 +8,7 @@ Stores verbatim chunks as drawers. No summaries. Ever.
 """
 
 import os
+import re
 import sys
 import hashlib
 import fnmatch
@@ -17,7 +18,7 @@ from collections import defaultdict
 
 import chromadb
 
-from .palace import SKIP_DIRS, get_collection, file_already_mined
+from .palace import SKIP_DIRS, get_collection, file_already_mined, bulk_check_mined
 
 READABLE_EXTENSIONS = {
     ".txt",
@@ -279,34 +280,37 @@ def detect_room(filepath: Path, content: str, rooms: list, project_path: Path) -
     """
     Route a file to the right room.
     Priority:
-    1. Folder path matches a room name
-    2. Filename matches a room name or keyword
-    3. Content keyword scoring
+    1. Folder path exactly matches a room name or keyword
+    2. Filename exactly matches a room name or keyword
+    3. Content keyword scoring (word-boundary matching)
     4. Fallback: "general"
     """
     relative = str(filepath.relative_to(project_path)).lower()
     filename = filepath.stem.lower()
-    content_lower = content[:2000].lower()
+    # Use more content for keyword scoring: full file up to 10KB, else first 5KB
+    scan_limit = len(content) if len(content) <= 10000 else 5000
+    content_lower = content[:scan_limit].lower()
 
-    # Priority 1: folder path matches room name or keywords
+    # Priority 1: folder path exactly matches room name or keywords
     path_parts = relative.replace("\\", "/").split("/")
     for part in path_parts[:-1]:  # skip filename itself
         for room in rooms:
             candidates = [room["name"].lower()] + [k.lower() for k in room.get("keywords", [])]
-            if any(part == c or c in part or part in c for c in candidates):
+            if any(part == c for c in candidates):
                 return room["name"]
 
-    # Priority 2: filename matches room name
+    # Priority 2: filename exactly matches room name or keyword
     for room in rooms:
-        if room["name"].lower() in filename or filename in room["name"].lower():
+        candidates = [room["name"].lower()] + [k.lower() for k in room.get("keywords", [])]
+        if any(filename == c for c in candidates):
             return room["name"]
 
-    # Priority 3: keyword scoring from room keywords + name
+    # Priority 3: keyword scoring with word-boundary matching
     scores = defaultdict(int)
     for room in rooms:
         keywords = room.get("keywords", []) + [room["name"]]
         for kw in keywords:
-            count = content_lower.count(kw.lower())
+            count = len(re.findall(r'\b' + re.escape(kw.lower()) + r'\b', content_lower))
             scores[room["name"]] += count
 
     if scores:
@@ -404,39 +408,36 @@ def add_drawer(
 # =============================================================================
 
 
-def process_file(
+def _prepare_file(
     filepath: Path,
     project_path: Path,
-    collection,
     wing: str,
     rooms: list,
     agent: str,
-    dry_run: bool,
 ) -> tuple:
-    """Read, chunk, route, and file one file. Returns (drawer_count, room_name)."""
+    """Read, chunk, and route one file without writing to ChromaDB.
 
-    # Skip if already filed
+    Returns (batch_docs, batch_ids, batch_metas, room) or (None, None, None, None)
+    when the file should be skipped (unreadable, too small, etc.).
+    This is the pure-computation half of process_file, safe for concurrent use.
+    """
     source_file = str(filepath)
-    if not dry_run and file_already_mined(collection, source_file, check_mtime=True):
-        return 0, None
 
     try:
         content = filepath.read_text(encoding="utf-8", errors="replace")
     except OSError:
-        return 0, None
+        return None, None, None, None
 
     content = content.strip()
     if len(content) < MIN_CHUNK_SIZE:
-        return 0, None
+        return None, None, None, None
 
     room = detect_room(filepath, content, rooms, project_path)
     chunks = chunk_text(content, source_file)
 
-    if dry_run:
-        print(f"    [DRY RUN] {filepath.name} → room:{room} ({len(chunks)} drawers)")
-        return len(chunks), room
+    if not chunks:
+        return None, None, None, None
 
-    # Batch all chunks into a single upsert call per file
     batch_docs = []
     batch_ids = []
     batch_metas = []
@@ -461,12 +462,50 @@ def process_file(
         batch_ids.append(drawer_id)
         batch_metas.append(metadata)
 
-    if batch_docs:
-        collection.upsert(
-            documents=batch_docs,
-            ids=batch_ids,
-            metadatas=batch_metas,
-        )
+    return batch_docs, batch_ids, batch_metas, room
+
+
+def process_file(
+    filepath: Path,
+    project_path: Path,
+    collection,
+    wing: str,
+    rooms: list,
+    agent: str,
+    dry_run: bool,
+) -> tuple:
+    """Read, chunk, route, and file one file. Returns (drawer_count, room_name)."""
+
+    # Skip if already filed
+    source_file = str(filepath)
+    if not dry_run and file_already_mined(collection, source_file, check_mtime=True):
+        return 0, None
+
+    if dry_run:
+        # Still need to read/chunk for the dry-run report
+        try:
+            content = filepath.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return 0, None
+        content = content.strip()
+        if len(content) < MIN_CHUNK_SIZE:
+            return 0, None
+        room = detect_room(filepath, content, rooms, project_path)
+        chunks = chunk_text(content, source_file)
+        print(f"    [DRY RUN] {filepath.name} → room:{room} ({len(chunks)} drawers)")
+        return len(chunks), room
+
+    batch_docs, batch_ids, batch_metas, room = _prepare_file(
+        filepath, project_path, wing, rooms, agent
+    )
+    if batch_docs is None:
+        return 0, None
+
+    collection.upsert(
+        documents=batch_docs,
+        ids=batch_ids,
+        metadatas=batch_metas,
+    )
 
     return len(batch_docs), room
 
@@ -545,6 +584,26 @@ def scan_project(
 # =============================================================================
 
 
+def _is_already_mined(source_file: str, mined_map: dict) -> bool:
+    """Check if a file is already mined using the bulk-fetched mined_map.
+
+    Compares stored mtime against current file mtime, matching the logic
+    in file_already_mined() but without per-file DB queries.
+    """
+    stored_mtime = mined_map.get(source_file)
+    if stored_mtime is None:
+        return False
+    try:
+        current_mtime = os.path.getmtime(source_file)
+    except OSError:
+        return False
+    return abs(stored_mtime - current_mtime) < 0.01
+
+
+# Maximum documents per ChromaDB upsert call
+_UPSERT_BATCH_SIZE = 100
+
+
 def mine(
     project_dir: str,
     palace_path: str,
@@ -554,8 +613,16 @@ def mine(
     dry_run: bool = False,
     respect_gitignore: bool = True,
     include_ignored: list = None,
+    workers: int = 0,
 ):
-    """Mine a project directory into the palace."""
+    """Mine a project directory into the palace.
+
+    When workers > 1, files are read/chunked/routed in parallel threads
+    and then written to ChromaDB sequentially (the Python client is not
+    thread-safe for concurrent writes to the same collection).
+    """
+    import concurrent.futures
+    import threading
 
     project_path = Path(project_dir).expanduser().resolve()
     config = load_config(project_dir)
@@ -571,6 +638,9 @@ def mine(
     if limit > 0:
         files = files[:limit]
 
+    if workers <= 0:
+        workers = min(8, os.cpu_count() or 4)
+
     print(f"\n{'=' * 55}")
     print("  MemPalace Mine")
     print(f"{'=' * 55}")
@@ -578,6 +648,8 @@ def mine(
     print(f"  Rooms:   {', '.join(r['name'] for r in rooms)}")
     print(f"  Files:   {len(files)}")
     print(f"  Palace:  {palace_path}")
+    if workers > 1:
+        print(f"  Workers: {workers}")
     if dry_run:
         print("  DRY RUN — nothing will be filed")
     if not respect_gitignore:
@@ -595,23 +667,96 @@ def mine(
     files_skipped = 0
     room_counts = defaultdict(int)
 
-    for i, filepath in enumerate(files, 1):
-        drawers, room = process_file(
-            filepath=filepath,
-            project_path=project_path,
-            collection=collection,
-            wing=wing,
-            rooms=rooms,
-            agent=agent,
-            dry_run=dry_run,
-        )
-        if drawers == 0 and not dry_run:
-            files_skipped += 1
-        else:
-            total_drawers += drawers
+    # --- Sequential path (workers=1 or dry_run) ---
+    if workers <= 1 or dry_run:
+        for i, filepath in enumerate(files, 1):
+            drawers, room = process_file(
+                filepath=filepath,
+                project_path=project_path,
+                collection=collection,
+                wing=wing,
+                rooms=rooms,
+                agent=agent,
+                dry_run=dry_run,
+            )
+            if drawers == 0 and not dry_run:
+                files_skipped += 1
+            else:
+                total_drawers += drawers
+                room_counts[room] += 1
+                if not dry_run:
+                    print(f"  \u2713 [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers}")
+    else:
+        # --- Concurrent path (workers > 1) ---
+
+        # Phase 0: bulk-fetch already-mined mtimes to skip files without
+        # per-file DB queries.
+        filepaths_str = [str(f) for f in files]
+        mined_map = bulk_check_mined(collection, filepaths_str)
+
+        # Filter out already-mined files before spawning threads.
+        files_to_process = []
+        for filepath in files:
+            if _is_already_mined(str(filepath), mined_map):
+                files_skipped += 1
+            else:
+                files_to_process.append(filepath)
+
+        # Phase 1: parallel read/chunk/route
+        counter_lock = threading.Lock()
+        processed_count = 0
+
+        def prepare_one(filepath):
+            return filepath, _prepare_file(filepath, project_path, wing, rooms, agent)
+
+        results = []
+        with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(prepare_one, fp): fp for fp in files_to_process}
+            for future in concurrent.futures.as_completed(futures):
+                filepath, (batch_docs, batch_ids, batch_metas, room) = future.result()
+                if batch_docs is None:
+                    with counter_lock:
+                        files_skipped += 1
+                    continue
+                results.append((filepath, batch_docs, batch_ids, batch_metas, room))
+                with counter_lock:
+                    processed_count += 1
+                    print(
+                        f"  \u2713 [{processed_count:4}/{len(files_to_process)}] "
+                        f"{filepath.name[:50]:50} +{len(batch_docs)}"
+                    )
+
+        # Phase 2: sequential ChromaDB writes, batched across files
+        pending_docs = []
+        pending_ids = []
+        pending_metas = []
+
+        for filepath, batch_docs, batch_ids, batch_metas, room in results:
+            total_drawers += len(batch_docs)
             room_counts[room] += 1
-            if not dry_run:
-                print(f"  ✓ [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers}")
+
+            pending_docs.extend(batch_docs)
+            pending_ids.extend(batch_ids)
+            pending_metas.extend(batch_metas)
+
+            # Flush when batch is large enough
+            if len(pending_docs) >= _UPSERT_BATCH_SIZE:
+                collection.upsert(
+                    documents=pending_docs,
+                    ids=pending_ids,
+                    metadatas=pending_metas,
+                )
+                pending_docs = []
+                pending_ids = []
+                pending_metas = []
+
+        # Flush remainder
+        if pending_docs:
+            collection.upsert(
+                documents=pending_docs,
+                ids=pending_ids,
+                metadatas=pending_metas,
+            )
 
     print(f"\n{'=' * 55}")
     print("  Done.")
