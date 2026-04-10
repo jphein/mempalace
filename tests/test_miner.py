@@ -6,7 +6,7 @@ from pathlib import Path
 import chromadb
 import yaml
 
-from mempalace.miner import mine, scan_project
+from mempalace.miner import detect_room, mine, scan_project
 from mempalace.palace import file_already_mined
 
 
@@ -260,3 +260,100 @@ def test_file_already_mined_check_mtime():
         # Release ChromaDB file handles before cleanup (required on Windows)
         del col, client
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# =============================================================================
+# detect_room tests
+# =============================================================================
+
+SAMPLE_ROOMS = [
+    {"name": "backend", "description": "Backend code", "keywords": ["api", "server"]},
+    {"name": "frontend", "description": "Frontend code", "keywords": ["ui", "component"]},
+    {"name": "tests", "description": "Test files", "keywords": ["test", "spec"]},
+]
+
+
+def _detect(relpath: str, content: str = "", rooms: list = None):
+    """Helper: call detect_room with a fake project path."""
+    project = Path("/fake/project")
+    filepath = project / relpath
+    return detect_room(filepath, content, rooms or SAMPLE_ROOMS, project)
+
+
+def test_detect_room_priority1_exact_folder_match():
+    """Folder named exactly 'backend' routes to backend room."""
+    assert _detect("backend/app.py") == "backend"
+
+
+def test_detect_room_priority1_keyword_folder_match():
+    """Folder named exactly 'api' routes to backend room (keyword match)."""
+    assert _detect("api/routes.py") == "backend"
+
+
+def test_detect_room_priority1_no_substring_match():
+    """Folder 'components' must NOT match room 'component' keyword via substring."""
+    assert _detect("components/button.py") != "frontend"
+
+
+def test_detect_room_priority1_no_short_name_false_positive():
+    """Folder 'src' must NOT match any room just because 'src' is a substring of something."""
+    result = _detect("src/main.py", content="unrelated stuff")
+    assert result == "general"
+
+
+def test_detect_room_priority2_exact_filename_match():
+    """Filename 'backend.py' (stem='backend') routes to backend room."""
+    assert _detect("lib/backend.py") == "backend"
+
+
+def test_detect_room_priority2_keyword_filename_match():
+    """Filename 'api.py' (stem='api') routes to backend via keyword."""
+    assert _detect("lib/api.py") == "backend"
+
+
+def test_detect_room_priority2_no_substring_match():
+    """Filename 'testing.py' must NOT match 'tests' room via substring."""
+    result = _detect("lib/testing.py", content="unrelated stuff")
+    assert result != "tests"
+
+
+def test_detect_room_priority3_keyword_scoring():
+    """Content with repeated 'api' keyword routes to backend room."""
+    content = "the api handles requests. api calls are fast. api is great."
+    assert _detect("misc/readme.txt", content=content) == "backend"
+
+
+def test_detect_room_priority3_word_boundary():
+    """'test' inside 'testing'/'latest'/'contest' must NOT count as keyword hits."""
+    # Only has 'test' embedded in other words, never standalone
+    content = "testing the latest contest results for attestation"
+    result = _detect("misc/notes.txt", content=content)
+    assert result != "tests"
+
+
+def test_detect_room_priority3_word_boundary_standalone():
+    """Standalone 'test' words DO count as keyword hits."""
+    content = "run the test suite. each test verifies correctness. test passed."
+    assert _detect("misc/notes.txt", content=content) == "tests"
+
+
+def test_detect_room_priority4_fallback_general():
+    """No matches at all falls back to 'general'."""
+    assert _detect("misc/random.txt", content="nothing relevant here") == "general"
+
+
+def test_detect_room_priority4_empty_content():
+    """Empty content with no path/filename match falls back to 'general'."""
+    assert _detect("misc/random.txt", content="") == "general"
+
+
+def test_detect_room_folder_beats_content():
+    """Priority 1 (folder) wins even when content strongly matches another room."""
+    content = "test test test test test test test"
+    assert _detect("backend/app.py", content=content) == "backend"
+
+
+def test_detect_room_filename_beats_content():
+    """Priority 2 (filename) wins even when content strongly matches another room."""
+    content = "test test test test test test test"
+    assert _detect("misc/backend.py", content=content) == "backend"
