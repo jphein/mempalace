@@ -378,7 +378,8 @@ def hook_precompact(data: dict, harness: str):
     _log(f"PRE-COMPACT triggered for session {session_id}")
     transcript_path = parsed["transcript_path"]
 
-    # Auto-ingest transcript before compaction (so conversation lands in palace)
+    # Best-effort background ingest — spawns async subprocess, not guaranteed
+    # to complete before compaction but gives the palace a head start
     if transcript_path:
         _ingest_transcript(transcript_path)
 

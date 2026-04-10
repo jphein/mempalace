@@ -291,16 +291,19 @@ def tool_get_taxonomy():
 
 
 def tool_search(
-    query: str, limit: int = 5, wing: str = None, room: str = None, min_similarity: float = 1.5
+    query: str, limit: int = 5, wing: str = None, room: str = None,
+    max_distance: float = 1.5, min_similarity: float = None,
 ):
     limit = max(1, min(limit, _MAX_RESULTS))
+    # Backwards compat: accept old name
+    dist = min_similarity if min_similarity is not None else max_distance
     return search_memories(
         query,
         palace_path=_config.palace_path,
         wing=wing,
         room=room,
         n_results=limit,
-        min_similarity=min_similarity,
+        max_distance=dist,
     )
 
 
@@ -986,7 +989,7 @@ TOOLS = {
         "handler": tool_graph_stats,
     },
     "mempalace_search": {
-        "description": "Semantic search. Returns verbatim drawer content with similarity scores. Results with distance > min_similarity are filtered out (L2 distance: lower = more similar).",
+        "description": "Semantic search. Returns verbatim drawer content with similarity scores. Results with L2 distance > max_distance are filtered out (lower = more similar).",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -994,7 +997,7 @@ TOOLS = {
                 "limit": {"type": "integer", "description": "Max results (default 5)", "minimum": 1, "maximum": 100},
                 "wing": {"type": "string", "description": "Filter by wing (optional)"},
                 "room": {"type": "string", "description": "Filter by room (optional)"},
-                "min_similarity": {
+                "max_distance": {
                     "type": "number",
                     "description": "Max L2 distance threshold — results further than this are dropped. Lower = stricter. Default 1.5 filters clearly irrelevant results. Set to 0 to disable filtering.",
                 },
