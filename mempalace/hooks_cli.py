@@ -292,14 +292,7 @@ def hook_stop(data: dict, harness: str):
                 msg_count = _save_diary_direct(transcript_path, session_id, toast=toast)
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest()
-            # Block with short notification so it appears in terminal
-            _output({
-                "decision": "block",
-                "reason": (
-                    f"\u2726 MemPalace checkpoint saved — {msg_count} messages archived. "
-                    "Continue what you were doing."
-                ),
-            })
+            _output({})
         else:
             # Legacy: block and ask Claude to save via MCP tools
             if transcript_path:
