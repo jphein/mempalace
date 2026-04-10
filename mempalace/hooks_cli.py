@@ -300,10 +300,7 @@ def hook_stop(data: dict, harness: str):
                 _save_diary_direct(transcript_path, session_id, toast=toast)
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest()
-            _output({
-                "decision": "block",
-                "reason": "Call mempalace_checkpoint_ack now. Do not say anything else.",
-            })
+            _output({})
         else:
             # Legacy: block and ask Claude to save via MCP tools
             if transcript_path:
