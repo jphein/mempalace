@@ -20,7 +20,7 @@ JP's fork of [milla-jovovich/mempalace](https://github.com/milla-jovovich/mempal
 
 ```bash
 source venv/bin/activate
-python -m pytest tests/ -x -q           # run tests (580 expected)
+python -m pytest tests/ -x -q           # run tests (615 expected)
 mempalace status                         # check palace state
 mempalace search "query"                 # test search
 python -m mempalace.mcp_server           # run MCP server standalone
@@ -52,4 +52,4 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 
 ## Testing
 
-Always run `python -m pytest tests/ -x -q` after changes. 576 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).
+Always run `python -m pytest tests/ -x -q` after changes. 615 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).

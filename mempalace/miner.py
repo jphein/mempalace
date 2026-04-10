@@ -55,6 +55,22 @@ SKIP_FILENAMES = {
     "package-lock.json",
 }
 
+# Patterns for files that are technically text but useless for semantic search.
+# Matched against the filename (case-insensitive).
+SKIP_PATTERNS = [
+    ".min.js",        # minified JS (jquery.min.js, etc.)
+    ".min.css",       # minified CSS
+    ".bundle.js",     # bundled JS
+    ".chunk.js",      # webpack chunks
+    ".map",           # source maps
+    "-lock.json",     # lockfiles (yarn.lock handled by extension)
+    ".lock",          # lockfiles
+]
+
+# Files larger than this are likely dumps/generated — skip them even if under MAX_FILE_SIZE.
+# This catches database dumps, large SQL exports, huge JSON fixtures, etc.
+JUNK_FILE_SIZE = 500 * 1024  # 500 KB — most useful source files are well under this
+
 CHUNK_SIZE = 800  # chars per drawer
 CHUNK_OVERLAP = 100  # overlap between chunks
 MIN_CHUNK_SIZE = 50  # skip tiny chunks
@@ -623,6 +639,11 @@ def scan_project(
                 continue
             if filepath.suffix.lower() not in READABLE_EXTENSIONS and not exact_force_include:
                 continue
+            # Skip minified/bundled/lock files — text but useless for recall
+            if not force_include:
+                lower_name = filename.lower()
+                if any(lower_name.endswith(pat) for pat in SKIP_PATTERNS):
+                    continue
             if respect_gitignore and active_matchers and not force_include:
                 if is_gitignored(filepath, active_matchers, is_dir=False):
                     continue
@@ -631,7 +652,11 @@ def scan_project(
                 continue
             # Skip files exceeding size limit
             try:
-                if filepath.stat().st_size > MAX_FILE_SIZE:
+                fsize = filepath.stat().st_size
+                if fsize > MAX_FILE_SIZE:
+                    continue
+                # Skip suspiciously large text files (SQL dumps, generated JSON, etc.)
+                if not force_include and fsize > JUNK_FILE_SIZE:
                     continue
             except OSError:
                 continue
@@ -867,20 +892,25 @@ def status(palace_path: str):
         print("  Run: mempalace init <dir> then mempalace mine <dir>")
         return
 
-    # Count by wing and room
-    r = col.get(limit=10000, include=["metadatas"])
-    metas = r["metadatas"]
+    total = col.count()
 
+    # Paginate all metadata to get accurate wing/room counts
     wing_rooms = defaultdict(lambda: defaultdict(int))
-    for m in metas:
-        wing_rooms[m.get("wing", "?")][m.get("room", "?")] += 1
+    offset = 0
+    while offset < total:
+        r = col.get(limit=10000, offset=offset, include=["metadatas"])
+        if not r["metadatas"]:
+            break
+        for m in r["metadatas"]:
+            wing_rooms[m.get("wing", "?")][m.get("room", "?")] += 1
+        offset += len(r["metadatas"])
 
     print(f"\n{'=' * 55}")
-    print(f"  MemPalace Status — {len(metas)} drawers")
+    print(f"  MemPalace Status — {total:,} drawers")
     print(f"{'=' * 55}\n")
     for wing, rooms in sorted(wing_rooms.items()):
         print(f"  WING: {wing}")
         for room, count in sorted(rooms.items(), key=lambda x: x[1], reverse=True):
-            print(f"    ROOM: {room:20} {count:5} drawers")
+            print(f"    ROOM: {room:20} {count:>8,} drawers")
         print()
     print(f"{'=' * 55}\n")

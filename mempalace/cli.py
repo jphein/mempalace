@@ -176,6 +176,69 @@ def cmd_migrate(args):
     migrate(palace_path=palace_path, dry_run=args.dry_run)
 
 
+def cmd_purge(args):
+    """Delete drawers by wing and/or room."""
+    import chromadb
+
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    try:
+        client = chromadb.PersistentClient(path=palace_path)
+        col = client.get_collection("mempalace_drawers")
+    except Exception:
+        print(f"\n  No palace found at {palace_path}")
+        return
+
+    where = {}
+    if args.wing and args.room:
+        where = {"$and": [{"wing": args.wing}, {"room": args.room}]}
+    elif args.wing:
+        where = {"wing": args.wing}
+    elif args.room:
+        where = {"room": args.room}
+    else:
+        print("  Error: specify --wing and/or --room")
+        return
+
+    # ChromaDB doesn't have a count(where=...), so paginate to count
+    match_count = 0
+    offset = 0
+    while True:
+        batch = col.get(limit=10000, offset=offset, where=where, include=[])
+        if not batch["ids"]:
+            break
+        match_count += len(batch["ids"])
+        offset += len(batch["ids"])
+
+    if match_count == 0:
+        label = f"wing={args.wing}" if args.wing else ""
+        if args.room:
+            label = f"{label} room={args.room}" if label else f"room={args.room}"
+        print(f"\n  No drawers found matching {label}\n")
+        return
+
+    label = f"wing={args.wing}" if args.wing else ""
+    if args.room:
+        label = f"{label} room={args.room}" if label else f"room={args.room}"
+    print(f"\n  Found {match_count:,} drawers matching {label}")
+
+    if not args.yes:
+        confirm = input(f"  Delete {match_count:,} drawers? [y/N] ").strip().lower()
+        if confirm not in ("y", "yes"):
+            print("  Aborted.")
+            return
+
+    deleted = 0
+    while True:
+        batch = col.get(limit=10000, where=where, include=[])
+        if not batch["ids"]:
+            break
+        col.delete(ids=batch["ids"])
+        deleted += len(batch["ids"])
+        print(f"  Deleted {deleted:,} / {match_count:,}...", flush=True)
+
+    print(f"\n  Purged {deleted:,} drawers. Remaining: {col.count():,}\n")
+
+
 def cmd_status(args):
     from .miner import status
 
@@ -583,6 +646,11 @@ def main():
         help="Show what would be migrated without changing anything",
     )
 
+    p_purge = sub.add_parser("purge", help="Delete drawers by wing and/or room")
+    p_purge.add_argument("--wing", help="Wing to purge")
+    p_purge.add_argument("--room", help="Room to purge")
+    p_purge.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
+
     sub.add_parser("status", help="Show what's been filed")
 
     args = parser.parse_args()
@@ -619,6 +687,7 @@ def main():
         "wake-up": cmd_wakeup,
         "repair": cmd_repair,
         "migrate": cmd_migrate,
+        "purge": cmd_purge,
         "status": cmd_status,
     }
     dispatch[args.command](args)
