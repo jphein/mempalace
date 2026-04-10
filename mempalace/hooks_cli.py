@@ -31,7 +31,7 @@ def _mempalace_python() -> str:
     venv_bin = Path(__file__).resolve().parents[3] / "bin" / "python"
     if venv_bin.is_file():
         return str(venv_bin)
-    # Editable install: project root has venv/ dir
+    # Editable install: assumes project root has a venv/ sibling to mempalace/
     project_venv = Path(__file__).resolve().parents[1] / "venv" / "bin" / "python"
     if project_venv.is_file():
         return str(project_venv)
@@ -196,7 +196,10 @@ _THEME_STOPWORDS = frozenset(
 
 
 def _extract_themes(messages: list[str], max_themes: int = 3) -> list[str]:
-    """Pull 2-3 distinctive topic words from recent messages."""
+    """Pull 2-3 distinctive topic words from recent messages.
+
+    Note: stopword list is English-only; non-English corpora will produce noisy themes.
+    """
     from collections import Counter
     words: Counter[str] = Counter()
     for msg in messages:
