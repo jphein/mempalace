@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from mempalace.normalize import (
     _extract_content,
+    _format_tool_result,
     _format_tool_use,
     _messages_to_transcript,
     _try_chatgpt_json,
@@ -184,6 +185,114 @@ def test_format_tool_use_unknown_tool_truncates():
     result = _format_tool_use(block)
     assert result.endswith("...")
     assert len(result) <= len("[SomeTool] ") + 200 + len("...")
+
+
+# ── _format_tool_result ──────────────────────────────────────────────
+
+
+def test_format_tool_result_bash_short():
+    """Short Bash output is preserved in full."""
+    content = "Bus 002 Device 005: ID 1532:0e05 Razer Kiyo Pro"
+    result = _format_tool_result(content, "Bash")
+    assert result == "→ Bus 002 Device 005: ID 1532:0e05 Razer Kiyo Pro"
+
+
+def test_format_tool_result_bash_head_tail():
+    """Long Bash output gets head+tail with gap marker."""
+    lines = [f"line {i}" for i in range(60)]
+    content = "\n".join(lines)
+    result = _format_tool_result(content, "Bash")
+    assert "line 0" in result
+    assert "line 19" in result
+    assert "line 40" in result
+    assert "line 59" in result
+    assert "20 lines omitted" in result
+    # Lines 20-39 should be gone
+    assert "line 20\n" not in result
+
+
+def test_format_tool_result_bash_exactly_40_lines():
+    """Bash output at exactly 40 lines is not truncated."""
+    lines = [f"line {i}" for i in range(40)]
+    content = "\n".join(lines)
+    result = _format_tool_result(content, "Bash")
+    assert "omitted" not in result
+    assert "line 0" in result
+    assert "line 39" in result
+
+
+def test_format_tool_result_read_omitted():
+    """Read results are omitted (content already in palace from project mining)."""
+    result = _format_tool_result("lots of file content here...", "Read")
+    assert result == ""
+
+
+def test_format_tool_result_edit_omitted():
+    """Edit results are omitted (diff is in git)."""
+    result = _format_tool_result("file updated", "Edit")
+    assert result == ""
+
+
+def test_format_tool_result_write_omitted():
+    """Write results are omitted."""
+    result = _format_tool_result("file created", "Write")
+    assert result == ""
+
+
+def test_format_tool_result_grep_short():
+    """Short Grep output is kept."""
+    content = "src/foo.py\nsrc/bar.py\nsrc/baz.py"
+    result = _format_tool_result(content, "Grep")
+    assert "→ src/foo.py" in result
+    assert "→ src/baz.py" in result
+
+
+def test_format_tool_result_grep_caps_at_20():
+    """Grep output beyond 20 lines is truncated."""
+    lines = [f"match_{i}.py" for i in range(30)]
+    content = "\n".join(lines)
+    result = _format_tool_result(content, "Grep")
+    assert "match_19.py" in result
+    assert "match_20.py" not in result
+    assert "10 more matches" in result
+
+
+def test_format_tool_result_glob_caps_at_20():
+    """Glob output beyond 20 lines is truncated."""
+    lines = [f"/path/file_{i}.py" for i in range(25)]
+    content = "\n".join(lines)
+    result = _format_tool_result(content, "Glob")
+    assert "file_19.py" in result
+    assert "file_20.py" not in result
+    assert "5 more matches" in result
+
+
+def test_format_tool_result_unknown_short():
+    """Unknown tool with short output is kept."""
+    result = _format_tool_result("some output", "mcp__mempalace__search")
+    assert result == "→ some output"
+
+
+def test_format_tool_result_unknown_truncates():
+    """Unknown tool output over 2KB is truncated."""
+    content = "x" * 3000
+    result = _format_tool_result(content, "SomeTool")
+    assert result.endswith("... [truncated, 3000 chars]")
+    assert len(result) < 2200
+
+
+def test_format_tool_result_list_content():
+    """tool_result content can be a list of text blocks."""
+    content = [{"type": "text", "text": "result line 1"}, {"type": "text", "text": "result line 2"}]
+    result = _format_tool_result(content, "Bash")
+    assert "result line 1" in result
+    assert "result line 2" in result
+
+
+def test_format_tool_result_empty():
+    """Empty result returns empty string."""
+    result = _format_tool_result("", "Bash")
+    assert result == ""
 
 
 # ── _try_claude_code_jsonl ─────────────────────────────────────────────

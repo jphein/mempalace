@@ -326,6 +326,72 @@ def _format_tool_use(block: dict) -> str:
     return f"[{name}] {summary}"
 
 
+_TOOL_RESULT_MAX_LINES_BASH = 20  # head and tail line count
+_TOOL_RESULT_MAX_MATCHES = 20     # Grep/Glob cap
+_TOOL_RESULT_MAX_BYTES = 2048     # fallback cap for unknown tools
+
+
+def _format_tool_result(content, tool_name: str) -> str:
+    """Format a tool_result based on the originating tool's type.
+
+    Args:
+        content: Result text (str) or list of content blocks (list of dicts).
+        tool_name: Name of the tool that produced this result.
+
+    Returns:
+        Formatted string prefixed with ``→ ``, or empty string if omitted.
+    """
+    # Normalize list-of-blocks to plain text
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict) and item.get("type") == "text":
+                parts.append(item.get("text", ""))
+            elif isinstance(item, str):
+                parts.append(item)
+        text = "\n".join(parts)
+    else:
+        text = str(content) if content else ""
+
+    text = text.strip()
+    if not text:
+        return ""
+
+    # Read/Edit/Write — omit result (content is in palace or git)
+    if tool_name in ("Read", "Edit", "Write"):
+        return ""
+
+    lines = text.split("\n")
+
+    # Bash — head + tail
+    if tool_name == "Bash":
+        n = _TOOL_RESULT_MAX_LINES_BASH
+        if len(lines) <= n * 2:
+            return "→ " + "\n→ ".join(lines)
+        head = lines[:n]
+        tail = lines[-n:]
+        omitted = len(lines) - 2 * n
+        return (
+            "→ " + "\n→ ".join(head)
+            + f"\n→ ... [{omitted} lines omitted] ..."
+            + "\n→ " + "\n→ ".join(tail)
+        )
+
+    # Grep/Glob — cap matches
+    if tool_name in ("Grep", "Glob"):
+        cap = _TOOL_RESULT_MAX_MATCHES
+        if len(lines) <= cap:
+            return "→ " + "\n→ ".join(lines)
+        kept = lines[:cap]
+        remaining = len(lines) - cap
+        return "→ " + "\n→ ".join(kept) + f"\n→ ... [{remaining} more matches]"
+
+    # Unknown — byte cap
+    if len(text) > _TOOL_RESULT_MAX_BYTES:
+        return "→ " + text[:_TOOL_RESULT_MAX_BYTES] + f"... [truncated, {len(text)} chars]"
+    return "→ " + text
+
+
 def _messages_to_transcript(messages: list, spellcheck: bool = True) -> str:
     """Convert [(role, text), ...] to transcript format with > markers."""
     if spellcheck:
