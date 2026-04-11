@@ -31,7 +31,7 @@ from .config import MempalaceConfig, sanitize_name, sanitize_content
 from .version import __version__
 from .query_sanitizer import sanitize_query
 from .searcher import search_memories
-from .palace_graph import traverse, find_tunnels, graph_stats
+from .palace_graph import traverse, find_tunnels, graph_stats, invalidate_graph_cache
 import chromadb
 
 from .knowledge_graph import KnowledgeGraph
@@ -477,6 +477,7 @@ def tool_add_drawer(
             ],
         )
         _metadata_cache = None
+        invalidate_graph_cache()
         logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
         return {"success": True, "drawer_id": drawer_id, "wing": wing, "room": room}
     except Exception as e:
@@ -508,6 +509,7 @@ def tool_delete_drawer(drawer_id: str):
     try:
         col.delete(ids=[drawer_id])
         _metadata_cache = None
+        invalidate_graph_cache()
         logger.info(f"Deleted drawer: {drawer_id}")
         return {"success": True, "drawer_id": drawer_id}
     except Exception as e:
@@ -639,8 +641,9 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
         update_kwargs["metadatas"] = [new_meta]
         col.update(**update_kwargs)
 
-        # Invalidate metadata cache so status/taxonomy reflect changes
+        # Invalidate caches so status/taxonomy/graph reflect changes
         _metadata_cache = None
+        invalidate_graph_cache()
 
         logger.info(f"Updated drawer: {drawer_id}")
         return {

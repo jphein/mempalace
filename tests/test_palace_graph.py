@@ -3,7 +3,18 @@
 All ChromaDB access is mocked — no real database needed.
 """
 
+import pytest
 from unittest.mock import MagicMock, patch
+
+from mempalace.palace_graph import invalidate_graph_cache
+
+
+@pytest.fixture(autouse=True)
+def _clear_graph_cache():
+    """Ensure each test starts with a fresh graph cache."""
+    invalidate_graph_cache()
+    yield
+    invalidate_graph_cache()
 
 
 def _make_fake_collection(metadatas, ids=None):

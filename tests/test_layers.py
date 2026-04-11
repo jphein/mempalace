@@ -71,13 +71,22 @@ def test_layer0_default_path():
 
 
 def _mock_chromadb_for_layer(docs, metas, monkeypatch=None):
-    """Return a mock PersistentClient whose collection.get returns docs/metas."""
+    """Return a mock PersistentClient whose collection.get returns docs/metas.
+
+    L1 may call get() multiple times (importance pre-filter fast path, then
+    fallback full scan).  Returns data at offset=0, empty at any other offset
+    — simulating a single page of results for each independent scan.
+    """
     mock_col = MagicMock()
-    # First batch returns data, second batch returns empty (end of pagination)
-    mock_col.get.side_effect = [
-        {"documents": docs, "metadatas": metas},
-        {"documents": [], "metadatas": []},
-    ]
+    _data = {"documents": docs, "metadatas": metas}
+    _empty = {"documents": [], "metadatas": []}
+
+    def _get_side_effect(**kwargs):
+        if kwargs.get("offset", 0) == 0:
+            return _data
+        return _empty
+
+    mock_col.get.side_effect = _get_side_effect
     mock_client = MagicMock()
     mock_client.get_collection.return_value = mock_col
     return mock_client
@@ -146,9 +155,15 @@ def test_layer1_with_wing_filter():
         result = layer.generate()
 
     assert "ESSENTIAL STORY" in result
-    # Verify wing filter was passed
-    call_kwargs = mock_client.get_collection.return_value.get.call_args_list[0][1]
-    assert call_kwargs.get("where") == {"wing": "project_x"}
+    # Verify wing filter was passed in at least one get() call
+    all_wheres = [
+        c[1].get("where") for c in mock_client.get_collection.return_value.get.call_args_list
+    ]
+    assert any(
+        w == {"wing": "project_x"}  # fallback path
+        or (isinstance(w, dict) and w.get("$and") and {"wing": "project_x"} in w["$and"])
+        for w in all_wheres if w
+    )
 
 
 def test_layer1_truncates_long_snippets():
@@ -207,12 +222,17 @@ def test_layer1_importance_from_various_keys():
 
 
 def test_layer1_batch_exception_breaks():
-    """If col.get raises on a batch, loop breaks gracefully."""
+    """If col.get raises on a batch, loop breaks gracefully keeping earlier data."""
     mock_col = MagicMock()
-    mock_col.get.side_effect = [
-        {"documents": ["doc1"], "metadatas": [{"room": "r"}]},
-        RuntimeError("batch error"),
-    ]
+
+    def _get_with_error(**kwargs):
+        offset = kwargs.get("offset", 0)
+        # First page returns data; subsequent pages raise to test error handling
+        if offset == 0:
+            return {"documents": ["doc1"], "metadatas": [{"room": "r"}]}
+        raise RuntimeError("batch error")
+
+    mock_col.get.side_effect = _get_with_error
     mock_client = MagicMock()
     mock_client.get_collection.return_value = mock_col
 
