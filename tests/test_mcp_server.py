@@ -138,6 +138,42 @@ class TestHandleRequest:
         resp = handle_request({"method": "unknown/method", "id": 4, "params": {}})
         assert resp["error"]["code"] == -32601
 
+    def test_any_notification_returns_none(self):
+        """All notifications/* methods should return None (no response)."""
+        from mempalace.mcp_server import handle_request
+
+        for method in [
+            "notifications/initialized",
+            "notifications/cancelled",
+            "notifications/progress",
+            "notifications/roots/list_changed",
+        ]:
+            resp = handle_request({"method": method, "params": {}})
+            assert resp is None, f"{method} should return None"
+
+    def test_unknown_method_no_id_returns_none(self):
+        """Messages without id (notifications) must never get a response."""
+        from mempalace.mcp_server import handle_request
+
+        resp = handle_request({"method": "unknown/thing", "params": {}})
+        assert resp is None
+
+    def test_malformed_method_none(self):
+        """method=None or missing should not crash."""
+        from mempalace.mcp_server import handle_request
+
+        # Explicit None
+        resp = handle_request({"method": None, "params": {}})
+        assert resp is None  # no id → no response
+
+        # Missing method entirely
+        resp = handle_request({"params": {}})
+        assert resp is None
+
+        # method=None with id → should return error, not crash
+        resp = handle_request({"method": None, "id": 99, "params": {}})
+        assert resp["error"]["code"] == -32601
+
     def test_tools_call_dispatches(self, monkeypatch, config, palace_path, seeded_kg):
         _patch_mcp_server(monkeypatch, config, seeded_kg)
         from mempalace.mcp_server import handle_request
@@ -251,6 +287,20 @@ class TestSearchTool:
 
         result = tool_search(query="database", room="backend")
         assert all(r["room"] == "backend" for r in result["results"])
+
+    def test_search_min_similarity_backwards_compat(self, monkeypatch, config, palace_path, seeded_collection, kg):
+        """Old min_similarity param still works via backwards-compat shim."""
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace.mcp_server import tool_search
+
+        # Old name should work
+        result = tool_search(query="JWT", min_similarity=1.5)
+        assert "results" in result
+
+        # Old name takes precedence when both provided
+        result_strict = tool_search(query="JWT", max_distance=999.0, min_similarity=0.01)
+        result_loose = tool_search(query="JWT", max_distance=0.01, min_similarity=999.0)
+        assert len(result_strict["results"]) <= len(result_loose["results"])
 
 
 # ── Write Tools ─────────────────────────────────────────────────────────
