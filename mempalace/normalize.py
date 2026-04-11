@@ -287,6 +287,45 @@ def _extract_content(content) -> str:
     return ""
 
 
+def _format_tool_use(block: dict) -> str:
+    """Format a tool_use block into a human-readable one-liner."""
+    name = block.get("name", "Unknown")
+    inp = block.get("input", {})
+
+    if name == "Bash":
+        cmd = inp.get("command", "")
+        if len(cmd) > 200:
+            cmd = cmd[:200] + "..."
+        return f"[Bash] {cmd}"
+
+    if name == "Read":
+        path = inp.get("file_path", "?")
+        offset = inp.get("offset")
+        limit = inp.get("limit")
+        if offset is not None and limit is not None:
+            return f"[Read {path}:{offset}-{offset + limit}]"
+        return f"[Read {path}]"
+
+    if name == "Grep":
+        pattern = inp.get("pattern", "")
+        target = inp.get("path") or inp.get("glob") or ""
+        return f"[Grep] {pattern} in {target}"
+
+    if name == "Glob":
+        pattern = inp.get("pattern", "")
+        return f"[Glob] {pattern}"
+
+    if name in ("Edit", "Write"):
+        path = inp.get("file_path", "?")
+        return f"[{name} {path}]"
+
+    # Unknown tool — serialize input, truncate
+    summary = json.dumps(inp, separators=(",", ":"))
+    if len(summary) > 200:
+        summary = summary[:200] + "..."
+    return f"[{name}] {summary}"
+
+
 def _messages_to_transcript(messages: list, spellcheck: bool = True) -> str:
     """Convert [(role, text), ...] to transcript format with > markers."""
     if spellcheck:

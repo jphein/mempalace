@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 from mempalace.normalize import (
     _extract_content,
+    _format_tool_use,
     _messages_to_transcript,
     _try_chatgpt_json,
     _try_claude_ai_json,
@@ -100,6 +101,89 @@ def test_extract_content_none():
 def test_extract_content_mixed_list():
     blocks = ["plain", {"type": "text", "text": "block"}]
     assert _extract_content(blocks) == "plain block"
+
+
+# ── _format_tool_use ──────────────────────────────────────────────────
+
+
+def test_format_tool_use_bash():
+    block = {"type": "tool_use", "id": "t1", "name": "Bash",
+             "input": {"command": "lsusb | grep razer", "description": "Check USB"}}
+    result = _format_tool_use(block)
+    assert result == "[Bash] lsusb | grep razer"
+
+
+def test_format_tool_use_bash_truncates_long_command():
+    block = {"type": "tool_use", "id": "t1", "name": "Bash",
+             "input": {"command": "x" * 300}}
+    result = _format_tool_use(block)
+    assert len(result) <= len("[Bash] ") + 200 + len("...")
+    assert result.endswith("...")
+
+
+def test_format_tool_use_read():
+    block = {"type": "tool_use", "id": "t1", "name": "Read",
+             "input": {"file_path": "/home/jp/file.py"}}
+    result = _format_tool_use(block)
+    assert result == "[Read /home/jp/file.py]"
+
+
+def test_format_tool_use_read_with_range():
+    block = {"type": "tool_use", "id": "t1", "name": "Read",
+             "input": {"file_path": "/home/jp/file.py", "offset": 10, "limit": 50}}
+    result = _format_tool_use(block)
+    assert result == "[Read /home/jp/file.py:10-60]"
+
+
+def test_format_tool_use_grep():
+    block = {"type": "tool_use", "id": "t1", "name": "Grep",
+             "input": {"pattern": "firmware", "path": "/home/jp/proj"}}
+    result = _format_tool_use(block)
+    assert result == "[Grep] firmware in /home/jp/proj"
+
+
+def test_format_tool_use_grep_with_glob():
+    block = {"type": "tool_use", "id": "t1", "name": "Grep",
+             "input": {"pattern": "TODO", "glob": "*.py"}}
+    result = _format_tool_use(block)
+    assert result == "[Grep] TODO in *.py"
+
+
+def test_format_tool_use_glob():
+    block = {"type": "tool_use", "id": "t1", "name": "Glob",
+             "input": {"pattern": "/home/jp/proj/**/*.py"}}
+    result = _format_tool_use(block)
+    assert result == "[Glob] /home/jp/proj/**/*.py"
+
+
+def test_format_tool_use_edit():
+    block = {"type": "tool_use", "id": "t1", "name": "Edit",
+             "input": {"file_path": "/home/jp/file.py", "old_string": "x", "new_string": "y"}}
+    result = _format_tool_use(block)
+    assert result == "[Edit /home/jp/file.py]"
+
+
+def test_format_tool_use_write():
+    block = {"type": "tool_use", "id": "t1", "name": "Write",
+             "input": {"file_path": "/home/jp/file.py", "content": "..."}}
+    result = _format_tool_use(block)
+    assert result == "[Write /home/jp/file.py]"
+
+
+def test_format_tool_use_unknown_tool():
+    block = {"type": "tool_use", "id": "t1", "name": "mcp__mempalace__search",
+             "input": {"query": "firmware probe", "limit": 5}}
+    result = _format_tool_use(block)
+    assert result.startswith("[mcp__mempalace__search]")
+    assert "firmware probe" in result
+
+
+def test_format_tool_use_unknown_tool_truncates():
+    block = {"type": "tool_use", "id": "t1", "name": "SomeTool",
+             "input": {"data": "x" * 300}}
+    result = _format_tool_use(block)
+    assert result.endswith("...")
+    assert len(result) <= len("[SomeTool] ") + 200 + len("...")
 
 
 # ── _try_claude_code_jsonl ─────────────────────────────────────────────
