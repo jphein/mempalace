@@ -6,7 +6,7 @@ Supported:
     - Plain text with > markers (pass through)
     - Claude.ai JSON export
     - ChatGPT conversations.json
-    - Claude Code JSONL
+    - Claude Code JSONL (with tool_use/tool_result block capture)
     - OpenAI Codex CLI JSONL
     - Slack JSON export
     - Plain text (pass through for paragraph chunking)

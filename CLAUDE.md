@@ -20,7 +20,7 @@ JP's fork of [milla-jovovich/mempalace](https://github.com/milla-jovovich/mempal
 
 ```bash
 source venv/bin/activate
-python -m pytest tests/ -x -q           # run tests (615 expected)
+python -m pytest tests/ -x -q           # run tests (648 expected)
 mempalace status                         # check palace state
 mempalace search "query"                 # test search
 python -m mempalace.mcp_server           # run MCP server standalone
@@ -37,19 +37,26 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 5. **fix: entity detector STOPWORDS** — 73 technical terms added (Handler, Node, Service, etc.)
 6. **feat: similarity threshold** — `max_distance` parameter in search (renamed from `min_similarity`), default 1.5 L2 distance in MCP
 7. **feat: hooks_cli** — stop hook saves directly via Python API with systemMessage notification, precompact blocks for AI-driven save, auto-ingest transcripts
+8. **feat: --version flag** — CLI supports `mempalace --version` (from upstream PR #559 pattern)
+9. **feat: tool output mining** — normalize.py captures tool_use/tool_result blocks from Claude Code JSONL with per-tool formatting strategies (Bash head+tail, Read/Edit/Write path-only, Grep/Glob capped)
+10. **fix: dry-run room=None crash** — miner.py handles None room from unreadable files (#586)
+11. **fix: precompact hook SESSION_ID sanitization** — applies same safe() regex as save hook (#589)
+12. **feat: chromadb >=1.5.4** — upgraded from 0.6.x pin, auto-migrates existing databases (#581)
+13. **feat: hooks auto-mine transcript** — both hooks now auto-mine JSONL transcript into palace (captures raw tool output), updated reason messages to request verbatim tool output, MP_PYTHON auto-detection
 
 ## Upstream PRs
 
 - milla-jovovich/mempalace#483 — mtime dedup fix
 - milla-jovovich/mempalace#484 — search limit + pagination + cache fix
+- milla-jovovich/mempalace#562 — tool output mining, bug fixes, chromadb upgrade (18 upstream issues addressed)
 
 ## Integration
 
 - **Claude Code plugin**: installed at user scope via marketplace
 - **MCP server**: global user scope — available in all projects
-- **Stop hook**: fires every 15 messages, saves directly via Python API + systemMessage notification + auto-ingests transcript
-- **PreCompact hook**: emergency save before context compaction
+- **Stop hook**: fires every 15 messages, auto-mines transcript for tool output, blocks AI to save with verbatim tool output instructions
+- **PreCompact hook**: emergency save before context compaction, auto-mines transcript, finds transcript by session_id fallback
 
 ## Testing
 
-Always run `python -m pytest tests/ -x -q` after changes. 615 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).
+Always run `python -m pytest tests/ -x -q` after changes. 648 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).

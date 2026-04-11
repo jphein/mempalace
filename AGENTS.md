@@ -76,3 +76,5 @@ Knowledge Graph:
 - **Modifying mining**: `mempalace/miner.py` (project files) or `mempalace/convo_miner.py` (transcripts)
 - **Input validation**: `mempalace/config.py` — `sanitize_name()` / `sanitize_content()`
 - **Tests**: mirror source structure in `tests/test_<module>.py`
+- **Changing transcript normalization**: `mempalace/normalize.py` — format detection, tool_use/tool_result extraction
+- **Hook auto-mining**: `hooks/mempal_save_hook.sh` and `hooks/mempal_precompact_hook.sh` — inline Python for transcript mining

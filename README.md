@@ -512,9 +512,9 @@ The AI learns AAAK and the memory protocol automatically from the `mempalace_sta
 
 Two hooks for Claude Code that automatically save memories during work:
 
-**Save Hook** — every 15 messages, triggers a structured save. Topics, decisions, quotes, code changes. Also regenerates the critical facts layer.
+**Save Hook** — Every 15 messages, auto-mines the JSONL transcript directly into the palace (capturing raw tool output — Bash results, search findings, build errors), then triggers a structured AI save with explicit instructions to preserve tool output verbatim.
 
-**PreCompact Hook** — fires before context compression. Emergency save before the window shrinks.
+**PreCompact Hook** — Fires before context compression. Auto-mines the transcript, then forces emergency save with verbatim tool output instructions.
 
 ```json
 {
@@ -526,6 +526,8 @@ Two hooks for Claude Code that automatically save memories during work:
 ```
 
 **Optional auto-ingest:** Set the `MEMPAL_DIR` environment variable to a directory path and the hooks will automatically run `mempalace mine` on that directory during each save trigger (background on stop, synchronous on precompact).
+
+Set `MEMPAL_PYTHON` to your Python interpreter with mempalace + chromadb installed. Auto-detects repo venv if not set.
 
 ---
 
@@ -632,7 +634,7 @@ Plain text. Becomes Layer 0 — loaded every session.
 |------|------|
 | `cli.py` | CLI entry point |
 | `config.py` | Configuration loading and defaults |
-| `normalize.py` | Converts 5 chat formats to standard transcript |
+| `normalize.py` | Converts 6 chat formats to standard transcript, captures tool_use/tool_result blocks from Claude Code JSONL |
 | `mcp_server.py` | MCP server — 19 tools, AAAK auto-teach, memory protocol |
 | `miner.py` | Project file ingest |
 | `convo_miner.py` | Conversation ingest — chunks by exchange pair |
@@ -645,8 +647,8 @@ Plain text. Becomes Layer 0 — loaded every session.
 | `entity_registry.py` | Entity code registry |
 | `entity_detector.py` | Auto-detect people and projects from content |
 | `split_mega_files.py` | Split concatenated transcripts into per-session files |
-| `hooks/mempal_save_hook.sh` | Auto-save every N messages |
-| `hooks/mempal_precompact_hook.sh` | Emergency save before compaction |
+| `hooks/mempal_save_hook.sh` | auto-mine + save every N messages |
+| `hooks/mempal_precompact_hook.sh` | auto-mine + emergency save |
 
 ---
 
@@ -674,15 +676,15 @@ mempalace/
 │   └── membench_bench.py      ← MemBench runner
 ├── hooks/                     ← Claude Code auto-save hooks
 │   ├── README.md              ← hook setup guide
-│   ├── mempal_save_hook.sh    ← save every N messages
-│   └── mempal_precompact_hook.sh ← emergency save
+│   ├── mempal_save_hook.sh    ← auto-mine + save every N messages
+│   └── mempal_precompact_hook.sh ← auto-mine + emergency save
 ├── examples/                  ← usage examples
 │   ├── basic_mining.py
 │   ├── convo_import.py
 │   └── mcp_setup.md
 ├── tests/                     ← test suite (README)
 ├── assets/                    ← logo + brand assets
-└── pyproject.toml             ← package config (v3.0.0)
+└── pyproject.toml             ← package config (v3.1.0)
 ```
 
 ---
@@ -690,7 +692,7 @@ mempalace/
 ## Requirements
 
 - Python 3.9+
-- `chromadb>=0.4.0`
+- `chromadb>=1.5.4`
 - `pyyaml>=6.0`
 
 No API key. No internet after install. Everything local.

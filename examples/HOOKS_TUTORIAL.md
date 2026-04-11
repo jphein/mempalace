@@ -26,3 +26,18 @@ Add this to your configuration file to enable automatic background saving:
     ]
   }
 }
+```
+
+### 3. What changed (v3.1.0+)
+
+Both hooks now have **two-layer capture**:
+
+1. **Auto-mine**: Before blocking the AI, the hook runs the normalizer on the JSONL transcript and upserts chunks directly into the palace. This captures raw tool output (Bash results, search findings, build errors) that the AI would otherwise summarize away.
+
+2. **Updated reason messages**: The block reason now explicitly tells the AI to save tool output verbatim — not just topics and decisions.
+
+### 4. Configuration
+
+- **`SAVE_INTERVAL=15`** — How many human messages between saves
+- **`MEMPAL_PYTHON`** — Python interpreter with mempalace + chromadb. Auto-detects: env var → repo venv → system python3
+- **`MEMPAL_DIR`** — Optional directory for auto-ingest via `mempalace mine`
