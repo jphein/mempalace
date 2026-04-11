@@ -48,7 +48,9 @@ class ChromaBackend:
 
         client = chromadb.PersistentClient(path=palace_path)
         if create:
-            collection = client.get_or_create_collection(collection_name)
+            collection = client.get_or_create_collection(
+                collection_name, metadata={"hnsw:space": "cosine"}
+            )
         else:
             collection = client.get_collection(collection_name)
         return ChromaCollection(collection)
