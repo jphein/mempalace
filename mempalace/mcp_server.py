@@ -1029,7 +1029,7 @@ TOOLS = {
         "handler": tool_graph_stats,
     },
     "mempalace_search": {
-        "description": "Semantic search. Returns verbatim drawer content with similarity scores. IMPORTANT: 'query' must contain ONLY search keywords. Use 'context' for background. Results with L2 distance > max_distance are filtered out.",
+        "description": "Semantic search. Returns verbatim drawer content with similarity scores. IMPORTANT: 'query' must contain ONLY search keywords. Use 'context' for background. Results with cosine distance > max_distance are filtered out.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -1043,7 +1043,7 @@ TOOLS = {
                 "room": {"type": "string", "description": "Filter by room (optional)"},
                 "max_distance": {
                     "type": "number",
-                    "description": "Max L2 distance threshold — results further than this are dropped. Lower = stricter. Default 1.5. Set to 0 to disable.",
+                    "description": "Max cosine distance threshold (0=identical, 2=opposite). Results further than this are dropped. Lower = stricter. Default 1.5. Set to 0 to disable.",
                 },
                 "context": {
                     "type": "string",
@@ -1236,7 +1236,7 @@ SUPPORTED_PROTOCOL_VERSIONS = [
 
 def handle_request(request):
     method = request.get("method") or ""
-    params = request.get("params", {})
+    params = request.get("params") or {}
     req_id = request.get("id")
 
     if method == "initialize":
