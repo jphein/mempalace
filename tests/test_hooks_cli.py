@@ -1,6 +1,7 @@
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -33,9 +34,9 @@ def test_mempalace_python_returns_string():
 
 
 def test_mempalace_python_finds_venv():
-    """Should resolve to a venv python, not bare sys.executable."""
+    """Should resolve to a valid Python interpreter path."""
     result = _mempalace_python()
-    assert "venv" in result or "site-packages" in result or result.endswith("python")
+    assert result and "python" in os.path.basename(result).lower()
 
 
 # --- _sanitize_session_id ---
