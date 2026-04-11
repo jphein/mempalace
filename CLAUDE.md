@@ -55,6 +55,13 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 - milla-jovovich/mempalace#484 — search limit + pagination + cache fix
 - milla-jovovich/mempalace#562 — tool output mining, bug fixes, chromadb upgrade (18 upstream issues addressed)
 
+## Two-Layer Memory Architecture
+
+Claude Code has two complementary memory layers — neither has automatic consolidation today:
+
+- **Auto-memory** (`~/.claude/projects/*/memory/`) — lightweight preferences, context, feedback. Manual writes only. (Unreleased "Auto Dream" consolidation exists in source but is behind a disabled feature flag.)
+- **MemPalace** (`~/.mempalace/palace/`, 132K+ drawers) — verbatim conversations, tool output, code. Write-only archive, searchable via MCP. Completeness is the feature.
+
 ## Integration
 
 - **Claude Code plugin**: installed at user scope via marketplace

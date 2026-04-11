@@ -4,6 +4,15 @@ Gaps identified from [lhl/agentic-memory analysis](https://github.com/lhl/agenti
 
 **Why we're staying on MemPalace:** It's the only MCP-native local memory system that works with Claude Code today. Every alternative (Karta, Gigabrain, ByteRover, Codex memory, OpenViking) would need an MCP wrapper written before it could be used. The gaps below are real but fixable.
 
+**Two-layer memory architecture (2026-04-11):** Claude Code has two memory layers:
+
+| Layer | Storage | Size | Consolidation | Purpose |
+|-------|---------|------|---------------|---------|
+| **Auto-memory** | `~/.claude/projects/*/memory/*.md` | ~dozens of files | None (manual writes only) | Preferences, context, feedback — lightweight |
+| **MemPalace** | `~/.mempalace/palace/` (ChromaDB) | 132K+ drawers | None (write-only archive) | Verbatim conversations, tool output, code — deep searchable history |
+
+Neither layer has automatic consolidation or pruning today. Claude Code has unreleased "Auto Dream" consolidation code (discovered via source leak, behind disabled feature flag `tengu_onyx_plover`, not in official docs or changelog — see [GitHub #38461](https://github.com/anthropics/claude-code/issues/38461)). If/when it ships, it would only cover the lightweight layer — **MemPalace's TODO #4 (decay) and #5 (feedback) remain the right priorities** for the verbatim archive.
+
 **Patterns to steal from the survey:**
 - [Karta](https://github.com/rohithzr/karta) — contradiction detection, dream engine feedback loop, foresight signals, dual-granularity search, 14-step read pipeline with abstention
 - [Gigabrain](https://github.com/legendaryvibecoder/gigabrain) — 30+ junk filter patterns on write, event-sourced audit trail, nightly 8-stage maintenance
@@ -89,6 +98,8 @@ Items ordered by implementation priority: quick wins first, then feature gaps, t
 ## 4. Decay / recency weighting (1 day)
 
 **Gap:** All memories are equally weighted forever. No recency signal, no TTL, no age-based scoring. Palace gets noisier over time with no self-curation. Mnemosyne and Memoria both have this — MemPalace doesn't.
+
+**Note (2026-04-11):** Claude Code has unreleased "Auto Dream" consolidation code for the lightweight memory layer, but it's behind a disabled feature flag and non-functional (see two-layer table above). If it ships, it would only cover `~/.claude/projects/*/memory/` — MemPalace decay remains necessary for the 132K+ drawer archive. Focus on **search ranking** (boost recent/useful) rather than deletion.
 
 **Files:**
 - Modify: `mempalace/searcher.py` — post-processing in `search_memories()`
@@ -214,6 +225,6 @@ Karta classifies queries into 6 modes (Standard, Recency, Breadth, Computation, 
 - **AAAK overhaul**: upstream's problem, not ours. We store verbatim.
 - **Multi-collection sharding**: premature. Single collection works to ~500K drawers.
 - **LLM-based extraction**: deliberate design choice. Zero-LLM write path is a feature, not a bug. If we add LLM extraction, it should be opt-in and additive, not replacing the deterministic pipeline.
-- **Dream engine (Karta-style)**: Fascinating but requires LLM calls on every dream pass. Karta's 7-type inference engine is 952 lines of Rust prompting GPT — beautiful architecture, wrong cost model for us. Our zero-LLM philosophy means we'd need a local model or explicit opt-in.
+- **Dream engine (Karta-style)**: Fascinating but requires LLM calls on every dream pass. Karta's 7-type inference engine is 952 lines of Rust prompting GPT — beautiful architecture, wrong cost model for us. Our zero-LLM philosophy means we'd need a local model or explicit opt-in. **Update (2026-04-11):** Claude Code has unreleased "Auto Dream" consolidation code (source leak, disabled feature flag) — validates that the pattern matters, but not yet shipping. If it lands, it covers the lightweight layer only.
 - **Dual-granularity ANN**: Karta searches notes AND atomic facts in parallel, expanding fact hits to parent notes. Would require a second ChromaDB collection for facts. Premature — fix basic search quality (#1 hybrid) first.
 - **Full event sourcing (Gigabrain-style)**: Append-only event log for every write/reject/dedup. Overkill for local use. Our provenance metadata (source_file, filed_at, added_by) covers 80% of the audit need.
