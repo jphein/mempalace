@@ -102,7 +102,9 @@ def _try_claude_code_jsonl(content: str) -> Optional[str]:
         if msg_type == "assistant" and isinstance(msg_content, list):
             for block in msg_content:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
-                    tool_use_map[block.get("id", "")] = block.get("name", "Unknown")
+                    tool_id = block.get("id", "")
+                    if tool_id:
+                        tool_use_map[tool_id] = block.get("name", "Unknown")
 
         if msg_type in ("human", "user"):
             # Check if this message is tool_results only (no user text)
