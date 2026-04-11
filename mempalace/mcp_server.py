@@ -58,10 +58,7 @@ if _args.palace:
     os.environ["MEMPALACE_PALACE_PATH"] = os.path.abspath(_args.palace)
 
 _config = MempalaceConfig()
-if _args.palace:
-    _kg = KnowledgeGraph(db_path=os.path.join(_config.palace_path, "knowledge_graph.sqlite3"))
-else:
-    _kg = KnowledgeGraph()
+_kg = KnowledgeGraph(db_path=os.path.join(_config.palace_path, "knowledge_graph.sqlite3"))
 
 
 _client_cache = None
@@ -984,6 +981,9 @@ def handle_request(request):
                 tool_args[key] = int(value)
             elif declared_type == "number" and not isinstance(value, (int, float)):
                 tool_args[key] = float(value)
+        # Strip unexpected kwargs — some MCP clients send extra params
+        # like top_k that the handler doesn't accept (#572).
+        tool_args = {k: v for k, v in tool_args.items() if k in schema_props}
         try:
             result = TOOLS[tool_name]["handler"](**tool_args)
             return {
