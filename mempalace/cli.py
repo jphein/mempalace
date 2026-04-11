@@ -186,6 +186,10 @@ def cmd_purge(args):
     cause segfaults on subsequent queries or inserts.
 
     Note: ``--room`` without ``--wing`` purges that room across ALL wings.
+
+    Not idempotent — running purge twice on the same criteria will fail the
+    second time if the first run completed (nothing left to match).  The
+    backup directory is preserved for recovery.
     """
     import chromadb
     import shutil
@@ -258,7 +262,8 @@ def cmd_purge(args):
         offset += len(batch["ids"])
     print(f"  Extracted {len(keep_ids):,} drawers to keep")
 
-    # Release client before nuking
+    # Release client before nuking — ChromaDB holds open file handles
+    # (WAL journal, HNSW mmap) that block rmtree on Windows and some Linux FS.
     del col, client
 
     # Nuke and rebuild with clean HNSW index
@@ -348,7 +353,9 @@ def cmd_repair(args):
         offset += len(batch["ids"])
     print(f"  Extracted {len(all_ids)} drawers")
 
-    # Release the old client before nuking the directory
+    # Release the old client before nuking the directory — ChromaDB holds
+    # open file handles (WAL journal, HNSW mmap) that block rmtree on Windows
+    # and some Linux FS.
     del col, client
 
     # Backup the entire palace directory
