@@ -778,7 +778,7 @@ def mine(
                 files_skipped += 1
             else:
                 total_drawers += drawers
-                room_counts[room] += 1
+                room_counts[room or "general"] += 1
                 if not dry_run:
                     print(f"  \u2713 [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers}")
     else:
@@ -834,7 +834,7 @@ def mine(
                     continue
 
                 total_drawers += len(batch_docs)
-                room_counts[room] += 1
+                room_counts[room or "general"] += 1
                 pending_docs.extend(batch_docs)
                 pending_ids.extend(batch_ids)
                 pending_metas.extend(batch_metas)
