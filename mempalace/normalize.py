@@ -83,6 +83,8 @@ def _try_claude_code_jsonl(content: str) -> Optional[str]:
     """Claude Code JSONL sessions."""
     lines = [line.strip() for line in content.strip().split("\n") if line.strip()]
     messages = []
+    tool_use_map = {}  # tool_use_id → tool_name
+
     for line in lines:
         try:
             entry = json.loads(line)
@@ -92,14 +94,42 @@ def _try_claude_code_jsonl(content: str) -> Optional[str]:
             continue
         msg_type = entry.get("type", "")
         message = entry.get("message", {})
+        msg_content = message.get("content", "")
+
+        # Build tool_use_map from assistant messages
+        if msg_type == "assistant" and isinstance(msg_content, list):
+            for block in msg_content:
+                if isinstance(block, dict) and block.get("type") == "tool_use":
+                    tool_use_map[block.get("id", "")] = block.get("name", "Unknown")
+
         if msg_type in ("human", "user"):
-            text = _extract_content(message.get("content", ""))
+            # Check if this message is tool_results only (no user text)
+            is_tool_only = (
+                isinstance(msg_content, list)
+                and all(
+                    isinstance(b, dict) and b.get("type") == "tool_result"
+                    for b in msg_content
+                )
+            )
+            text = _extract_content(msg_content, tool_use_map=tool_use_map)
             if text:
-                messages.append(("user", text))
+                if is_tool_only and messages and messages[-1][0] == "assistant":
+                    # Append tool results to the previous assistant message
+                    prev_role, prev_text = messages[-1]
+                    messages[-1] = (prev_role, prev_text + "\n" + text)
+                elif not is_tool_only:
+                    messages.append(("user", text))
         elif msg_type == "assistant":
-            text = _extract_content(message.get("content", ""))
+            text = _extract_content(msg_content, tool_use_map=tool_use_map)
             if text:
-                messages.append(("assistant", text))
+                # If previous message is also assistant (multi-turn tool loop),
+                # merge into the same assistant turn
+                if messages and messages[-1][0] == "assistant":
+                    prev_role, prev_text = messages[-1]
+                    messages[-1] = (prev_role, prev_text + "\n" + text)
+                else:
+                    messages.append(("assistant", text))
+
     if len(messages) >= 2:
         return _messages_to_transcript(messages)
     return None
@@ -270,8 +300,14 @@ def _try_slack_json(data) -> Optional[str]:
     return None
 
 
-def _extract_content(content) -> str:
-    """Pull text from content — handles str, list of blocks, or dict."""
+def _extract_content(content, tool_use_map: dict = None) -> str:
+    """Pull text from content — handles str, list of blocks, or dict.
+
+    Args:
+        content: Message content — string, list of content blocks, or dict.
+        tool_use_map: Optional mapping of tool_use_id → tool_name, used to
+                      select the right formatting strategy for tool_result blocks.
+    """
     if isinstance(content, str):
         return content.strip()
     if isinstance(content, list):
@@ -279,9 +315,20 @@ def _extract_content(content) -> str:
         for item in content:
             if isinstance(item, str):
                 parts.append(item)
-            elif isinstance(item, dict) and item.get("type") == "text":
-                parts.append(item.get("text", ""))
-        return " ".join(parts).strip()
+            elif isinstance(item, dict):
+                block_type = item.get("type")
+                if block_type == "text":
+                    parts.append(item.get("text", ""))
+                elif block_type == "tool_use":
+                    parts.append(_format_tool_use(item))
+                elif block_type == "tool_result":
+                    tid = item.get("tool_use_id", "")
+                    tname = (tool_use_map or {}).get(tid, "Unknown")
+                    result_content = item.get("content", "")
+                    formatted = _format_tool_result(result_content, tname)
+                    if formatted:
+                        parts.append(formatted)
+        return "\n".join(p for p in parts if p).strip()
     if isinstance(content, dict):
         return content.get("text", "").strip()
     return ""
