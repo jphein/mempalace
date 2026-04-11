@@ -112,10 +112,10 @@ def search_memories(
         wing: Optional wing filter.
         room: Optional room filter.
         n_results: Max results to return.
-        max_distance: Max L2 (Euclidean) distance threshold. ChromaDB uses
-            L2 distance by default — 0 = identical, larger = less similar.
+        max_distance: Max cosine distance threshold. The palace collection uses
+            cosine distance (hnsw:space=cosine) — 0 = identical, 2 = opposite.
             Results with distance > this value are filtered out. A value of
-            0.0 disables filtering. Typical useful range: 0.5–1.5.
+            0.0 disables filtering. Typical useful range: 0.3–1.0.
     """
     try:
         client = chromadb.PersistentClient(path=palace_path)
