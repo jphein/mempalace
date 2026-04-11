@@ -273,9 +273,7 @@ def cmd_purge(args):
     os.makedirs(palace_path, mode=0o700)
 
     new_client = chromadb.PersistentClient(path=palace_path)
-    new_col = new_client.create_collection(
-        "mempalace_drawers", metadata={"hnsw:space": "cosine"}
-    )
+    new_col = new_client.create_collection("mempalace_drawers", metadata={"hnsw:space": "cosine"})
 
     filed = 0
     for i in range(0, len(keep_ids), batch_size):
@@ -372,9 +370,7 @@ def cmd_repair(args):
     os.makedirs(palace_path, mode=0o700)
 
     new_client = chromadb.PersistentClient(path=palace_path)
-    new_col = new_client.create_collection(
-        "mempalace_drawers", metadata={"hnsw:space": "cosine"}
-    )
+    new_col = new_client.create_collection("mempalace_drawers", metadata={"hnsw:space": "cosine"})
 
     filed = 0
     for i in range(0, len(all_ids), batch_size):
@@ -562,9 +558,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument(
-        "--version", action="version", version=f"mempalace {__version__}"
-    )
+    parser.add_argument("--version", action="version", version=f"mempalace {__version__}")
     parser.add_argument(
         "--palace",
         default=None,

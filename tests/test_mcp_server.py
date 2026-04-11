@@ -288,7 +288,9 @@ class TestSearchTool:
         result = tool_search(query="database", room="backend")
         assert all(r["room"] == "backend" for r in result["results"])
 
-    def test_search_min_similarity_backwards_compat(self, monkeypatch, config, palace_path, seeded_collection, kg):
+    def test_search_min_similarity_backwards_compat(
+        self, monkeypatch, config, palace_path, seeded_collection, kg
+    ):
         """Old min_similarity param still works via backwards-compat shim."""
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_search
@@ -396,7 +398,9 @@ class TestWriteTools:
         assert result["count"] == 4
         assert len(result["drawers"]) == 4
 
-    def test_list_drawers_with_wing_filter(self, monkeypatch, config, palace_path, seeded_collection, kg):
+    def test_list_drawers_with_wing_filter(
+        self, monkeypatch, config, palace_path, seeded_collection, kg
+    ):
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_list_drawers
 
@@ -404,7 +408,9 @@ class TestWriteTools:
         assert result["count"] == 3
         assert all(d["wing"] == "project" for d in result["drawers"])
 
-    def test_list_drawers_with_room_filter(self, monkeypatch, config, palace_path, seeded_collection, kg):
+    def test_list_drawers_with_room_filter(
+        self, monkeypatch, config, palace_path, seeded_collection, kg
+    ):
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_list_drawers
 
@@ -421,7 +427,9 @@ class TestWriteTools:
         assert result["limit"] == 2
         assert result["offset"] == 0
 
-    def test_list_drawers_negative_offset_clamped(self, monkeypatch, config, palace_path, seeded_collection, kg):
+    def test_list_drawers_negative_offset_clamped(
+        self, monkeypatch, config, palace_path, seeded_collection, kg
+    ):
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_list_drawers
 
@@ -432,13 +440,17 @@ class TestWriteTools:
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_update_drawer, tool_get_drawer
 
-        result = tool_update_drawer("drawer_proj_backend_aaa", content="Updated content about auth.")
+        result = tool_update_drawer(
+            "drawer_proj_backend_aaa", content="Updated content about auth."
+        )
         assert result["success"] is True
 
         fetched = tool_get_drawer("drawer_proj_backend_aaa")
         assert fetched["content"] == "Updated content about auth."
 
-    def test_update_drawer_wing_and_room(self, monkeypatch, config, palace_path, seeded_collection, kg):
+    def test_update_drawer_wing_and_room(
+        self, monkeypatch, config, palace_path, seeded_collection, kg
+    ):
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_update_drawer
 

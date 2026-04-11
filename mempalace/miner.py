@@ -58,13 +58,13 @@ SKIP_FILENAMES = {
 # Patterns for files that are technically text but useless for semantic search.
 # Matched against the filename (case-insensitive).
 SKIP_PATTERNS = [
-    ".min.js",        # minified JS (jquery.min.js, etc.)
-    ".min.css",       # minified CSS
-    ".bundle.js",     # bundled JS
-    ".chunk.js",      # webpack chunks
-    ".map",           # source maps
-    "-lock.json",     # lockfiles (yarn.lock handled by extension)
-    ".lock",          # lockfiles
+    ".min.js",  # minified JS (jquery.min.js, etc.)
+    ".min.css",  # minified CSS
+    ".bundle.js",  # bundled JS
+    ".chunk.js",  # webpack chunks
+    ".map",  # source maps
+    "-lock.json",  # lockfiles (yarn.lock handled by extension)
+    ".lock",  # lockfiles
 ]
 
 # Files larger than this are likely dumps/generated — skip them even if under MAX_FILE_SIZE.
@@ -329,7 +329,7 @@ def detect_room(filepath: Path, content: str, rooms: list, project_path: Path) -
     for room in rooms:
         keywords = room.get("keywords", []) + [room["name"]]
         for kw in keywords:
-            count = len(re.findall(r'\b' + re.escape(kw.lower()) + r'\b', content_lower))
+            count = len(re.findall(r"\b" + re.escape(kw.lower()) + r"\b", content_lower))
             scores[room["name"]] += count
 
     if scores:

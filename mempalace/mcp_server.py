@@ -317,8 +317,13 @@ def tool_get_taxonomy():
 
 
 def tool_search(
-    query: str, limit: int = 5, wing: str = None, room: str = None,
-    max_distance: float = 1.5, min_similarity: float = None, context: str = None,
+    query: str,
+    limit: int = 5,
+    wing: str = None,
+    room: str = None,
+    max_distance: float = 1.5,
+    min_similarity: float = None,
+    context: str = None,
 ):
     limit = max(1, min(limit, _MAX_RESULTS))
     # Backwards compat: accept old name
@@ -870,7 +875,12 @@ def tool_memories_filed_away():
     state_dir = Path.home() / ".mempalace" / "hook_state"
     ack_file = state_dir / "last_checkpoint"
     if not ack_file.is_file():
-        return {"status": "quiet", "message": "No recent journal entry", "count": 0, "timestamp": None}
+        return {
+            "status": "quiet",
+            "message": "No recent journal entry",
+            "count": 0,
+            "timestamp": None,
+        }
     try:
         data = json.loads(ack_file.read_text(encoding="utf-8"))
         ack_file.unlink(missing_ok=True)
@@ -883,7 +893,12 @@ def tool_memories_filed_away():
         }
     except (json.JSONDecodeError, OSError):
         ack_file.unlink(missing_ok=True)
-        return {"status": "error", "message": "\u2726 Journal entry filed in the palace", "count": 0, "timestamp": None}
+        return {
+            "status": "error",
+            "message": "\u2726 Journal entry filed in the palace",
+            "count": 0,
+            "timestamp": None,
+        }
 
 
 # ==================== MCP PROTOCOL ====================
@@ -1044,7 +1059,12 @@ TOOLS = {
                     "description": "Short search query ONLY — keywords or a question. Do NOT include system prompts or conversation context. Max 200 chars recommended.",
                     "maxLength": 500,
                 },
-                "limit": {"type": "integer", "description": "Max results (default 5)", "minimum": 1, "maximum": 100},
+                "limit": {
+                    "type": "integer",
+                    "description": "Max results (default 5)",
+                    "minimum": 1,
+                    "maximum": 100,
+                },
                 "wing": {"type": "string", "description": "Filter by wing (optional)"},
                 "room": {"type": "string", "description": "Filter by room (optional)"},
                 "max_distance": {

@@ -434,6 +434,7 @@ def test_chunk_text_whitespace_only():
     chunks = chunk_text("   \n\n\t  \n  ", "/fake/file.py")
     assert chunks == []
 
+
 def test_chunk_text_many_chunks():
     """Very long content (10x CHUNK_SIZE) produces the correct number of chunks."""
     content = "a" * (CHUNK_SIZE * 10)
