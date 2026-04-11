@@ -51,7 +51,7 @@ Items ordered by implementation priority: quick wins first, then feature gaps, t
 
 ---
 
-## 2. Graph cache with write-invalidation (half day)
+## 2. ~~Graph cache with write-invalidation~~ ✓ (87f3507)
 
 **Gap:** `palace_graph.py:build_graph()` scans every drawer's metadata in 1000-item batches on every call. O(n) per graph build, no caching. At 50K+ drawers this is seconds per MCP tool call for traverse/tunnels/graph_stats.
 
@@ -69,7 +69,7 @@ Items ordered by implementation priority: quick wins first, then feature gaps, t
 
 ---
 
-## 3. L1 loading optimization (half day)
+## 3. ~~L1 loading optimization~~ ✓ (87f3507)
 
 **Gap:** L1 layer loads top-15 drawers by importance by iterating *all* metadata. O(n) on every wake-up. The analysis flags this as a scale concern at 100K+ drawers.
 

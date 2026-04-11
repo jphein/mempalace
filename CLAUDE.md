@@ -20,7 +20,7 @@ JP's fork of [milla-jovovich/mempalace](https://github.com/milla-jovovich/mempal
 
 ```bash
 source venv/bin/activate
-python -m pytest tests/ -x -q           # run tests (648 expected)
+python -m pytest tests/ -x -q           # run tests (692 expected)
 mempalace status                         # check palace state
 mempalace search "query"                 # test search
 python -m mempalace.mcp_server           # run MCP server standalone
@@ -43,6 +43,11 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 11. **fix: precompact hook SESSION_ID sanitization** — applies same safe() regex as save hook (#589)
 12. **feat: chromadb >=1.5.4** — upgraded from 0.6.x pin, auto-migrates existing databases (#581)
 13. **feat: hooks auto-mine transcript** — both hooks now auto-mine JSONL transcript into palace (captures raw tool output), updated reason messages to request verbatim tool output, MP_PYTHON auto-detection
+14. **feat: hybrid search fallback** — keyword text-match via `where_document.$contains` when vector results are poor (best distance > 1.0), `_extract_keyword()` picks most distinctive token, MCP `keyword` param
+15. **fix: convo_miner wing assignment** — `_wing_from_transcript_path()` extracts project name from Claude Code transcript path instead of hardcoding `sessions`
+16. **fix: chromadb BLOB seq_id migration** — auto-repairs 0.6.x→1.5.x migration bug where `seq_id` stored as BLOB crashes the Rust compactor, runs before every `PersistentClient` init
+17. **perf: graph cache** — `build_graph()` cached module-level with 60s TTL, invalidated on writes via `invalidate_graph_cache()`
+18. **perf: L1 importance pre-filter** — `_fetch_drawers()` tries `importance >= 3` filter first, falls back to full scan only if < 15 results
 
 ## Upstream PRs
 
@@ -59,4 +64,4 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 
 ## Testing
 
-Always run `python -m pytest tests/ -x -q` after changes. 648 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).
+Always run `python -m pytest tests/ -x -q` after changes. 692 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).
