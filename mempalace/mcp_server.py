@@ -127,6 +127,9 @@ def _get_client():
         current_inode = 0
 
     if _client_cache is None or (current_inode and current_inode != _palace_db_inode):
+        from .palace import _fix_blob_seq_ids
+
+        _fix_blob_seq_ids(_config.palace_path)
         _client_cache = chromadb.PersistentClient(path=_config.palace_path)
         _collection_cache = None
         _metadata_cache = None
