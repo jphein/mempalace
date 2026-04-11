@@ -58,10 +58,7 @@ def build_graph(col=None, config=None):
     """
     global _graph_cache_nodes, _graph_cache_edges, _graph_cache_time
     now = time.time()
-    if (
-        _graph_cache_nodes is not None
-        and (now - _graph_cache_time) < _GRAPH_CACHE_TTL
-    ):
+    if _graph_cache_nodes is not None and (now - _graph_cache_time) < _GRAPH_CACHE_TTL:
         return _graph_cache_nodes, _graph_cache_edges
 
     if col is None:

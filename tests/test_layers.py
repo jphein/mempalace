@@ -162,7 +162,8 @@ def test_layer1_with_wing_filter():
     assert any(
         w == {"wing": "project_x"}  # fallback path
         or (isinstance(w, dict) and w.get("$and") and {"wing": "project_x"} in w["$and"])
-        for w in all_wheres if w
+        for w in all_wheres
+        if w
     )
 
 

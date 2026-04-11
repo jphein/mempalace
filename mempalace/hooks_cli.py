@@ -319,7 +319,7 @@ def _ingest_transcript(transcript_path: str):
                 stdout=log_f,
                 stderr=log_f,
             )
-        _log(f"Transcript ingest started: {path.name} → wing:{wing}")
+        _log(f"Transcript ingest started: {path.name} -> wing:{wing}")
     except OSError:
         pass
 

@@ -41,6 +41,7 @@ def _extract_keyword(query: str) -> str:
         return max(ids, key=len)
     return max(candidates, key=len)
 
+
 logger = logging.getLogger("mempalace_mcp")
 
 
