@@ -47,20 +47,23 @@ _RECENT_MSG_COUNT = 30  # how many recent user messages to summarize
 
 STOP_BLOCK_REASON = (
     "AUTO-SAVE checkpoint (MemPalace). Save this session's key content:\n"
-    "1. mempalace_diary_write — AAAK-compressed session summary\n"
-    "2. mempalace_add_drawer — verbatim quotes, decisions, code snippets\n"
+    "1. mempalace_diary_write — session summary (what was discussed, "
+    "key decisions, current state of work)\n"
+    "2. mempalace_add_drawer — verbatim quotes, decisions, code snippets "
+    "(place in appropriate wing and room)\n"
     "3. mempalace_kg_add — entity relationships (optional)\n"
-    "Do NOT write to Claude Code's native auto-memory (.md files). "
-    "Continue conversation after saving."
+    "For THIS save, use MemPalace MCP tools only (not auto-memory .md files). "
+    "Use verbatim quotes where possible. Continue conversation after saving."
 )
 
 PRECOMPACT_BLOCK_REASON = (
     "COMPACTION IMMINENT (MemPalace). Save ALL session content before context is lost:\n"
-    "1. mempalace_diary_write — thorough AAAK-compressed session summary\n"
-    "2. mempalace_add_drawer — ALL verbatim quotes, decisions, code, context\n"
+    "1. mempalace_diary_write — thorough session summary\n"
+    "2. mempalace_add_drawer — ALL verbatim quotes, decisions, code, context "
+    "(place each in appropriate wing and room)\n"
     "3. mempalace_kg_add — entity relationships (optional)\n"
-    "Be thorough \u2014 after compaction, detailed context will be lost. "
-    "Do NOT write to Claude Code's native auto-memory (.md files). "
+    "For THIS save, use MemPalace MCP tools only (not auto-memory .md files). "
+    "Be thorough — after compaction this is all that survives. "
     "Save everything to MemPalace, then allow compaction to proceed."
 )
 
