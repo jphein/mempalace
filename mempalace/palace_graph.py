@@ -21,7 +21,8 @@ from collections import defaultdict, Counter
 from .config import MempalaceConfig
 from .palace import get_collection as _get_palace_collection
 
-# Module-level graph cache — mirrors _metadata_cache pattern in mcp_server.py
+# Module-level graph cache with TTL and write-invalidation.
+# Warm cache serves build_graph() in O(1); invalidate_graph_cache() clears on writes.
 _graph_cache_nodes = None
 _graph_cache_edges = None
 _graph_cache_time = 0.0
@@ -61,6 +62,8 @@ def build_graph(col=None, config=None):
     """
     global _graph_cache_nodes, _graph_cache_edges, _graph_cache_time
     now = time.time()
+    # NOTE: warm cache ignores col/config args — intentional for the MCP server's
+    # single-palace use case. Callers switching collections must invalidate first.
     if _graph_cache_nodes is not None and (now - _graph_cache_time) < _GRAPH_CACHE_TTL:
         return _graph_cache_nodes, _graph_cache_edges
 
@@ -119,9 +122,12 @@ def build_graph(col=None, config=None):
             "dates": sorted(data["dates"])[-5:] if data["dates"] else [],
         }
 
-    _graph_cache_nodes = nodes
-    _graph_cache_edges = edges
-    _graph_cache_time = time.time()
+    # Only cache non-empty graphs so new data is picked up immediately
+    # when the palace is first populated.
+    if nodes:
+        _graph_cache_nodes = nodes
+        _graph_cache_edges = edges
+        _graph_cache_time = time.time()
 
     return nodes, edges
 

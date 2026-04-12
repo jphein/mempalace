@@ -119,7 +119,12 @@ class TestBuildGraph:
         assert len(nodes["busy"]["dates"]) <= 5
 
     def test_cache_returns_same_result(self):
-        """Second call within TTL returns cached nodes without re-scanning."""
+        """Second call within TTL returns cached nodes without re-scanning.
+
+        The cache intentionally ignores col/config args when warm — this is
+        correct for the MCP server's single-palace use case. Callers that
+        switch collections must call invalidate_graph_cache() first.
+        """
         col = _make_fake_collection(
             [{"room": "auth", "wing": "wing_code", "hall": "security", "date": "2026-01-01"}]
         )
