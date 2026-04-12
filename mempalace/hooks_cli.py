@@ -246,10 +246,12 @@ def _save_diary_direct(
     try:
         from .mcp_server import tool_diary_write
 
+        project_wing = _wing_from_transcript_path(transcript_path)
         result = tool_diary_write(
             agent_name="session-hook",
             entry=entry,
             topic="checkpoint",
+            wing=project_wing,
         )
         if result.get("success"):
             _log(f"Diary checkpoint saved: {result.get('entry_id', '?')}")

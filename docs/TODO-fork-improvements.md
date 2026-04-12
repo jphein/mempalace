@@ -154,26 +154,46 @@ Items ordered by implementation priority: quick wins first, then feature gaps, t
 
 ---
 
-## 6. KG entity resolution (1 day)
+## 6. KG auto-population from hooks (1 day)
 
-**Gap:** Entity ID is a naive slug (`alice_obrien`). No fuzzy matching, no alias table. Adding a KG triple with slightly different spelling creates a duplicate entity. The analysis calls this "fragility."
+**Gap:** The knowledge graph has 5 MCP tools and a SQLite backend, but nothing populates it automatically. Only 3 triples exist (from one manual session). The hooks already mine transcripts into drawers every 15 messages — they should also extract structured facts into the KG.
 
 **Files:**
-- Modify: `mempalace/knowledge_graph.py` — entity lookup + alias table
+- Modify: `mempalace/hooks_cli.py` — add KG extraction step after drawer ingest
+- New: `mempalace/kg_extractor.py` — extract entities + relationships from transcript chunks
+- Modify: `mempalace/knowledge_graph.py` — entity normalization (lowercase, strip punctuation, collapse whitespace) to prevent duplication
+- Test: `tests/test_kg_extractor.py`
+
+**Approach:**
+1. After `_ingest_transcript()` writes drawers, run a KG extraction pass over the same chunks
+2. Heuristic extraction (no LLM): detect `project → has_file → path`, `user → works_on → project` (from wing), `session → discussed → room` patterns
+3. Normalize entity IDs on write (lowercase, strip punctuation, collapse whitespace) — "Alice O'Brien" and "alice" should resolve to the same entity
+4. MCP tool: `mempalace_kg_merge(entity_a, entity_b)` — manual merge for cases heuristics miss
+5. Deduplicate: skip triples that already exist (same subject/predicate/object)
+
+**Why:** The KG infrastructure is built but starving for data. The hooks are the natural feed point — they already run on every session and have access to the transcript. Without auto-population, the KG will stay empty forever since the AI doesn't reliably follow the "call kg_add" protocol instruction.
+
+---
+
+## 7. KG entity resolution (half day)
+
+**Gap:** Entity ID is a naive slug (`alice_obrien`). No fuzzy matching, no alias table. Adding a KG triple with slightly different spelling creates a duplicate entity. The analysis calls this "fragility." Partially addressed by normalization in #6, but alias table adds manual override.
+
+**Files:**
+- Modify: `mempalace/knowledge_graph.py` — alias table + lookup
 - Test: `tests/test_knowledge_graph.py`
 
 **Approach:**
 1. New `entity_aliases` table: `(alias TEXT, canonical_id TEXT)`
 2. On `add_entity` / `add_triple`: check aliases before creating new entity
-3. Fuzzy match: normalize (lowercase, strip punctuation, collapse whitespace) then check Levenshtein distance < 2
-4. MCP tool: `mempalace_kg_merge(entity_a, entity_b)` — merge two entities that are the same person/thing
-5. On query: resolve through aliases transparently
+3. Fuzzy match: Levenshtein distance < 2 after normalization
+4. On query: resolve through aliases transparently
 
-**Why:** Anyone adding KG triples manually (via MCP) will hit this. "Alice O'Brien" vs "alice" vs "Alice" shouldn't be three entities.
+**Why:** Depends on #6 — once the KG is auto-populated, duplicates will accumulate fast without resolution.
 
 ---
 
-## 7. Input sanitization on writes (half day)
+## 8. Input sanitization on writes (half day)
 
 **Gap:** No content sanitization on `add_drawer`. Prompt injection surface — an adversarial memory could instruct the AI. The analysis flags this as a security concern.
 
@@ -199,7 +219,7 @@ Items 1-3 (hybrid search, graph cache, L1 optimization) are pure improvements wi
 
 Items 4-5 (decay, feedback) are opinionated — better as fork features first, upstreamed after proven.
 
-Items 6-7 (entity resolution, sanitization) could go either way.
+Items 6-8 (KG auto-population, entity resolution, sanitization) could go either way.
 
 ## Future: Karta-inspired features (after TODOs 0-7)
 
