@@ -74,18 +74,36 @@ All fork changes submitted as separate focused PRs targeting `develop`. First PR
 
 ## Two-Layer Memory Architecture
 
-Claude Code has two complementary memory layers — neither has automatic consolidation today:
+Claude Code has two complementary memory layers, used in tandem:
 
 - **Auto-memory** (`~/.claude/projects/*/memory/`) — lightweight preferences, context, feedback. Manual writes only. (Unreleased "Auto Dream" consolidation exists in source but is behind a disabled feature flag.)
 - **MemPalace** (`~/.mempalace/palace/`, 134K+ drawers) — verbatim conversations, tool output, code. Write-only archive, searchable via MCP. Completeness is the feature.
+
+Both systems coexist. Hook saves are scoped to MemPalace ("For THIS save, use MemPalace MCP tools only") — this is not a permanent ban on auto-memory.
+
+## Hook Save Architecture
+
+Two save modes, controlled by `hook_silent_save` in `~/.mempalace/config.json`:
+
+- **Silent mode** (default, `hook_silent_save: true`): Direct Python API call to `tool_diary_write()`. Plain text, no AI involved, deterministic — save marker advances only after confirmed write. Shows `"✦ N memories woven into the palace"` as terminal notification.
+- **Block mode** (legacy, `hook_silent_save: false`): Returns `{"decision": "block"}` asking the AI to call MCP tools. Non-deterministic — AI may ignore, summarize, or fail. Save marker advances before AI acts (data loss risk).
+
+Both modes also auto-mine the JSONL transcript into the palace (raw tool output capture).
+
+### AAAK and Save Paths
+
+AAAK (`mempalace/dialect.py`) is upstream's compressed symbolic summary format. It is a prompt convention in MCP tool descriptions, not enforced by code. `tool_diary_write()` accepts any string.
+
+- **Silent mode**: No AI reads tool descriptions. Diary entries are plain English. AAAK is irrelevant.
+- **Block mode**: AI sees AAAK instructions in `diary_write` tool description and may use the format.
 
 ## Integration
 
 - **Claude Code plugin**: installed at user scope via marketplace
 - **MCP server**: global user scope — available in all projects
-- **Stop hook**: fires every 15 messages, auto-mines transcript for tool output, blocks AI to save with verbatim tool output instructions
+- **Stop hook**: fires every 15 messages, saves diary entry + auto-mines transcript
 - **PreCompact hook**: emergency save before context compaction, auto-mines transcript, finds transcript by session_id fallback
 
 ## Testing
 
-Always run `python -m pytest tests/ -x -q` after changes. 701 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).
+Always run `python -m pytest tests/ -x -q` after changes. 704 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).

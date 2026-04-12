@@ -75,10 +75,15 @@ claude mcp add mempalace -- python -m mempalace.mcp_server
 
 ### Hooks
 
-The plugin includes auto-save hooks:
+The plugin includes auto-save hooks with two save modes (`hook_silent_save` in config):
 
-- **Stop hook** — Every 15 messages, auto-mines the JSONL transcript into the palace, then saves a diary entry with theme extraction. Shows `"✦ N memories woven into the palace"` as a terminal notification.
-- **PreCompact hook** — Fires before context compression. Emergency save of everything before context is lost.
+- **Silent mode** (default): Direct Python API save — plain text diary entry + transcript mining. Deterministic, no AI involved. Shows `"✦ N memories woven into the palace"` as a terminal notification.
+- **Block mode** (legacy): Asks the AI to call MemPalace MCP tools. Non-deterministic.
+
+| Hook | When It Fires | What Happens |
+|------|--------------|-------------|
+| **Stop hook** | Every 15 messages | Diary entry with theme extraction + transcript auto-mine |
+| **PreCompact hook** | Before context compression | Emergency save of everything before context is lost |
 
 Set `MEMPAL_DIR` to auto-mine a directory on each save trigger. Set `MEMPAL_PYTHON` to specify the Python interpreter (auto-detects repo venv if not set).
 
@@ -86,7 +91,7 @@ Set `MEMPAL_DIR` to auto-mine a directory on each save trigger. Set `MEMPAL_PYTH
 
 ```bash
 source venv/bin/activate
-python -m pytest tests/ -x -q           # 701 tests expected
+python -m pytest tests/ -x -q           # 704 tests expected
 mempalace status                         # palace health
 ruff check . && ruff format --check .    # lint + format
 ```

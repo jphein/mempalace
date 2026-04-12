@@ -30,11 +30,13 @@ Add this to your configuration file to enable automatic background saving:
 
 ### 3. What changed (v3.1.0+)
 
-Both hooks now have **two-layer capture**:
+Hooks now have **two save modes** (set `hook_silent_save` in `~/.mempalace/config.json`):
 
-1. **Auto-mine**: Before blocking the AI, the hook runs the normalizer on the JSONL transcript and upserts chunks directly into the palace. This captures raw tool output (Bash results, search findings, build errors) that the AI would otherwise summarize away.
+1. **Silent mode** (default, recommended): Saves a diary entry directly via Python API — plain text, no AI involved, deterministic. Shows a one-line terminal notification. Save marker advances only after confirmed write, so data loss is impossible.
 
-2. **Updated reason messages**: The block reason now explicitly tells the AI to save tool output verbatim — not just topics and decisions.
+2. **Block mode** (legacy): Blocks the AI and asks it to call MemPalace MCP tools. Non-deterministic — the AI may ignore the instruction or fail.
+
+Both modes also **auto-mine the JSONL transcript** into the palace, capturing raw tool output (Bash results, search findings, build errors) that the AI would otherwise summarize away.
 
 ### 4. Backfill past conversations (one-time)
 

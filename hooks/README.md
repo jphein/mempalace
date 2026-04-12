@@ -6,10 +6,39 @@ These hook scripts make MemPalace save automatically. No manual "save" commands 
 
 | Hook | When It Fires | What Happens |
 |------|--------------|-------------|
-| **Save Hook** | Every 15 human messages | Auto-mines transcript (tool output included), then blocks the AI to save topics/decisions/quotes |
-| **PreCompact Hook** | Right before context compaction | Auto-mines transcript, then emergency save — forces the AI to save EVERYTHING before losing context |
+| **Save Hook** | Every 15 human messages | Saves a diary entry with theme extraction, auto-mines transcript into the palace |
+| **PreCompact Hook** | Right before context compaction | Emergency save — diary entry + transcript mining before context is lost |
 
-**Two-layer capture:** Hooks auto-mine the JSONL transcript directly into the palace (capturing raw tool output — Bash results, search findings, build errors). They also block the AI with a reason message telling it to save verbatim tool output and key context. Belt and suspenders — tool output gets stored even if the AI summarizes instead of quoting.
+## Save Architecture
+
+Hooks have two **save modes**, controlled by `hook_silent_save` in `~/.mempalace/config.json`:
+
+| Mode | Config | How It Saves | AAAK? | Deterministic? |
+|------|--------|-------------|-------|----------------|
+| **Silent** (default) | `hook_silent_save: true` | Direct Python API call — `tool_diary_write()` with plain text, no AI involved | No — plain English | Yes — save always happens |
+| **Block** (legacy) | `hook_silent_save: false` | Blocks the AI, shows a reason message, asks AI to call MCP tools | Maybe — AI sees AAAK in MCP tool descriptions and may use it | No — AI may ignore, summarize, or fail |
+
+**Silent mode is recommended.** It calls `tool_diary_write()` directly via Python import — no MCP roundtrip, no blocking, no AI interpretation needed. The save marker only advances after a confirmed write, so data loss is impossible. A one-line terminal notification (`"✦ N memories woven into the palace — themes"`) confirms each save.
+
+**Block mode is the upstream default.** It returns `{"decision": "block", "reason": "..."}` asking the AI to call MemPalace MCP tools. This path is non-deterministic — the AI may ignore the instruction, summarize instead of quoting verbatim, or write to the wrong memory system. The save marker advances before the AI acts, so if the save fails, the checkpoint is silently lost.
+
+Both modes also **auto-mine the JSONL transcript** directly into the palace, capturing raw tool output (Bash results, search findings, build errors) that the AI would otherwise summarize away. This is belt-and-suspenders — tool output is stored regardless of which save mode is active.
+
+### AAAK and Save Paths
+
+AAAK is upstream's compressed symbolic summary format (`mempalace/dialect.py`). It is **not a code feature** — it's a prompt embedded in MCP tool descriptions that coaches the AI to write diary entries in a shorthand notation.
+
+- **Silent mode**: No AI reads the MCP tool descriptions. Diary entries are plain English. AAAK is irrelevant.
+- **Block mode**: The AI sees `diary_write`'s tool description ("write in AAAK format"). It may produce AAAK-formatted entries. The `tool_diary_write()` function accepts any string — it doesn't validate or enforce AAAK.
+
+### Tandem Memory Systems
+
+Claude Code has its own auto-memory system (`~/.claude/projects/*/memory/*.md`) alongside MemPalace. Both are useful:
+
+- **Auto-memory**: Lightweight preferences, context, feedback
+- **MemPalace**: Verbatim conversations, tool output, code — deep searchable history
+
+The hook block reasons say "For THIS save, use MemPalace MCP tools only" — scoped to the hook save event, not a permanent ban on auto-memory. Both systems are used in tandem during normal conversation.
 
 ## Install — Claude Code
 
@@ -96,18 +125,20 @@ User sends message → AI responds → Claude Code fires Stop hook
                                             ↓
                                     Auto-mine transcript → palace (tool output captured)
                                             ↓
-                                    {"decision": "block", "reason": "save tool output verbatim..."}
-                                            ↓
-                                    AI saves to palace (topics, decisions, quotes)
-                                            ↓
-                                    AI tries to stop again
-                                            ↓
-                                    stop_hook_active = true
-                                            ↓
-                                    Hook sees flag → echo "{}" (let it through)
+                              ┌─── silent mode (default) ──────────────────────────┐
+                              │     _save_diary_direct() — plain text diary entry  │
+                              │     Marker advances AFTER confirmed write          │
+                              │     {"systemMessage": "✦ N memories woven..."}     │
+                              └────────────────────────────────────────────────────┘
+                              ┌─── block mode (legacy) ────────────────────────────┐
+                              │     {"decision": "block", "reason": "save..."}     │
+                              │     Marker advances BEFORE AI acts (data loss risk)│
+                              │     AI saves → tries to stop → stop_hook_active    │
+                              │     → hook lets it through                         │
+                              └────────────────────────────────────────────────────┘
 ```
 
-The `stop_hook_active` flag prevents infinite loops: block once → AI saves → tries to stop → flag is true → we let it through.
+In silent mode, no AI interaction is needed — the hook saves and returns immediately. In block mode, the `stop_hook_active` flag prevents infinite loops: block once → AI saves → tries to stop → flag is true → we let it through.
 
 ### PreCompact Hook
 
@@ -118,14 +149,14 @@ Context window getting full → Claude Code fires PreCompact
                                         ↓
                                 Auto-mine transcript → palace (tool output captured)
                                         ↓
-                                {"decision": "block", "reason": "save tool output verbatim..."}
-                                        ↓
-                                AI saves everything
+                              ┌─── silent mode: diary entry + systemMessage
+                              │
+                              └─── block mode: {"decision": "block", "reason": "save everything..."}
                                         ↓
                                 Compaction proceeds
 ```
 
-No counting needed — compaction always warrants a save. The auto-mine captures raw tool output before the AI gets a chance to summarize it away.
+No counting needed — compaction always warrants a save.
 
 ## Debugging
 
