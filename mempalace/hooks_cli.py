@@ -43,6 +43,7 @@ def _mempalace_python() -> str:
         return str(project_venv)
     return sys.executable
 
+
 _RECENT_MSG_COUNT = 30  # how many recent user messages to summarize
 
 STOP_BLOCK_REASON = (
@@ -215,6 +216,7 @@ def _extract_themes(messages: list[str], max_themes: int = 3) -> list[str]:
     Note: stopword list is English-only; non-English corpora will produce noisy themes.
     """
     from collections import Counter
+
     words: Counter[str] = Counter()
     for msg in messages:
         for word in msg.lower().split():
@@ -226,7 +228,9 @@ def _extract_themes(messages: list[str], max_themes: int = 3) -> list[str]:
 
 
 def _save_diary_direct(
-    transcript_path: str, session_id: str, toast: bool = False,
+    transcript_path: str,
+    session_id: str,
+    toast: bool = False,
 ) -> dict:
     """Write a diary checkpoint by calling the tool function directly (no MCP roundtrip).
 
@@ -249,6 +253,7 @@ def _save_diary_direct(
 
     try:
         from .mcp_server import tool_diary_write
+
         result = tool_diary_write(
             agent_name="session-hook",
             entry=entry,
@@ -294,9 +299,15 @@ def _ingest_transcript(transcript_path: str):
         with open(log_path, "a") as log_f:
             subprocess.Popen(
                 [
-                    _mempalace_python(), "-m", "mempalace", "mine",
-                    str(path.parent), "--mode", "convos",
-                    "--wing", "sessions",
+                    _mempalace_python(),
+                    "-m",
+                    "mempalace",
+                    "mine",
+                    str(path.parent),
+                    "--mode",
+                    "convos",
+                    "--wing",
+                    "sessions",
                 ],
                 stdout=log_f,
                 stderr=log_f,
@@ -355,6 +366,7 @@ def hook_stop(data: dict, harness: str):
 
         # Read hook settings from config
         from .config import MempalaceConfig
+
         try:
             config = MempalaceConfig()
             silent = config.hook_silent_save
@@ -382,9 +394,11 @@ def hook_stop(data: dict, harness: str):
                     tag = " \u2014 " + ", ".join(themes)
                 else:
                     tag = ""
-                _output({
-                    "systemMessage": f"\u2726 {count} memories woven into the palace{tag}",
-                })
+                _output(
+                    {
+                        "systemMessage": f"\u2726 {count} memories woven into the palace{tag}",
+                    }
+                )
             else:
                 _output({})
         else:
