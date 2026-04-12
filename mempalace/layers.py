@@ -81,21 +81,56 @@ class Layer1:
 
     MAX_DRAWERS = 15  # at most 15 moments in wake-up
     MAX_CHARS = 3200  # hard cap on total L1 text (~800 tokens)
+    MAX_SCAN = 2000  # don't scan more than this for L1 generation
 
     def __init__(self, palace_path: str = None, wing: str = None):
         cfg = MempalaceConfig()
         self.palace_path = palace_path or cfg.palace_path
         self.wing = wing
 
-    def generate(self) -> str:
-        """Pull top drawers from ChromaDB and format as compact L1 text."""
-        try:
-            col = _get_collection(self.palace_path, create=False)
-        except Exception:
-            return "## L1 — No palace found. Run: mempalace mine <dir>"
+    def _fetch_drawers(self, col) -> tuple:
+        """Fetch drawers for L1 generation.
 
-        # Fetch all drawers in batches to avoid SQLite variable limit (~999)
+        Tries a pre-filtered query for high-importance drawers first (fast path).
+        Falls back to a full scan only if too few results come back.
+        """
         _BATCH = 500
+
+        # Fast path: only fetch drawers with importance >= 3
+        importance_filter = {"importance": {"$gte": 3}}
+        if self.wing:
+            where = {"$and": [{"wing": self.wing}, importance_filter]}
+        else:
+            where = importance_filter
+
+        docs, metas = [], []
+        offset = 0
+        try:
+            while True:
+                kwargs = {
+                    "include": ["documents", "metadatas"],
+                    "limit": _BATCH,
+                    "offset": offset,
+                    "where": where,
+                }
+                batch = col.get(**kwargs)
+                batch_docs = batch.get("documents", [])
+                batch_metas = batch.get("metadatas", [])
+                if not batch_docs:
+                    break
+                docs.extend(batch_docs)
+                metas.extend(batch_metas)
+                offset += len(batch_docs)
+                if len(batch_docs) < _BATCH or len(docs) >= self.MAX_SCAN:
+                    break
+        except Exception:
+            docs, metas = [], []
+
+        # If enough high-importance drawers, use them
+        if len(docs) >= self.MAX_DRAWERS:
+            return docs, metas
+
+        # Slow fallback: scan without importance filter
         docs, metas = [], []
         offset = 0
         while True:
@@ -113,8 +148,18 @@ class Layer1:
             docs.extend(batch_docs)
             metas.extend(batch_metas)
             offset += len(batch_docs)
-            if len(batch_docs) < _BATCH:
+            if len(batch_docs) < _BATCH or len(docs) >= self.MAX_SCAN:
                 break
+        return docs, metas
+
+    def generate(self) -> str:
+        """Pull top drawers from ChromaDB and format as compact L1 text."""
+        try:
+            col = _get_collection(self.palace_path, create=False)
+        except Exception:
+            return "## L1 — No palace found. Run: mempalace mine <dir>"
+
+        docs, metas = self._fetch_drawers(col)
 
         if not docs:
             return "## L1 — No memories yet."
