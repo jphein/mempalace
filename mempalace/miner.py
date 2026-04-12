@@ -17,8 +17,6 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
-import chromadb
-
 from .palace import SKIP_DIRS, get_collection, file_already_mined, bulk_check_mined
 
 logger = logging.getLogger(__name__)
