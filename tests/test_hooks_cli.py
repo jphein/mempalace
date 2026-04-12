@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -167,11 +167,17 @@ def test_extract_recent_messages_missing_file():
 def _capture_hook_output(hook_fn, data, harness="claude-code", state_dir=None):
     """Run a hook and capture its JSON stdout output."""
     import io
+    from unittest.mock import PropertyMock
 
     buf = io.StringIO()
     patches = [patch("mempalace.hooks_cli._output", side_effect=lambda d: buf.write(json.dumps(d)))]
     if state_dir:
         patches.append(patch("mempalace.hooks_cli.STATE_DIR", state_dir))
+    # Mock MempalaceConfig so tests don't depend on user's ~/.mempalace/config.json
+    mock_config = MagicMock()
+    type(mock_config).hook_silent_save = PropertyMock(return_value=True)
+    type(mock_config).hook_desktop_toast = PropertyMock(return_value=False)
+    patches.append(patch("mempalace.config.MempalaceConfig", return_value=mock_config))
     with contextlib.ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)
