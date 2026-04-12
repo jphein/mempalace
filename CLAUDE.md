@@ -75,6 +75,7 @@ All fork changes submitted as separate focused PRs targeting `develop`. First PR
 | #682 | **merged** | --yes flag for init (#534) |
 | #683 | **merged** | Unicode sanitize_name (#637) |
 | #684 | **merged** | VAR_KEYWORD kwargs check (#572) |
+| #738 | open | Docs: update MCP tools reference for #667 additions |
 
 ## Two-Layer Memory Architecture
 
