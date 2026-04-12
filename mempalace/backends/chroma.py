@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def _fix_blob_seq_ids(palace_path: str):
-    """Fix ChromaDB 0.6.x → 1.5.x migration bug: BLOB seq_ids → INTEGER.
+    """Fix ChromaDB 0.6.x -> 1.5.x migration bug: BLOB seq_ids -> INTEGER.
 
     ChromaDB 0.6.x stored seq_id as big-endian 8-byte BLOBs. ChromaDB 1.5.x
     expects INTEGER. The auto-migration doesn't convert existing rows, causing
@@ -25,23 +25,22 @@ def _fix_blob_seq_ids(palace_path: str):
     if not os.path.isfile(db_path):
         return
     try:
-        conn = sqlite3.connect(db_path)
-        for table in ("embeddings", "max_seq_id"):
-            try:
-                rows = conn.execute(
-                    f"SELECT rowid, seq_id FROM {table} WHERE typeof(seq_id) = 'blob'"
-                ).fetchall()
-            except sqlite3.OperationalError:
-                continue
-            if not rows:
-                continue
-            updates = [(int.from_bytes(blob, byteorder="big"), rowid) for rowid, blob in rows]
-            conn.executemany(f"UPDATE {table} SET seq_id = ? WHERE rowid = ?", updates)
-            logger.info("Fixed %d BLOB seq_ids in %s", len(updates), table)
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.warning("Could not fix BLOB seq_ids: %s", e)
+        with sqlite3.connect(db_path) as conn:
+            for table in ("embeddings", "max_seq_id"):
+                try:
+                    rows = conn.execute(
+                        f"SELECT rowid, seq_id FROM {table} WHERE typeof(seq_id) = 'blob'"
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    continue
+                if not rows:
+                    continue
+                updates = [(int.from_bytes(blob, byteorder="big"), rowid) for rowid, blob in rows]
+                conn.executemany(f"UPDATE {table} SET seq_id = ? WHERE rowid = ?", updates)
+                logger.info("Fixed %d BLOB seq_ids in %s", len(updates), table)
+            conn.commit()
+    except Exception:
+        logger.exception("Could not fix BLOB seq_ids in %s", db_path)
 
 
 class ChromaCollection(BaseCollection):
