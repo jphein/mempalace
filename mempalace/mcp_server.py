@@ -15,6 +15,9 @@ Tools (read):
 Tools (write):
   mempalace_add_drawer      — file verbatim content into a wing/room
   mempalace_delete_drawer   — remove a drawer by ID
+
+Tools (maintenance):
+  mempalace_reconnect       — force cache invalidation and reconnect after external writes
 """
 
 import argparse
@@ -65,6 +68,8 @@ else:
 
 
 _collection_cache = None
+_palace_db_inode = 0  # inode of chroma.sqlite3 at cache time
+_palace_db_mtime = 0.0  # mtime of chroma.sqlite3 at cache time
 
 
 # ==================== WRITE-AHEAD LOG ====================
@@ -101,8 +106,33 @@ def _wal_log(operation: str, params: dict, result: dict = None):
 
 
 def _get_collection(create=False):
-    """Return the configured collection, caching the wrapper between calls."""
-    global _collection_cache
+    """Return the configured collection, caching the wrapper between calls.
+
+    Detects palace rebuilds (repair/nuke/purge) by checking the inode of
+    chroma.sqlite3.  A full rebuild replaces the file, changing the inode.
+    Also detects external writes (scripts, CLI) via mtime changes — the
+    inode check alone misses in-place modifications that invalidate the
+    in-memory HNSW index.
+
+    Note: FAT/exFAT may return 0 for st_ino — the ``current_inode != 0``
+    guard skips reconnect detection on those filesystems (safe fallback).
+    """
+    global _collection_cache, _palace_db_inode, _palace_db_mtime
+    db_path = os.path.join(_config.palace_path, "chroma.sqlite3")
+    try:
+        st = os.stat(db_path)
+        current_inode = st.st_ino
+        current_mtime = st.st_mtime
+    except OSError:
+        current_inode = 0
+        current_mtime = 0.0
+
+    inode_changed = current_inode and current_inode != _palace_db_inode
+    mtime_changed = current_mtime and abs(current_mtime - _palace_db_mtime) > 0.01
+
+    if inode_changed or mtime_changed:
+        _collection_cache = None
+
     try:
         if create or _collection_cache is None:
             _collection_cache = _get_collection_from_palace(
@@ -110,6 +140,8 @@ def _get_collection(create=False):
                 collection_name=_config.collection_name,
                 create=create,
             )
+            _palace_db_inode = current_inode
+            _palace_db_mtime = current_mtime
         return _collection_cache
     except Exception:
         return None
@@ -650,6 +682,26 @@ def tool_diary_read(agent_name: str, last_n: int = 10):
         return {"error": str(e)}
 
 
+# ==================== SETTINGS TOOLS ====================
+
+
+def tool_reconnect():
+    """Force the MCP server to drop the cached ChromaDB collection and reconnect.
+
+    Use after external scripts or CLI commands modify the palace database
+    directly, which can leave the in-memory HNSW index stale.
+    """
+    global _collection_cache, _palace_db_inode, _palace_db_mtime
+    _collection_cache = None
+    _palace_db_inode = 0
+    _palace_db_mtime = 0.0
+    try:
+        col = _get_collection()
+        count = col.count() if col else 0
+        return {"success": True, "message": "Reconnected to palace", "drawers": count}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
 # ==================== MCP PROTOCOL ====================
 
 TOOLS = {
@@ -906,6 +958,17 @@ TOOLS = {
             "required": ["agent_name"],
         },
         "handler": tool_diary_read,
+    },
+    "mempalace_reconnect": {
+        "description": (
+            "Force reconnect to the palace database. Use after external scripts or CLI commands"
+            " modified the palace directly, which can leave the in-memory HNSW index stale."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+        "handler": tool_reconnect,
     },
 }
 
