@@ -22,7 +22,7 @@ This fork runs in production on my workstation with 134K+ drawers across 60+ roo
 
 ## What's Different From Upstream
 
-21 fork changes submitted as [upstream PRs](#upstream-prs) — first one merged! The highlights:
+22 fork changes submitted as [upstream PRs](#upstream-prs) — 5 merged so far. The highlights:
 
 ### Reliability
 - **Stale HNSW detection** — MCP server detects external writes via mtime, auto-reconnects. Manual `mempalace_reconnect` tool for cache invalidation.
@@ -91,7 +91,7 @@ Set `MEMPAL_DIR` to auto-mine a directory on each save trigger. Set `MEMPAL_PYTH
 
 ```bash
 source venv/bin/activate
-python -m pytest tests/ -x -q           # 704 tests expected
+python -m pytest tests/ -x -q           # 715 tests expected
 mempalace status                         # palace health
 ruff check . && ruff format --check .    # lint + format
 ```
@@ -102,7 +102,7 @@ All fork changes submitted as separate focused PRs to [milla-jovovich/mempalace]
 
 | PR | Type | Description |
 |----|------|-------------|
-| [#626](https://github.com/milla-jovovich/mempalace/pull/626) | fix | Standalone bug fixes |
+| [#626](https://github.com/milla-jovovich/mempalace/pull/626) | fix | ~~Standalone bug fixes~~ — closed, split into #681-684 |
 | [#629](https://github.com/milla-jovovich/mempalace/pull/629) | perf | Batch writes, concurrent mining |
 | [#632](https://github.com/milla-jovovich/mempalace/pull/632) | feat | Repair, purge, --version |
 | [#633](https://github.com/milla-jovovich/mempalace/pull/633) | feat | ~~Hook capture~~ — closed, resubmitted as #673 |
@@ -112,8 +112,12 @@ All fork changes submitted as separate focused PRs to [milla-jovovich/mempalace]
 | [#661](https://github.com/milla-jovovich/mempalace/pull/661) | perf | Graph cache with write-invalidation |
 | [#662](https://github.com/milla-jovovich/mempalace/pull/662) | feat | Hybrid search fallback |
 | [#663](https://github.com/milla-jovovich/mempalace/pull/663) | fix | Stale HNSW mtime detection |
-| [#664](https://github.com/milla-jovovich/mempalace/pull/664) | fix | BLOB seq_id migration repair |
+| [#664](https://github.com/milla-jovovich/mempalace/pull/664) | fix | BLOB seq_id migration repair — **merged** |
 | [#673](https://github.com/milla-jovovich/mempalace/pull/673) | feat | Deterministic hook saves — zero data loss via Python API |
+| [#681](https://github.com/milla-jovovich/mempalace/pull/681) | fix | Unicode checkmark → ASCII (#535) |
+| [#682](https://github.com/milla-jovovich/mempalace/pull/682) | fix | --yes flag for init (#534) — **merged** |
+| [#683](https://github.com/milla-jovovich/mempalace/pull/683) | fix | Unicode sanitize_name (#637) — **merged** |
+| [#684](https://github.com/milla-jovovich/mempalace/pull/684) | fix | VAR_KEYWORD kwargs check (#572) — **merged** |
 
 ## License
 

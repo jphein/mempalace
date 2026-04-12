@@ -20,7 +20,7 @@ JP's fork of [milla-jovovich/mempalace](https://github.com/milla-jovovich/mempal
 
 ```bash
 source venv/bin/activate
-python -m pytest tests/ -x -q           # run tests (701 expected)
+python -m pytest tests/ -x -q           # run tests (715 expected)
 mempalace status                         # check palace state
 mempalace search "query"                 # test search
 python -m mempalace.mcp_server           # run MCP server standalone
@@ -55,7 +55,7 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 
 ## Upstream PRs
 
-All fork changes submitted as separate focused PRs targeting `develop`. First PR merged 2026-04-12:
+All fork changes submitted as separate focused PRs targeting `develop`. First PRs merged 2026-04-12 (#664, #682, #683, #684):
 
 | PR | Status | Description |
 |----|--------|-------------|
@@ -72,9 +72,9 @@ All fork changes submitted as separate focused PRs targeting `develop`. First PR
 | #664 | **merged** | BLOB seq_id migration repair |
 | #673 | open | Deterministic hook saves (replaces #633) |
 | #681 | open | Unicode checkmark → ASCII (#535) |
-| #682 | open | --yes flag for init (#534) |
-| #683 | open | Unicode sanitize_name (#637) |
-| #684 | open | VAR_KEYWORD kwargs check (#572) |
+| #682 | **merged** | --yes flag for init (#534) |
+| #683 | **merged** | Unicode sanitize_name (#637) |
+| #684 | **merged** | VAR_KEYWORD kwargs check (#572) |
 
 ## Two-Layer Memory Architecture
 
@@ -110,4 +110,4 @@ AAAK (`mempalace/dialect.py`) is upstream's compressed symbolic summary format. 
 
 ## Testing
 
-Always run `python -m pytest tests/ -x -q` after changes. 704 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).
+Always run `python -m pytest tests/ -x -q` after changes. 715 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).
