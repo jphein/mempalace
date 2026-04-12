@@ -296,7 +296,12 @@ def tool_get_taxonomy():
 
 
 def tool_search(
-    query: str, limit: int = 5, wing: str = None, room: str = None, context: str = None
+    query: str,
+    limit: int = 5,
+    wing: str = None,
+    room: str = None,
+    context: str = None,
+    keyword: str = None,
 ):
     # Mitigate system prompt contamination (Issue #333)
     sanitized = sanitize_query(query)
@@ -306,6 +311,7 @@ def tool_search(
         wing=wing,
         room=room,
         n_results=limit,
+        keyword=keyword,
     )
     # Attach sanitizer metadata for transparency
     if sanitized["was_sanitized"]:
@@ -814,6 +820,10 @@ TOOLS = {
                 "context": {
                     "type": "string",
                     "description": "Background context for the search (optional). This is NOT used for embedding — only for future re-ranking. Put conversation history or system prompt content here, NOT in query.",
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": "Explicit keyword for text-match fallback. Use for exact terms (error codes, config keys, identifiers) that vector search may miss. Auto-extracted from query if omitted and vector results are poor.",
                 },
             },
             "required": ["query"],
