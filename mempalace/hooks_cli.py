@@ -169,21 +169,27 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
             for line in f:
                 try:
                     entry = json.loads(line)
-                    msg = entry.get("message", {})
-                    if not isinstance(msg, dict) or msg.get("role") != "user":
-                        continue
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        content = " ".join(
-                            b.get("text", "") for b in content if isinstance(b, dict)
-                        )
-                    if not isinstance(content, str) or not content.strip():
-                        continue
-                    if "<command-message>" in content or "<system-reminder>" in content:
-                        continue
-                    # Truncate long messages
-                    text = content.strip()[:200]
-                    messages.append(text)
+                    # Claude Code format
+                    msg = entry.get("message") or entry.get("event_message") or {}
+                    if isinstance(msg, dict) and msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        if isinstance(content, list):
+                            content = " ".join(
+                                b.get("text", "") for b in content if isinstance(b, dict)
+                            )
+                        if not isinstance(content, str) or not content.strip():
+                            continue
+                        if "<command-message>" in content or "<system-reminder>" in content:
+                            continue
+                        messages.append(content.strip()[:200])
+                    # Codex CLI format
+                    elif entry.get("type") == "event_msg":
+                        payload = entry.get("payload", {})
+                        if isinstance(payload, dict) and payload.get("type") == "user_message":
+                            text = payload.get("message", "")
+                            if isinstance(text, str) and text.strip():
+                                if "<command-message>" not in text:
+                                    messages.append(text.strip()[:200])
                 except (json.JSONDecodeError, AttributeError):
                     pass
     except OSError:
@@ -193,8 +199,8 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
 
 _THEME_STOPWORDS = frozenset(
     "the a an and or but in on at to for of is it i me my you your we our "
-    "this that with from by was were be been are not no yes can do did don't "
-    "will would should could have has had let's let just also like so if then "
+    "this that with from by was were be been are not no yes can do did dont "
+    "will would should could have has had lets let just also like so if then "
     "ok okay sure yeah hey hi here there what when where how why which some "
     "all any each every about into out up down over after before between "
     "get got make made need want use used using check look see run try "
@@ -222,7 +228,7 @@ def _extract_themes(messages: list[str], max_themes: int = 3) -> list[str]:
 def _save_diary_direct(
     transcript_path: str, session_id: str, toast: bool = False,
 ) -> dict:
-    """Write a diary checkpoint directly via Python API (no MCP calls).
+    """Write a diary checkpoint by calling the tool function directly (no MCP roundtrip).
 
     Returns {"count": N, "themes": [...]} on success, {"count": 0} on failure.
     """
