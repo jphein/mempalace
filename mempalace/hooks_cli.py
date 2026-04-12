@@ -202,6 +202,19 @@ def _parse_harness_input(data: dict, harness: str) -> dict:
     }
 
 
+def _wing_from_transcript_path(transcript_path: str) -> str:
+    """Derive a project wing name from a Claude Code transcript path.
+
+    Claude Code stores transcripts at:
+        ~/.claude/projects/-home-<user>-Projects-<project>/session.jsonl
+    We extract <project> as the wing name.  Falls back to "sessions".
+    """
+    match = re.search(r"-Projects-([^/]+?)(?:/|$)", transcript_path)
+    if match:
+        return match.group(1).lower().replace(" ", "_")
+    return "sessions"
+
+
 def hook_stop(data: dict, harness: str):
     """Stop hook: block every N messages for auto-save."""
     parsed = _parse_harness_input(data, harness)
@@ -243,7 +256,9 @@ def hook_stop(data: dict, harness: str):
         # Optional: auto-ingest if MEMPAL_DIR is set
         _maybe_auto_ingest(transcript_path)
 
-        _output({"decision": "block", "reason": STOP_BLOCK_REASON})
+        project_wing = _wing_from_transcript_path(transcript_path)
+        reason = STOP_BLOCK_REASON + f" Write diary entry to wing={project_wing}."
+        _output({"decision": "block", "reason": reason})
     else:
         _output({})
 

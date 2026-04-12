@@ -171,7 +171,7 @@ def test_stop_hook_blocks_at_interval(tmp_path):
         state_dir=tmp_path,
     )
     assert result["decision"] == "block"
-    assert result["reason"] == STOP_BLOCK_REASON
+    assert result["reason"].startswith(STOP_BLOCK_REASON)
 
 
 def test_stop_hook_tracks_save_point(tmp_path):
