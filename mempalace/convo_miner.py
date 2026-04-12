@@ -356,7 +356,7 @@ def mine_convos(
                     raise
 
         total_drawers += drawers_added
-        print(f"  ✓ [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers_added}")
+        print(f"  + [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers_added}")
 
     print(f"\n{'=' * 55}")
     print("  Done.")
