@@ -20,7 +20,7 @@ JP's fork of [milla-jovovich/mempalace](https://github.com/milla-jovovich/mempal
 
 ```bash
 source venv/bin/activate
-python -m pytest tests/ -x -q           # run tests (692 expected)
+python -m pytest tests/ -x -q           # run tests (701 expected)
 mempalace status                         # check palace state
 mempalace search "query"                 # test search
 python -m mempalace.mcp_server           # run MCP server standalone
@@ -35,7 +35,7 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 3. **fix: MCP server** — search limit capped [1,100], status/taxonomy tools paginated past 10K, duplicate cache decls removed
 4. **perf: batch ChromaDB writes** — one upsert per file instead of per chunk in both miners
 5. **fix: entity detector STOPWORDS** — 73 technical terms added (Handler, Node, Service, etc.)
-6. **feat: similarity threshold** — `max_distance` parameter in search (renamed from `min_similarity`), default 1.5 L2 distance in MCP
+6. **feat: similarity threshold** — `max_distance` parameter in search (renamed from `min_similarity`), default 1.5 cosine distance in MCP
 7. **feat: hooks_cli** — stop hook saves directly via Python API with systemMessage notification, precompact blocks for AI-driven save, auto-ingest transcripts
 8. **feat: --version flag** — CLI supports `mempalace --version` (from upstream PR #559 pattern)
 9. **feat: tool output mining** — normalize.py captures tool_use/tool_result blocks from Claude Code JSONL with per-tool formatting strategies (Bash head+tail, Read/Edit/Write path-only, Grep/Glob capped)
@@ -51,19 +51,32 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 19. **fix: MCP stale HNSW index** — `_get_client()` detects external writes via mtime (not just inode), new `mempalace_reconnect` MCP tool for manual cache invalidation
 20. **fix: diary wing assignment** — `tool_diary_write()` accepts optional `wing` param, stop hook derives project wing from transcript path instead of hardcoding `wing_session-hook`
 21. **merge: upstream/develop** — backend seam (`backends/chroma.py`), expanded room detector, fixed `_fix_blob_seq_ids` import path after upstream refactor
+22. **merge: upstream #647 + #667** — security hardening (input validation, WAL hardening, arg whitelisting), plus bensig's 5 fixes from #667 (similarity→distance conversion, structured error reporting, inode cache fix, pagination guard, conditional KG init)
 
 ## Upstream PRs
 
-- milla-jovovich/mempalace#483 — mtime dedup fix
-- milla-jovovich/mempalace#484 — search limit + pagination + cache fix
-- milla-jovovich/mempalace#562 — tool output mining, bug fixes, chromadb upgrade (18 upstream issues addressed)
+All fork changes submitted as separate focused PRs targeting `develop`. First PR merged 2026-04-12:
+
+| PR | Status | Description |
+|----|--------|-------------|
+| #626 | open | Standalone bug fixes |
+| #629 | open | Batch writes, concurrent mining |
+| #632 | open | Repair, purge, --version |
+| #633 | open | Hook capture, auto-mine transcripts |
+| #635 | **merged** via #667 | New MCP tools, export |
+| #659 | open | Diary wing parameter |
+| #660 | open | L1 importance pre-filter |
+| #661 | open | Graph cache with write-invalidation |
+| #662 | open | Hybrid search fallback |
+| #663 | open | Stale HNSW mtime detection |
+| #664 | open | BLOB seq_id migration repair |
 
 ## Two-Layer Memory Architecture
 
 Claude Code has two complementary memory layers — neither has automatic consolidation today:
 
 - **Auto-memory** (`~/.claude/projects/*/memory/`) — lightweight preferences, context, feedback. Manual writes only. (Unreleased "Auto Dream" consolidation exists in source but is behind a disabled feature flag.)
-- **MemPalace** (`~/.mempalace/palace/`, 132K+ drawers) — verbatim conversations, tool output, code. Write-only archive, searchable via MCP. Completeness is the feature.
+- **MemPalace** (`~/.mempalace/palace/`, 134K+ drawers) — verbatim conversations, tool output, code. Write-only archive, searchable via MCP. Completeness is the feature.
 
 ## Integration
 

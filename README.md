@@ -22,7 +22,7 @@ This fork runs in production on my workstation with 134K+ drawers across 60+ roo
 
 ## What's Different From Upstream
 
-21 fork changes, all submitted as [upstream PRs](#upstream-prs). The highlights:
+21 fork changes submitted as [upstream PRs](#upstream-prs) — first one merged! The highlights:
 
 ### Reliability
 - **Stale HNSW detection** — MCP server detects external writes via mtime, auto-reconnects. Manual `mempalace_reconnect` tool for cache invalidation.
@@ -39,13 +39,13 @@ This fork runs in production on my workstation with 134K+ drawers across 60+ roo
 - **Tool output mining** — `normalize.py` captures tool_use/tool_result blocks from Claude Code JSONL with per-tool formatting (Bash head+tail, Read/Edit/Write path-only, Grep/Glob capped).
 - **Hook system** — Stop hook saves directly via Python API with single-line `systemMessage` notification. Auto-mines JSONL transcripts. PreCompact hook for emergency save before context compression.
 - **Diary wing routing** — `diary_write`/`diary_read` accept optional `wing` param. Stop hook derives project wing from transcript path.
-- **New MCP tools** — `get_drawer`, `list_drawers`, `update_drawer`, `hook_settings`, `memories_filed_away`, `reconnect`. Palace export to markdown/JSON.
+- **New MCP tools** — `get_drawer`, `list_drawers`, `update_drawer`, `hook_settings`, `memories_filed_away`, `reconnect`. Palace export to markdown/JSON. *(Merged upstream via [#667](https://github.com/milla-jovovich/mempalace/pull/667))*
 - **Entity detector** — 73 technical STOPWORDS added (Handler, Node, Service, etc.) to reduce false positives.
 
 ### Infrastructure
 - **chromadb >= 1.5.4** — Upgraded from 0.6.x pin with auto-migration support.
 - **CLI** — `mempalace --version`, repair nuke-rebuild, purge command.
-- **Search** — `max_distance` parameter (L2 distance threshold), default 1.5 in MCP.
+- **Search** — `max_distance` parameter (cosine distance threshold), default 1.5 in MCP.
 
 ## Setup
 
@@ -101,7 +101,7 @@ All fork changes submitted as separate focused PRs to [milla-jovovich/mempalace]
 | [#629](https://github.com/milla-jovovich/mempalace/pull/629) | perf | Batch writes, concurrent mining |
 | [#632](https://github.com/milla-jovovich/mempalace/pull/632) | feat | Repair, purge, --version |
 | [#633](https://github.com/milla-jovovich/mempalace/pull/633) | feat | Hook capture, auto-mine transcripts |
-| [#635](https://github.com/milla-jovovich/mempalace/pull/635) | feat | New MCP tools, export |
+| [#635](https://github.com/milla-jovovich/mempalace/pull/635) | feat | New MCP tools, export — **merged** via [#667](https://github.com/milla-jovovich/mempalace/pull/667) |
 | [#659](https://github.com/milla-jovovich/mempalace/pull/659) | fix | Diary wing parameter |
 | [#660](https://github.com/milla-jovovich/mempalace/pull/660) | perf | L1 importance pre-filter |
 | [#661](https://github.com/milla-jovovich/mempalace/pull/661) | perf | Graph cache with write-invalidation |
