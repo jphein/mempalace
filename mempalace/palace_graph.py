@@ -15,10 +15,25 @@ Enables queries like:
 No external graph DB needed — built from ChromaDB metadata.
 """
 
+import time
 from collections import defaultdict, Counter
 
 from .config import MempalaceConfig
 from .palace import get_collection as _get_palace_collection
+
+# Module-level graph cache — mirrors _metadata_cache pattern in mcp_server.py
+_graph_cache_nodes = None
+_graph_cache_edges = None
+_graph_cache_time = 0.0
+_GRAPH_CACHE_TTL = 60.0  # seconds — graph changes less often than metadata
+
+
+def invalidate_graph_cache():
+    """Clear the graph cache. Called from mcp_server.py on writes."""
+    global _graph_cache_nodes, _graph_cache_edges, _graph_cache_time
+    _graph_cache_nodes = None
+    _graph_cache_edges = None
+    _graph_cache_time = 0.0
 
 
 def _get_collection(config=None):
@@ -37,10 +52,18 @@ def build_graph(col=None, config=None):
     """
     Build the palace graph from ChromaDB metadata.
 
+    Returns cached result if fresh (within TTL). Cache is invalidated
+    on writes via invalidate_graph_cache().
+
     Returns:
         nodes: dict of {room: {wings: set, halls: set, count: int}}
         edges: list of {room, wing_a, wing_b, hall} — one per tunnel crossing
     """
+    global _graph_cache_nodes, _graph_cache_edges, _graph_cache_time
+    now = time.time()
+    if _graph_cache_nodes is not None and (now - _graph_cache_time) < _GRAPH_CACHE_TTL:
+        return _graph_cache_nodes, _graph_cache_edges
+
     if col is None:
         col = _get_collection(config)
     if not col:
@@ -95,6 +118,10 @@ def build_graph(col=None, config=None):
             "count": data["count"],
             "dates": sorted(data["dates"])[-5:] if data["dates"] else [],
         }
+
+    _graph_cache_nodes = nodes
+    _graph_cache_edges = edges
+    _graph_cache_time = time.time()
 
     return nodes, edges
 
