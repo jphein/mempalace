@@ -60,58 +60,109 @@ def get_closets_collection(palace_path: str, create: bool = True):
 CLOSET_CHAR_LIMIT = 1500  # fill closet until ~1500 chars, then start a new one
 
 
-def build_closet_text(source_file, drawer_ids, content, wing, room):
-    """Build a compact closet entry from drawer content.
+def build_closet_lines(source_file, drawer_ids, content, wing, room):
+    """Build compact closet pointer lines from drawer content.
 
-    Extracts topics, names, and key quotes into an AAAK-style pointer
-    that tells the searcher which drawers to open.
+    Returns a LIST of lines (not joined). Each line is one complete topic
+    pointer — never split across closets.
+
+    Format: topic|entities|→drawer_ids
     """
     import re
+    from pathlib import Path
+
+    drawer_ref = ",".join(drawer_ids[:3])
+
     # Extract proper nouns (capitalized words, 2+ occurrences)
     words = re.findall(r"\b[A-Z][a-z]{2,}\b", content[:5000])
     word_freq = {}
     for w in words:
         word_freq[w] = word_freq.get(w, 0) + 1
-    entities = sorted([w for w, c in word_freq.items() if c >= 2], key=lambda w: -word_freq[w])[:5]
+    entities = sorted(
+        [w for w, c in word_freq.items() if c >= 2],
+        key=lambda w: -word_freq[w],
+    )[:5]
+    entity_str = ";".join(entities) if entities else ""
 
-    # Extract key phrases
+    # Extract key phrases — action verbs + context
     topics = []
     for pattern in [
-        r"(?:built|fixed|wrote|added|pushed|tested|created|decided|migrated)\s+[\w\s]{3,30}",
+        r"(?:built|fixed|wrote|added|pushed|tested|created|decided|migrated|reviewed|deployed|configured|removed|updated)\s+[\w\s]{3,40}",
     ]:
         topics.extend(re.findall(pattern, content[:5000], re.IGNORECASE))
-    topics = list(dict.fromkeys(t.strip().lower() for t in topics))[:8]
+    # Also grab section headers if present
+    for header in re.findall(r"^#{1,3}\s+(.{5,60})$", content[:5000], re.MULTILINE):
+        topics.append(header.strip())
+    # Dedupe preserving order
+    topics = list(dict.fromkeys(t.strip().lower() for t in topics))[:12]
 
-    # Extract first quote
-    quotes = re.findall(r'"([^"]{15,100})"', content[:5000])
-    quote = quotes[0] if quotes else ""
+    # Extract quotes
+    quotes = re.findall(r'"([^"]{15,150})"', content[:5000])
 
-    # Build pointer lines
-    entity_str = ";".join(entities[:5]) if entities else ""
+    # Build pointer lines — each one is atomic, never split
     lines = []
     for topic in topics:
-        pointer = f"{topic}|{entity_str}|→{','.join(drawer_ids[:3])}"
-        lines.append(pointer)
-    if quote:
-        lines.append(f'"{quote}"|{entity_str}|→{",".join(drawer_ids[:3])}')
+        lines.append(f"{topic}|{entity_str}|→{drawer_ref}")
+    for quote in quotes[:3]:
+        lines.append(f'"{quote}"|{entity_str}|→{drawer_ref}')
+
+    # Always have at least one line
     if not lines:
-        lines.append(f"{wing}/{room}|{entity_str}|→{','.join(drawer_ids[:3])}")
+        name = Path(source_file).stem[:40]
+        lines.append(f"{wing}/{room}/{name}|{entity_str}|→{drawer_ref}")
 
-    return "\n".join(lines)
+    return lines
 
 
-def upsert_closet(closets_col, closet_id, closet_text, metadata):
-    """Add or update a closet. Respects CLOSET_CHAR_LIMIT."""
-    try:
-        existing = closets_col.get(ids=[closet_id])
-        if existing.get("ids"):
-            old_text = existing["documents"][0]
-            if len(old_text) + len(closet_text) + 1 <= CLOSET_CHAR_LIMIT:
-                closet_text = old_text + "\n" + closet_text
-            # else: start fresh — old closet was full
-    except Exception:
-        pass
-    closets_col.upsert(documents=[closet_text], ids=[closet_id], metadatas=[metadata])
+def upsert_closet_lines(closets_col, closet_id_base, lines, metadata):
+    """Add topic lines to closets. Never splits a topic mid-line.
+
+    If adding a line WHOLE would exceed CLOSET_CHAR_LIMIT, a new closet
+    is created. Some closets may have less than 1500 chars — that's fine.
+    Every topic is complete and readable.
+
+    Returns the number of closets written.
+    """
+    closet_num = 1
+    current_lines = []
+    current_chars = 0
+    closets_written = 0
+
+    def _flush():
+        nonlocal closets_written
+        if not current_lines:
+            return
+        closet_id = f"{closet_id_base}_{closet_num:02d}"
+        text = "\n".join(current_lines)
+
+        # Check if closet already has content — append if room
+        try:
+            existing = closets_col.get(ids=[closet_id])
+            if existing.get("ids") and existing["documents"][0]:
+                old = existing["documents"][0]
+                if len(old) + len(text) + 1 <= CLOSET_CHAR_LIMIT:
+                    text = old + "\n" + text
+        except Exception:
+            pass
+
+        closets_col.upsert(documents=[text], ids=[closet_id], metadatas=[metadata])
+        closets_written += 1
+
+    for line in lines:
+        line_len = len(line)
+        # Would this line fit whole in the current closet?
+        if current_chars > 0 and current_chars + line_len + 1 > CLOSET_CHAR_LIMIT:
+            # Doesn't fit — flush current closet, start new one
+            _flush()
+            closet_num += 1
+            current_lines = []
+            current_chars = 0
+
+        current_lines.append(line)
+        current_chars += line_len + 1  # +1 for newline
+
+    _flush()
+    return closets_written
 
 
 @contextlib.contextmanager
