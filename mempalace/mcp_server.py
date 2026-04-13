@@ -15,6 +15,9 @@ Tools (read):
 Tools (write):
   mempalace_add_drawer      — file verbatim content into a wing/room
   mempalace_delete_drawer   — remove a drawer by ID
+
+Tools (maintenance):
+  mempalace_reconnect       — force cache invalidation and reconnect after external writes
 """
 
 import argparse
@@ -95,7 +98,9 @@ else:
         pass
 
 # Keys whose values should be redacted in WAL entries to avoid logging sensitive content
-_WAL_REDACT_KEYS = frozenset({"content_preview", "entry_preview"})
+_WAL_REDACT_KEYS = frozenset(
+    {"content", "content_preview", "document", "entry", "entry_preview", "query", "text"}
+)
 
 
 def _wal_log(operation: str, params: dict, result: dict = None):
@@ -138,11 +143,17 @@ def _get_client():
     Also detects external writes (scripts, CLI) via mtime changes — the
     inode check alone misses in-place modifications that invalidate the
     in-memory HNSW index.
+
     Note: FAT/exFAT may return 0 for st_ino — the ``current_inode != 0``
     guard skips reconnect detection on those filesystems (safe fallback).
     """
-    global _client_cache, _collection_cache, _palace_db_inode, _palace_db_mtime
-    global _metadata_cache, _metadata_cache_time
+    global \
+        _client_cache, \
+        _collection_cache, \
+        _palace_db_inode, \
+        _palace_db_mtime, \
+        _metadata_cache, \
+        _metadata_cache_time
     db_path = os.path.join(_config.palace_path, "chroma.sqlite3")
     try:
         st = os.stat(db_path)
@@ -152,8 +163,19 @@ def _get_client():
         current_inode = 0
         current_mtime = 0.0
 
-    inode_changed = current_inode != _palace_db_inode
-    mtime_changed = current_mtime and abs(current_mtime - _palace_db_mtime) > 0.01
+    # If the DB file disappeared (e.g. during rebuild) but we have a cached
+    # collection, invalidate so we don't serve stale data.  Without this,
+    # both stored and current values are 0 on the first call after deletion,
+    # making inode_changed and mtime_changed both False.
+    if not os.path.isfile(db_path) and _collection_cache is not None:
+        _client_cache = None
+        _collection_cache = None
+        _palace_db_inode = 0
+        _palace_db_mtime = 0.0
+        # Fall through to normal reconnect which will handle missing DB
+
+    inode_changed = current_inode != 0 and current_inode != _palace_db_inode
+    mtime_changed = current_mtime != 0.0 and abs(current_mtime - _palace_db_mtime) > 0.01
 
     if _client_cache is None or inode_changed or mtime_changed:
         from .backends.chroma import _fix_blob_seq_ids
@@ -236,6 +258,13 @@ def _get_cached_metadata(col, where=None):
         _metadata_cache = result
         _metadata_cache_time = now
     return result
+
+
+def _sanitize_optional_name(value: str = None, field_name: str = "name") -> str:
+    """Validate optional wing/room-style filters."""
+    if value is None:
+        return None
+    return sanitize_name(value, field_name)
 
 
 # ==================== READ TOOLS ====================
@@ -322,6 +351,10 @@ def tool_list_wings():
 
 
 def tool_list_rooms(wing: str = None):
+    try:
+        wing = _sanitize_optional_name(wing, "wing")
+    except ValueError as e:
+        return {"error": str(e)}
     col = _get_collection()
     if not col:
         return _no_palace()
@@ -372,6 +405,11 @@ def tool_search(
     keyword: str = None,
 ):
     limit = max(1, min(limit, _MAX_RESULTS))
+    try:
+        wing = _sanitize_optional_name(wing, "wing")
+        room = _sanitize_optional_name(room, "room")
+    except ValueError as e:
+        return {"error": str(e)}
     # Backwards compat: convert old similarity scale (higher=stricter) to
     # distance scale (lower=stricter). Similarity 0.8 → distance 0.2.
     dist = (1.0 - min_similarity) if min_similarity is not None else max_distance
@@ -451,6 +489,11 @@ def tool_traverse_graph(start_room: str, max_hops: int = 2):
 
 def tool_find_tunnels(wing_a: str = None, wing_b: str = None):
     """Find rooms that bridge two wings — the hallways connecting domains."""
+    try:
+        wing_a = _sanitize_optional_name(wing_a, "wing_a")
+        wing_b = _sanitize_optional_name(wing_b, "wing_b")
+    except ValueError as e:
+        return {"error": str(e)}
     col = _get_collection()
     if not col:
         return _no_palace()
@@ -484,7 +527,9 @@ def tool_add_drawer(
     if not col:
         return _no_palace()
 
-    drawer_id = f"drawer_{wing}_{room}_{hashlib.sha256((wing + room + content[:100]).encode()).hexdigest()[:24]}"
+    drawer_id = (
+        f"drawer_{wing}_{room}_{hashlib.sha256((wing + room + content).encode()).hexdigest()[:24]}"
+    )
 
     _wal_log(
         "add_drawer",
@@ -587,6 +632,11 @@ def tool_list_drawers(wing: str = None, room: str = None, limit: int = 20, offse
     """List drawers with pagination. Optional wing/room filter."""
     limit = max(1, min(limit, _MAX_RESULTS))
     offset = max(0, offset)
+    try:
+        wing = _sanitize_optional_name(wing, "wing")
+        room = _sanitize_optional_name(room, "room")
+    except ValueError as e:
+        return {"error": str(e)}
     col = _get_collection()
     if not col:
         return _no_palace()
@@ -1007,6 +1057,32 @@ def tool_memories_filed_away():
         }
 
 
+# ==================== SETTINGS TOOLS ====================
+
+
+def tool_reconnect():
+    """Force the MCP server to drop the cached ChromaDB collection and reconnect.
+
+    Use after external scripts or CLI commands modify the palace database
+    directly, which can leave the in-memory HNSW index stale.
+    """
+    global _collection_cache, _palace_db_inode, _palace_db_mtime
+    _collection_cache = None
+    _palace_db_inode = 0
+    _palace_db_mtime = 0.0
+    try:
+        col = _get_collection()
+        if col is None:
+            return {
+                "success": False,
+                "message": "No palace found after reconnect",
+                "drawers": 0,
+            }
+        return {"success": True, "message": "Reconnected to palace", "drawers": col.count()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 # ==================== MCP PROTOCOL ====================
 
 TOOLS = {
@@ -1162,8 +1238,8 @@ TOOLS = {
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Short search query ONLY — keywords or a question. Do NOT include system prompts or conversation context. Max 200 chars recommended.",
-                    "maxLength": 500,
+                    "description": "Short search query ONLY — keywords or a question. Do NOT include system prompts or conversation context. Max 250 chars.",
+                    "maxLength": 250,
                 },
                 "limit": {
                     "type": "integer",
@@ -1374,6 +1450,17 @@ TOOLS = {
         "description": "Check if a recent palace checkpoint was saved. Returns message count and timestamp.",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_memories_filed_away,
+    },
+    "mempalace_reconnect": {
+        "description": (
+            "Force reconnect to the palace database. Use after external scripts or CLI commands"
+            " modified the palace directly, which can leave the in-memory HNSW index stale."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+        "handler": tool_reconnect,
     },
 }
 

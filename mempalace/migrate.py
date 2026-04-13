@@ -104,14 +104,40 @@ def detect_chromadb_version(db_path: str) -> str:
         conn.close()
 
 
-def migrate(palace_path: str, dry_run: bool = False):
+def contains_palace_database(path: str) -> bool:
+    """Return True when path looks like a MemPalace ChromaDB directory."""
+    return os.path.isfile(os.path.join(path, "chroma.sqlite3"))
+
+
+def confirm_destructive_action(
+    operation_name: str, palace_path: str, assume_yes: bool = False
+) -> bool:
+    """Require confirmation before destructive palace operations."""
+    if assume_yes:
+        return True
+
+    print(f"\n  {operation_name} will replace data in: {palace_path}")
+    print("  A backup will be created first, then the palace will be rebuilt.")
+    try:
+        answer = input("  Continue? [y/N]: ").strip().lower()
+    except EOFError:
+        print("  Aborted. Re-run with --yes to confirm destructive changes.")
+        return False
+
+    if answer not in {"y", "yes"}:
+        print("  Aborted.")
+        return False
+    return True
+
+
+def migrate(palace_path: str, dry_run: bool = False, confirm: bool = False):
     """Migrate a palace to the currently installed ChromaDB version."""
     import chromadb
 
-    palace_path = os.path.expanduser(palace_path)
+    palace_path = os.path.abspath(os.path.expanduser(palace_path))
     db_path = os.path.join(palace_path, "chroma.sqlite3")
 
-    if not os.path.isfile(db_path):
+    if not os.path.isdir(palace_path) or not contains_palace_database(palace_path):
         print(f"\n  No palace database found at {db_path}")
         return False
 
@@ -165,6 +191,9 @@ def migrate(palace_path: str, dry_run: bool = False):
         print("\n  DRY RUN — no changes made.")
         print(f"  Would migrate {len(drawers)} drawers.")
         return True
+
+    if not confirm_destructive_action("Migration", palace_path, assume_yes=confirm):
+        return False
 
     # Backup the old palace
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")

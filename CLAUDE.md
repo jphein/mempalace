@@ -111,4 +111,4 @@ AAAK (`mempalace/dialect.py`) is upstream's compressed symbolic summary format. 
 
 ## Testing
 
-Always run `python -m pytest tests/ -x -q` after changes. 715 tests expected to pass. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).
+Always run `python -m pytest tests/ -x -q` after changes. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).

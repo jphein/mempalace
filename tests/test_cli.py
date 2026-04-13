@@ -427,9 +427,23 @@ def test_cmd_repair_no_palace(mock_config_cls, tmp_path, capsys):
 
 
 @patch("mempalace.cli.MempalaceConfig")
+def test_cmd_repair_requires_palace_database(mock_config_cls, tmp_path, capsys):
+    palace_dir = tmp_path / "palace"
+    palace_dir.mkdir()
+    mock_config_cls.return_value.palace_path = str(palace_dir)
+    args = argparse.Namespace(palace=None)
+    mock_chromadb = MagicMock()
+    with patch.dict("sys.modules", {"chromadb": mock_chromadb}):
+        cmd_repair(args)
+    out = capsys.readouterr().out
+    assert "No palace database found" in out
+
+
+@patch("mempalace.cli.MempalaceConfig")
 def test_cmd_repair_error_reading(mock_config_cls, tmp_path, capsys):
     palace_dir = tmp_path / "palace"
     palace_dir.mkdir()
+    (palace_dir / "chroma.sqlite3").write_text("db")
     mock_config_cls.return_value.palace_path = str(palace_dir)
     args = argparse.Namespace(palace=None)
     mock_chromadb = MagicMock()
@@ -446,6 +460,7 @@ def test_cmd_repair_error_reading(mock_config_cls, tmp_path, capsys):
 def test_cmd_repair_zero_drawers(mock_config_cls, tmp_path, capsys):
     palace_dir = tmp_path / "palace"
     palace_dir.mkdir()
+    (palace_dir / "chroma.sqlite3").write_text("db")
     mock_config_cls.return_value.palace_path = str(palace_dir)
     args = argparse.Namespace(palace=None)
     mock_chromadb = MagicMock()
@@ -464,8 +479,9 @@ def test_cmd_repair_zero_drawers(mock_config_cls, tmp_path, capsys):
 def test_cmd_repair_success(mock_config_cls, tmp_path, capsys):
     palace_dir = tmp_path / "palace"
     palace_dir.mkdir()
+    (palace_dir / "chroma.sqlite3").write_text("db")
     mock_config_cls.return_value.palace_path = str(palace_dir)
-    args = argparse.Namespace(palace=None)
+    args = argparse.Namespace(palace=None, yes=True)
     mock_chromadb = MagicMock()
     mock_col = MagicMock()
     mock_col.count.return_value = 2
@@ -484,6 +500,29 @@ def test_cmd_repair_success(mock_config_cls, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "Repair complete" in out
     assert "2 drawers rebuilt" in out
+
+
+@patch("mempalace.cli.MempalaceConfig")
+def test_cmd_repair_aborts_without_confirmation(mock_config_cls, tmp_path, capsys):
+    palace_dir = tmp_path / "palace"
+    palace_dir.mkdir()
+    (palace_dir / "chroma.sqlite3").write_text("db")
+    mock_config_cls.return_value.palace_path = str(palace_dir)
+    args = argparse.Namespace(palace=None)
+    mock_chromadb = MagicMock()
+    mock_col = MagicMock()
+    mock_col.count.return_value = 1
+    mock_client = MagicMock()
+    mock_client.get_collection.return_value = mock_col
+    mock_chromadb.PersistentClient.return_value = mock_client
+    with (
+        patch.dict("sys.modules", {"chromadb": mock_chromadb}),
+        patch("builtins.input", return_value="n"),
+    ):
+        cmd_repair(args)
+    out = capsys.readouterr().out
+    assert "Aborted." in out
+    mock_client.create_collection.assert_not_called()
 
 
 # ── cmd_compress ───────────────────────────────────────────────────────

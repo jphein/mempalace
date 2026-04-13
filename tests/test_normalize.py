@@ -524,6 +524,119 @@ def test_claude_ai_privacy_export_non_dict_items():
     assert result is not None
 
 
+def test_claude_ai_privacy_export_messages_key():
+    """Privacy export using 'messages' key instead of 'chat_messages'."""
+    data = [
+        {
+            "uuid": "abc-123",
+            "name": "Test convo",
+            "messages": [
+                {"role": "human", "content": "Q1"},
+                {"role": "ai", "content": "A1"},
+            ],
+        }
+    ]
+    result = _try_claude_ai_json(data)
+    assert result is not None
+    assert "> Q1" in result
+
+
+def test_claude_ai_privacy_export_sender_field():
+    """Privacy export using 'sender' instead of 'role'."""
+    data = [
+        {
+            "chat_messages": [
+                {"sender": "human", "content": "Q1"},
+                {"sender": "assistant", "content": "A1"},
+            ]
+        }
+    ]
+    result = _try_claude_ai_json(data)
+    assert result is not None
+    assert "> Q1" in result
+
+
+def test_claude_ai_privacy_export_text_fallback():
+    """Privacy export where content is empty but text field has the message."""
+    data = [
+        {
+            "chat_messages": [
+                {"sender": "human", "text": "Q1", "content": []},
+                {"sender": "assistant", "text": "A1", "content": []},
+            ]
+        }
+    ]
+    result = _try_claude_ai_json(data)
+    assert result is not None
+    assert "> Q1" in result
+
+
+def test_claude_ai_privacy_export_null_text():
+    """Privacy export where text field is explicitly null must not crash."""
+    data = [
+        {
+            "chat_messages": [
+                {"sender": "human", "text": None, "content": "Q1"},
+                {"sender": "assistant", "text": None, "content": "A1"},
+            ]
+        }
+    ]
+    result = _try_claude_ai_json(data)
+    assert result is not None
+    assert "> Q1" in result
+
+
+def test_claude_ai_privacy_export_per_conversation():
+    """Multiple conversations produce separate transcripts."""
+    data = [
+        {
+            "uuid": "convo-1",
+            "chat_messages": [
+                {"role": "human", "content": "Q1"},
+                {"role": "ai", "content": "A1"},
+            ],
+        },
+        {
+            "uuid": "convo-2",
+            "chat_messages": [
+                {"role": "human", "content": "Q2"},
+                {"role": "ai", "content": "A2"},
+            ],
+        },
+    ]
+    result = _try_claude_ai_json(data)
+    assert result is not None
+    assert "> Q1" in result
+    assert "> Q2" in result
+    # each conversation is a separate transcript block
+    parts = result.split("\n\n")
+    q1_parts = [p for p in parts if "> Q1" in p]
+    q2_parts = [p for p in parts if "> Q2" in p]
+    assert len(q1_parts) >= 1
+    assert len(q2_parts) >= 1
+
+
+def test_claude_ai_privacy_export_skips_empty_conversations():
+    """Conversations with <2 messages are skipped."""
+    data = [
+        {
+            "chat_messages": [
+                {"role": "human", "content": "lonely message"},
+            ],
+        },
+        {
+            "chat_messages": [
+                {"role": "human", "content": "Q1"},
+                {"role": "ai", "content": "A1"},
+            ],
+        },
+    ]
+    result = _try_claude_ai_json(data)
+    assert result is not None
+    assert "lonely message" not in result
+    assert "> Q1" in result
+
+
 # ── _try_chatgpt_json ─────────────────────────────────────────────────
 
 

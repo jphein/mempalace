@@ -30,7 +30,7 @@ def normalize(filepath: str) -> str:
     except OSError as e:
         raise IOError(f"Could not read {filepath}: {e}")
     if file_size > 500 * 1024 * 1024:  # 500 MB safety limit
-        raise IOError(f"File too large ({file_size // (1024*1024)} MB): {filepath}")
+        raise IOError(f"File too large ({file_size // (1024 * 1024)} MB): {filepath}")
     try:
         with open(filepath, "r", encoding="utf-8", errors="replace") as f:
             content = f.read()
@@ -190,40 +190,46 @@ def _try_claude_ai_json(data) -> Optional[str]:
     if not isinstance(data, list):
         return None
 
-    # Privacy export: array of conversation objects with chat_messages inside each
-    if data and isinstance(data[0], dict) and "chat_messages" in data[0]:
-        all_messages = []
+    # Privacy export: array of conversation objects, each containing its own
+    # message list under "chat_messages" or "messages" (both variants seen in the wild).
+    if data and isinstance(data[0], dict) and ("chat_messages" in data[0] or "messages" in data[0]):
+        transcripts = []
         for convo in data:
             if not isinstance(convo, dict):
                 continue
-            chat_msgs = convo.get("chat_messages", [])
-            for item in chat_msgs:
-                if not isinstance(item, dict):
-                    continue
-                role = item.get("role", "")
-                text = _extract_content(item.get("content", ""))
-                if role in ("user", "human") and text:
-                    all_messages.append(("user", text))
-                elif role in ("assistant", "ai") and text:
-                    all_messages.append(("assistant", text))
-        if len(all_messages) >= 2:
-            return _messages_to_transcript(all_messages)
+            chat_msgs = convo.get("chat_messages") or convo.get("messages", [])
+            messages = _collect_claude_messages(chat_msgs)
+            if len(messages) >= 2:
+                transcripts.append(_messages_to_transcript(messages))
+        if transcripts:
+            return "\n\n".join(transcripts)
         return None
 
     # Flat messages list
+    messages = _collect_claude_messages(data)
+    if len(messages) >= 2:
+        return _messages_to_transcript(messages)
+    return None
+
+
+def _collect_claude_messages(items) -> list:
+    """Extract (role, text) pairs from a Claude.ai message list.
+
+    Accepts both ``role`` (API format) and ``sender`` (privacy export) as the
+    author field, and falls back to a top-level ``text`` key when the
+    ``content`` blocks are empty or absent.
+    """
     messages = []
-    for item in data:
+    for item in items:
         if not isinstance(item, dict):
             continue
-        role = item.get("role", "")
-        text = _extract_content(item.get("content", ""))
+        role = item.get("role") or item.get("sender", "")
+        text = _extract_content(item.get("content", "")) or (item.get("text") or "").strip()
         if role in ("user", "human") and text:
             messages.append(("user", text))
         elif role in ("assistant", "ai") and text:
             messages.append(("assistant", text))
-    if len(messages) >= 2:
-        return _messages_to_transcript(messages)
-    return None
+    return messages
 
 
 def _try_chatgpt_json(data) -> Optional[str]:
