@@ -20,9 +20,11 @@ A local AI memory system that stores every conversation, decision, and debugging
 
 This fork runs in production on my workstation with 134K+ drawers across 60+ rooms. Everything below is battle-tested.
 
+**[Fork direction doc](docs/fork-direction.md)** — competitive analysis, what we learned, and what we're building next.
+
 ## What's Different From Upstream
 
-22 fork changes submitted as [upstream PRs](#upstream-prs) — 5 merged so far. The highlights:
+22 fork changes submitted as [upstream PRs](#upstream-prs) — 5 merged, 9 open, rest closed. The highlights:
 
 ### Reliability
 - **Stale HNSW detection** — MCP server detects external writes via mtime, auto-reconnects. Manual `mempalace_reconnect` tool for cache invalidation.
@@ -76,7 +78,7 @@ Restart Claude Code, then type `/skills` to verify "mempalace" appears.
 claude mcp add mempalace -- python -m mempalace.mcp_server
 ```
 
-Now your AI has 19 tools available through MCP. Ask it anything:
+Now your AI has 22+ tools available through MCP. Ask it anything:
 
 > *"What did we decide about auth last month?"*
 
@@ -205,18 +207,11 @@ wing_priya     / hall_advice / auth-migration  → "Priya approved Clerk over Au
 
 Same room. Three wings. The tunnel connects them.
 
-### Why Structure Matters
+### Honest Take on Structure
 
-Tested on 22,000+ real conversation memories:
+The palace hierarchy (wings, rooms, halls, tunnels) provides navigable organization. However, in our 134K-drawer production deployment, **the retrieval wins come from ChromaDB's vector search + verbatim storage, not from the hierarchy itself.** Wing/room filtering is metadata narrowing on top of vector search — useful when you want it, but the same results are achievable with multi-label tags.
 
-```
-Search all closets:          60.9%  R@10
-Search within wing:          73.1%  (+12%)
-Search wing + hall:          84.8%  (+24%)
-Search wing + room:          94.8%  (+34%)
-```
-
-Wings and rooms aren't cosmetic. They're a **34% retrieval improvement**. The palace structure is the product.
+Our fork's [direction doc](docs/fork-direction.md) has the full analysis. The short version: verbatim storage is the real differentiator. Every competing system (Hindsight, Mem0, Cognee, Letta, engram) transforms content before storage. MemPalace keeps the original text.
 
 ### The Memory Stack
 
@@ -404,7 +399,7 @@ claude plugin install --scope user mempalace
 claude mcp add mempalace -- python -m mempalace.mcp_server
 ```
 
-22 MCP tools available: search, diary, drawers, knowledge graph, palace graph traversal, taxonomy, export.
+24 MCP tools available: search, diary, drawers, knowledge graph, palace graph traversal, taxonomy, export, hook settings, reconnect.
 
 ### Hooks
 
@@ -424,7 +419,7 @@ Set `MEMPAL_DIR` to auto-mine a directory on each save trigger. Set `MEMPAL_PYTH
 
 ```bash
 source venv/bin/activate
-python -m pytest tests/ -x -q           # 715 tests expected
+python -m pytest tests/ -x -q           # 740 tests expected
 mempalace status                         # palace health
 ruff check . && ruff format --check .    # lint + format
 ```
@@ -444,13 +439,14 @@ All fork changes submitted as separate focused PRs to [milla-jovovich/mempalace]
 | [#660](https://github.com/milla-jovovich/mempalace/pull/660) | perf | L1 importance pre-filter |
 | [#661](https://github.com/milla-jovovich/mempalace/pull/661) | perf | Graph cache with write-invalidation |
 | [#662](https://github.com/milla-jovovich/mempalace/pull/662) | feat | Hybrid search fallback |
-| [#663](https://github.com/milla-jovovich/mempalace/pull/663) | fix | Stale HNSW mtime detection |
+| [#663](https://github.com/milla-jovovich/mempalace/pull/663) | fix | ~~Stale HNSW mtime detection~~ — closed, upstream wrote [#757](https://github.com/milla-jovovich/mempalace/pull/757) |
 | [#664](https://github.com/milla-jovovich/mempalace/pull/664) | fix | BLOB seq_id migration repair — **merged** |
-| [#673](https://github.com/milla-jovovich/mempalace/pull/673) | feat | Deterministic hook saves — zero data loss via Python API |
+| [#673](https://github.com/milla-jovovich/mempalace/pull/673) | feat | Deterministic hook saves — zero data loss via Python API (1 approval) |
 | [#681](https://github.com/milla-jovovich/mempalace/pull/681) | fix | Unicode checkmark → ASCII (#535) |
 | [#682](https://github.com/milla-jovovich/mempalace/pull/682) | fix | --yes flag for init (#534) — **merged** |
 | [#683](https://github.com/milla-jovovich/mempalace/pull/683) | fix | Unicode sanitize_name (#637) — **merged** |
 | [#684](https://github.com/milla-jovovich/mempalace/pull/684) | fix | VAR_KEYWORD kwargs check (#572) — **merged** |
+| [#738](https://github.com/milla-jovovich/mempalace/pull/738) | docs | Update MCP tools reference for #667 additions |
 
 ## License
 
