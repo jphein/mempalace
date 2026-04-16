@@ -1,10 +1,58 @@
 # Changelog
 
-All notable changes to [MemPalace](https://github.com/milla-jovovich/mempalace) are documented in this file.
+All notable changes to [MemPalace](https://github.com/MemPalace/mempalace) are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ---
 
-## [3.2.0] — 2026-04-13
+## [Unreleased] — v3.3.0 (on develop)
+
+### New Features
+- Closet layer — a compact searchable index of pointers to verbatim drawers, enabling fast topical lookup without reading all content (#788)
+- BM25 hybrid search — closets boost ranking, drawers remain the source of truth (#795, #829)
+- Entity metadata on every drawer for filterable search (#829)
+- Diary ingest — day-based rooms for conversation transcripts (#829)
+- Cross-wing tunnels — explicit links between rooms in different wings for multi-project agents (#829)
+- Drawer-grep — returns the best-matching chunk plus adjacent context drawers (#829)
+- Offline fact checker against the entity registry and knowledge graph (#829)
+- LLM-based closet regeneration — optional, bring-your-own endpoint, no mandatory API key (#793)
+- Hall detection — routes drawer content to `emotions` / `technical` / `family` / `memory` / `identity` / `consciousness` / `creative` halls, enabling hall-based graph connectivity within wings (#835)
+
+### Bug Fixes
+- Set `hnsw:space=cosine` metadata on all collection creation sites — fixes broken similarity scoring under ChromaDB's default L2 distance (#807, #218)
+- File-level locking prevents duplicate drawers when agents mine the same file concurrently (#784, #826)
+- Hybrid closet+drawer retrieval — closets boost ranking, never gate results (#795)
+- Stop hooks from making agents write in chat — saves tokens on every turn (#786)
+- Strip system tags, hook output, and Claude UI chrome from drawers before filing (#785)
+- Verbatim-safe `strip_noise` scoped to Claude Code JSONL only (#785)
+- Prevent diary entry ID collisions via microsecond timestamp and full content hash (#819)
+- Auto-rebuild stale drawers via `NORMALIZE_VERSION` schema gate
+- Enforce atomic topics in closets and extract richer pointers
+- Sync `version.py` to match `pyproject.toml` (#820)
+- Remove unused `main` import from `mempalace/__init__.py` (#827)
+- README audit — fix 7 stale claims (tool count, version badge, wake-up token cost, `dialect.py` lossless disclaimer, `pyproject.toml` version) with 42 regression-guard tests (#835)
+
+### Improvements
+- Optimize entity detection with regex caching and pre-compilation (#828)
+- Extract locked filing block into helper to keep `mine_convos` under C901 complexity
+
+### Documentation
+- Add `docs/CLOSETS.md` — closet layer overview
+- Fix stale `milla-jovovich/*` org URLs in website and plugin manifests (#787)
+- Fix remaining stale org URLs in contributor docs (#808)
+
+### Internal
+- Add test coverage for `mine_lock`, closets, entity metadata, BM25, and diary
+- Verify `mine_lock` via disjoint critical-section intervals
+- Serialize `mine_lock` concurrency test with multiprocessing
+- Make diary state path assertion platform-neutral
+- Add `TestTunnels` coverage for cross-wing tunnel operations
+- Ruff format with CI-pinned version (0.4.x); format `mempalace/palace.py`
+
+---
+
+## [3.2.0] — 2026-04-12
 
 ### Packaging
 - Remove `chromadb<0.7` upper bound — unblocks installs against chromadb 1.x palaces (#690)
@@ -48,9 +96,6 @@ All notable changes to [MemPalace](https://github.com/milla-jovovich/mempalace) 
 - Add `--yes` flag to init instructions for non-interactive use (#682, #534)
 - Add `mcp` command with setup guidance (#315)
 
-### Documentation
-- Fix misaligned architecture diagram (#734, #733)
-
 ### New Features
 - i18n support — 8 languages (en, es, fr, de, ja, ko, zh-CN, zh-TW) (#718)
 - New MCP tools: get/list/update drawer, hook settings, export (#667, #635)
@@ -67,6 +112,7 @@ All notable changes to [MemPalace](https://github.com/milla-jovovich/mempalace) 
 - Add VitePress documentation site (#439)
 - Add warning about fake MemPalace websites (#598)
 - Fix stale org URLs and PR branch target in contributor docs (#679)
+- Fix misaligned architecture diagram (#734, #733)
 - Add ROADMAP.md — v3.1.1 stability patch and v4.0.0-alpha plan
 
 ### Internal
@@ -156,3 +202,10 @@ Initial public release.
 - CLI: `init`, `mine`, `search`, `status`, `compress`, `repair`, `split`
 - Benchmark suite with recall and scale tests
 - README with MCP flow, local model flow, and specialist agent documentation
+
+---
+
+[Unreleased]: https://github.com/MemPalace/mempalace/compare/v3.2.0...HEAD
+[3.2.0]: https://github.com/MemPalace/mempalace/compare/v3.1.0...v3.2.0
+[3.1.0]: https://github.com/MemPalace/mempalace/compare/v3.0.0...v3.1.0
+[3.0.0]: https://github.com/MemPalace/mempalace/releases/tag/v3.0.0

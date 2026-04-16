@@ -99,7 +99,9 @@ Items ordered by implementation priority: quick wins first, then feature gaps, t
 
 **Gap:** All memories are equally weighted forever. No recency signal, no TTL, no age-based scoring. Palace gets noisier over time with no self-curation. Mnemosyne and Memoria both have this — MemPalace doesn't.
 
-**Note (2026-04-11):** Claude Code has unreleased "Auto Dream" consolidation code for the lightweight memory layer, but it's behind a disabled feature flag and non-functional (see two-layer table above). If it ships, it would only cover `~/.claude/projects/*/memory/` — MemPalace decay remains necessary for the 132K+ drawer archive. Focus on **search ranking** (boost recent/useful) rather than deletion.
+**Note (2026-04-11):** Claude Code has unreleased "Auto Dream" consolidation code for the lightweight memory layer, but it's behind a disabled feature flag and non-functional (see two-layer table above). If it ships, it would only cover `~/.claude/projects/*/memory/` — MemPalace decay remains necessary for the 134K+ drawer archive. Focus on **search ranking** (boost recent/useful) rather than deletion.
+
+**Reference implementation (2026-04-16):** [context-engine](https://github.com/Emmimal/context-engine) ([forked](https://github.com/jphein/context-engine)) has a working exponential decay implementation with `memory_decay_rate` (per-second), `memory_short_term` (turns always included), and auto-importance scoring. Its `Memory` class handles deduplication and decay in ~200 lines. The decay curve and budget enforcement patterns are directly portable to MemPalace search result post-processing.
 
 **Files:**
 - Modify: `mempalace/searcher.py` — post-processing in `search_memories()`

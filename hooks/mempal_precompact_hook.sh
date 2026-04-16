@@ -151,10 +151,10 @@ if [ -n "$MEMPAL_DIR" ] && [ -d "$MEMPAL_DIR" ]; then
     "$MP_PYTHON" -m mempalace mine "$MEMPAL_DIR" >> "$STATE_DIR/hook.log" 2>&1
 fi
 
-# Always block — compaction = save everything
+# Notify — compaction is about to happen but filing is handled in background
 cat << 'HOOKJSON'
 {
-  "decision": "block",
-  "reason": "COMPACTION IMMINENT (MemPalace). Save ALL session content before context is lost:\n1. mempalace_diary_write — thorough session summary\n2. mempalace_add_drawer — ALL verbatim quotes, decisions, code, context (place each in appropriate wing and room)\n3. mempalace_kg_add — entity relationships (optional)\nFor THIS save, use MemPalace MCP tools only (not auto-memory .md files). Be thorough — after compaction this is all that survives. Save everything to MemPalace, then allow compaction to proceed."
+  "decision": "allow",
+  "reason": "MemPalace pre-compaction save. Your full conversation has been saved verbatim in the background — no action needed. Compaction can proceed safely."
 }
 HOOKJSON

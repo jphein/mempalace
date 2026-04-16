@@ -175,7 +175,11 @@ def cmd_migrate(args):
     from .migrate import migrate
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
-    migrate(palace_path=palace_path, dry_run=args.dry_run, confirm=getattr(args, "yes", False))
+    migrate(
+        palace_path=palace_path,
+        dry_run=args.dry_run,
+        confirm=getattr(args, "yes", False),
+    )
 
 
 def cmd_purge(args):
@@ -298,16 +302,9 @@ def cmd_status(args):
 
 
 def cmd_repair(args):
-    """Rebuild palace vector index by nuking and recreating the database.
-
-    ChromaDB's HNSW index can become corrupted after bulk deletes (ghost
-    entries cause segfaults on query).  A same-process delete_collection +
-    create_collection is NOT sufficient — the PersistentClient reuses
-    corrupted state.  This command extracts all drawers, deletes the entire
-    palace directory, creates a fresh PersistentClient, and re-inserts.
-    """
-    import chromadb
+    """Rebuild palace vector index from SQLite metadata."""
     import shutil
+    from .backends.chroma import ChromaBackend
     from .migrate import confirm_destructive_action, contains_palace_database
 
     palace_path = os.path.abspath(
@@ -327,10 +324,11 @@ def cmd_repair(args):
     print(f"{'=' * 55}\n")
     print(f"  Palace: {palace_path}")
 
+    backend = ChromaBackend()
+
     # Try to read existing drawers
     try:
-        client = chromadb.PersistentClient(path=palace_path)
-        col = client.get_collection("mempalace_drawers")
+        col = backend.get_collection(palace_path, "mempalace_drawers")
         total = col.count()
         print(f"  Drawers found: {total}")
     except Exception as e:
@@ -356,20 +354,13 @@ def cmd_repair(args):
     offset = 0
     while offset < total:
         batch = col.get(limit=batch_size, offset=offset, include=["documents", "metadatas"])
-        if not batch["ids"]:
-            break
         all_ids.extend(batch["ids"])
         all_docs.extend(batch["documents"])
         all_metas.extend(batch["metadatas"])
-        offset += len(batch["ids"])
+        offset += batch_size
     print(f"  Extracted {len(all_ids)} drawers")
 
-    # Release the old client before nuking the directory — ChromaDB holds
-    # open file handles (WAL journal, HNSW mmap) that block rmtree on Windows
-    # and some Linux FS.
-    del col, client
-
-    # Backup the entire palace directory
+    # Backup and rebuild
     palace_path = os.path.normpath(palace_path)
     backup_path = palace_path + ".backup"
     if os.path.exists(backup_path):
@@ -383,32 +374,18 @@ def cmd_repair(args):
     print(f"  Backing up to {backup_path}...")
     shutil.copytree(palace_path, backup_path)
 
-    # Nuke and recreate — fresh PersistentClient gets a clean HNSW index
-    print("  Rebuilding from scratch...")
-    shutil.rmtree(palace_path)
-    os.makedirs(palace_path, mode=0o700)
-
-    new_client = chromadb.PersistentClient(path=palace_path)
-    new_col = new_client.create_collection("mempalace_drawers", metadata={"hnsw:space": "cosine"})
+    print("  Rebuilding collection...")
+    backend.delete_collection(palace_path, "mempalace_drawers")
+    new_col = backend.create_collection(palace_path, "mempalace_drawers")
 
     filed = 0
     for i in range(0, len(all_ids), batch_size):
-        end = min(i + batch_size, len(all_ids))
-        new_col.add(
-            documents=all_docs[i:end],
-            ids=all_ids[i:end],
-            metadatas=all_metas[i:end],
-        )
-        filed += end - i
+        batch_ids = all_ids[i : i + batch_size]
+        batch_docs = all_docs[i : i + batch_size]
+        batch_metas = all_metas[i : i + batch_size]
+        new_col.add(documents=batch_docs, ids=batch_ids, metadatas=batch_metas)
+        filed += len(batch_ids)
         print(f"  Re-filed {filed}/{len(all_ids)} drawers...")
-
-    # Verify the new index works
-    try:
-        new_col.query(query_texts=["test"], n_results=1, include=["documents"])
-        print("  Index verification: OK")
-    except Exception as e:
-        print(f"  Index verification FAILED: {e}")
-        print(f"  Restore from backup: mv {backup_path} {palace_path}")
 
     print(f"\n  Repair complete. {filed} drawers rebuilt.")
     print(f"  Backup saved at {backup_path}")
@@ -452,7 +429,7 @@ def cmd_mcp(args):
 
 def cmd_compress(args):
     """Compress drawers in a wing using AAAK Dialect."""
-    import chromadb
+    from .backends.chroma import ChromaBackend
     from .dialect import Dialect
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
@@ -472,9 +449,9 @@ def cmd_compress(args):
         dialect = Dialect()
 
     # Connect to palace
+    backend = ChromaBackend()
     try:
-        client = chromadb.PersistentClient(path=palace_path)
-        col = client.get_collection("mempalace_drawers")
+        col = backend.get_collection(palace_path, "mempalace_drawers")
     except Exception:
         print(f"\n  No palace found at {palace_path}")
         print("  Run: mempalace init <dir> then mempalace mine <dir>")
@@ -487,7 +464,11 @@ def cmd_compress(args):
     offset = 0
     while True:
         try:
-            kwargs = {"include": ["documents", "metadatas"], "limit": _BATCH, "offset": offset}
+            kwargs = {
+                "include": ["documents", "metadatas"],
+                "limit": _BATCH,
+                "offset": offset,
+            }
             if where:
                 kwargs["where"] = where
             batch = col.get(**kwargs)
@@ -545,7 +526,7 @@ def cmd_compress(args):
     # Store compressed versions (unless dry-run)
     if not args.dry_run:
         try:
-            comp_col = client.get_or_create_collection("mempalace_compressed")
+            comp_col = backend.get_or_create_collection(palace_path, "mempalace_compressed")
             for doc_id, compressed, meta, stats in compressed_entries:
                 comp_meta = dict(meta)
                 comp_meta["compression_ratio"] = round(stats["size_ratio"], 1)
@@ -591,7 +572,9 @@ def main():
     p_init = sub.add_parser("init", help="Detect rooms from your folder structure")
     p_init.add_argument("dir", help="Project directory to set up")
     p_init.add_argument(
-        "--yes", action="store_true", help="Auto-accept all detected entities (non-interactive)"
+        "--yes",
+        action="store_true",
+        help="Auto-accept all detected entities (non-interactive)",
     )
 
     # mine

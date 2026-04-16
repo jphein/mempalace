@@ -69,7 +69,23 @@ Store once, attach metadata, query from any angle. This is what ChromaDB already
 
 ### 6. FTS5 hybrid search is better than vector-only
 
-engram (Go + SQLite FTS5) proves that full-text search catches what embeddings miss — exact error codes, config keys, CLI flags. Our #662 hybrid fallback via `$contains` is a step in this direction, but ChromaDB's `$contains` is naive substring matching, not proper FTS. A future improvement could add SQLite FTS5 as a parallel index.
+engram (Go + SQLite FTS5) proves that full-text search catches what embeddings miss — exact error codes, config keys, CLI flags. Our #662 hybrid fallback via `$contains` was a step in this direction; **upstream v3.3.0 shipped proper Okapi-BM25 hybrid search** (60% vector + 40% keyword) that supersedes our approach entirely. #662 is now closeable.
+
+### 6b. Context management is the layer above retrieval
+
+[context-engine](https://github.com/Emmimal/context-engine) (Python, [forked](https://github.com/jphein/context-engine)) demonstrates the pipeline that sits *between* retrieval and the LLM: re-ranking, memory decay, extractive compression, and token budget enforcement. MemPalace answers "what's relevant?" — context-engine answers "what fits in the prompt, in what order, and at what compression level?"
+
+Key ideas applicable to our fork:
+- **Exponential memory decay** — older conversation turns naturally lose priority unless high-importance. Maps directly to our TODO #4 (decay/recency weighting).
+- **Token budget slots** — system prompt → history → documents, each with hard caps. Could inform how MemPalace results are packed into the L1 layer.
+- **Extractive compression** — query-aware sentence extraction from long documents. Currently MemPalace returns full drawer text; compression would let us return more drawers within the same token budget.
+
+### 6c. Codebase-to-context flattening
+
+[context-builder](https://github.com/igorls/context-builder) (Rust, [forked](https://github.com/jphein/context-builder)) is a CLI that flattens an entire codebase into a single LLM-friendly markdown file with smart file ordering, Tree-sitter AST extraction, and token budgeting. Relevant because:
+- The `--signatures` mode (function/class signatures only, no bodies) could feed into MemPalace mining — indexing a project's API surface as searchable metadata.
+- Useful for feeding codebases to models without file access (ChatGPT, raw API calls).
+- The relevance-based file ordering (configs → source → tests) is a pattern we could apply to how MemPalace search results are ordered.
 
 ### 7. Single-binary simplicity is underrated
 
@@ -194,6 +210,10 @@ The most common source of wrong assumptions isn't missing MemPalace context. It'
 | [Swimm](https://swimm.io) | Code-coupled docs. Links documentation to specific code snippets, auto-flags when linked code changes but doc doesn't. CI integration catches drift on every PR. | Closest thing to a real stale-doc solution. Detects exactly the problem we have. Commercial product. |
 | [claude-code-skills](https://github.com/levnikolaevich/claude-code-skills) | Plugin suite with `docs-auditor` that checks hierarchy, single source of truth, and freshness. Hash-verified editing prevents stale-context corruption. | Worth installing and testing. Open source. |
 | [claude-organizer](https://github.com/ramakay/claude-organizer) | AI-powered file organization via Claude Code hooks. Sorts temp scripts from permanent docs, protects README/LICENSE/configs. | Lighter weight — file organization, not content freshness. |
+| [CodeSpring](https://codespring.app) | Planning-to-code bridge — ingests GitHub repos into visual knowledge base with PRDs, Kanban tasks, auto-syncs on commit. Claude Code plugin (`/codespring`) via MCP skills. | Overlaps heavily with CLAUDE.md + task system we already have. The MCP skill is interesting for team projects. SaaS — project data hosted externally. |
+| [Supadev](https://supadev.so) | Doc generator that outputs AI-optimized specs (requirements, architecture, implementation plans). Copy-paste into any AI tool. $12/mo. | Structured prompt templates — replicable with our brainstorming skill and CLAUDE.md. Low unique value for our workflow. |
+| [context-engine](https://github.com/Emmimal/context-engine) | Pure-Python pipeline: retrieval → re-ranking → memory decay → compression → token budget → LLM. ([forked](https://github.com/jphein/context-engine)) | **High relevance.** The layer above MemPalace — decides what retrieved memories the LLM actually sees. Decay, compression, and budget enforcement map to TODOs #4-5. See §6b. |
+| [context-builder](https://github.com/igorls/context-builder) | Rust CLI that flattens codebases into LLM-friendly markdown. Tree-sitter AST signatures, token budgeting, smart file ordering. ([forked](https://github.com/jphein/context-builder)) | Medium relevance. AST signature extraction could feed MemPalace mining. Useful for non-Claude-Code LLM workflows. See §6c. |
 
 ### P7: Staleness verifier (new — custom skill or slash command)
 

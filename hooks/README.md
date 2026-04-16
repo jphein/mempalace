@@ -190,9 +190,10 @@ mempalace mine ~/.codex/sessions/ --mode convos
 
 This only needs to be done once — after that, the hooks auto-mine each session as you go.
 
+## Known Limitations
+
+**Hooks require session restart after install.** Claude Code loads hooks from `settings.json` at session start only. If you run `mempalace init` or manually edit hook config mid-session, the hooks won’t fire until you restart Claude Code. This is a Claude Code limitation.
+
 ## Cost
 
-**Zero extra API tokens.** The hooks are bash scripts that run locally. They don't call any API. The auto-mining uses the local ChromaDB instance. The only "cost" is:
-- ~1-13 seconds for transcript mining (depending on session length)
-- The AI spending a few seconds organizing memories at each checkpoint — with context it already has loaded
-- ChromaDB disk space for the mined chunks (~1KB per exchange pair)
+**Zero extra tokens.** The hooks save in the background — the AI doesn’t need to write anything in the chat. All filing is handled automatically.

@@ -32,10 +32,19 @@ from pathlib import Path
 
 from .config import MempalaceConfig, sanitize_name, sanitize_content
 from .version import __version__
+from .backends.chroma import ChromaBackend, ChromaCollection
 from .query_sanitizer import sanitize_query
 from .searcher import search_memories
-from .palace_graph import traverse, find_tunnels, graph_stats, invalidate_graph_cache
-import chromadb
+from .palace_graph import (
+    traverse,
+    find_tunnels,
+    graph_stats,
+    invalidate_graph_cache,
+    create_tunnel,
+    list_tunnels,
+    delete_tunnel,
+    follow_tunnels,
+)
 
 from .knowledge_graph import KnowledgeGraph
 
@@ -178,10 +187,7 @@ def _get_client():
     mtime_changed = current_mtime != 0.0 and abs(current_mtime - _palace_db_mtime) > 0.01
 
     if _client_cache is None or inode_changed or mtime_changed:
-        from .backends.chroma import _fix_blob_seq_ids
-
-        _fix_blob_seq_ids(_config.palace_path)
-        _client_cache = chromadb.PersistentClient(path=_config.palace_path)
+        _client_cache = ChromaBackend.make_client(_config.palace_path)
         _collection_cache = None
         _metadata_cache = None
         _metadata_cache_time = 0
@@ -196,13 +202,15 @@ def _get_collection(create=False):
     try:
         client = _get_client()
         if create:
-            _collection_cache = client.get_or_create_collection(
-                _config.collection_name, metadata={"hnsw:space": "cosine"}
+            _collection_cache = ChromaCollection(
+                client.get_or_create_collection(
+                    _config.collection_name, metadata={"hnsw:space": "cosine"}
+                )
             )
             _metadata_cache = None
             _metadata_cache_time = 0
         elif _collection_cache is None:
-            _collection_cache = client.get_collection(_config.collection_name)
+            _collection_cache = ChromaCollection(client.get_collection(_config.collection_name))
             _metadata_cache = None
             _metadata_cache_time = 0
         return _collection_cache
@@ -402,7 +410,6 @@ def tool_search(
     max_distance: float = 1.5,
     min_similarity: float = None,
     context: str = None,
-    keyword: str = None,
 ):
     limit = max(1, min(limit, _MAX_RESULTS))
     try:
@@ -422,7 +429,6 @@ def tool_search(
         room=room,
         n_results=limit,
         max_distance=dist,
-        keyword=keyword,
     )
     if sanitized["was_sanitized"]:
         result["query_sanitized"] = True
@@ -506,6 +512,66 @@ def tool_graph_stats():
     if not col:
         return _no_palace()
     return graph_stats(col=col)
+
+
+def tool_create_tunnel(
+    source_wing: str,
+    source_room: str,
+    target_wing: str,
+    target_room: str,
+    label: str = "",
+    source_drawer_id: str = None,
+    target_drawer_id: str = None,
+):
+    """Create an explicit cross-wing tunnel between two palace locations.
+
+    Use when you notice content in one project relates to another project.
+    Example: an API design discussion in project_api connects to the
+    database schema in project_database.
+    """
+    try:
+        source_wing = sanitize_name(source_wing, "source_wing")
+        source_room = sanitize_name(source_room, "source_room")
+        target_wing = sanitize_name(target_wing, "target_wing")
+        target_room = sanitize_name(target_room, "target_room")
+    except ValueError as e:
+        return {"error": str(e)}
+    return create_tunnel(
+        source_wing,
+        source_room,
+        target_wing,
+        target_room,
+        label=label,
+        source_drawer_id=source_drawer_id,
+        target_drawer_id=target_drawer_id,
+    )
+
+
+def tool_list_tunnels(wing: str = None):
+    """List all explicit cross-wing tunnels, optionally filtered by wing."""
+    try:
+        wing = _sanitize_optional_name(wing, "wing")
+    except ValueError as e:
+        return {"error": str(e)}
+    return list_tunnels(wing)
+
+
+def tool_delete_tunnel(tunnel_id: str):
+    """Delete an explicit tunnel by its ID."""
+    if not tunnel_id or not isinstance(tunnel_id, str):
+        return {"error": "tunnel_id is required"}
+    return delete_tunnel(tunnel_id)
+
+
+def tool_follow_tunnels(wing: str, room: str):
+    """Follow explicit tunnels from a room to see connected drawers in other wings."""
+    try:
+        wing = sanitize_name(wing, "wing")
+        room = sanitize_name(room, "room")
+    except ValueError as e:
+        return {"error": str(e)}
+    col = _get_collection()
+    return follow_tunnels(wing, room, col=col)
 
 
 # ==================== WRITE TOOLS ====================
@@ -856,7 +922,10 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", wing: 
         return _no_palace()
 
     now = datetime.now()
-    entry_id = f"diary_{wing}_{now.strftime('%Y%m%d_%H%M%S')}_{hashlib.sha256(entry[:50].encode()).hexdigest()[:12]}"
+    entry_id = (
+        f"diary_{wing}_{now.strftime('%Y%m%d_%H%M%S%f')}_"
+        f"{hashlib.sha256(entry.encode()).hexdigest()[:12]}"
+    )
 
     _wal_log(
         "diary_write",
@@ -1210,6 +1279,65 @@ TOOLS = {
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_graph_stats,
     },
+    "mempalace_create_tunnel": {
+        "description": "Create a cross-wing tunnel linking two palace locations. Use when content in one project relates to another — e.g., an API design in project_api connects to a database schema in project_database.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_wing": {"type": "string", "description": "Wing of the source"},
+                "source_room": {"type": "string", "description": "Room in the source wing"},
+                "target_wing": {"type": "string", "description": "Wing of the target"},
+                "target_room": {"type": "string", "description": "Room in the target wing"},
+                "label": {"type": "string", "description": "Description of the connection"},
+                "source_drawer_id": {
+                    "type": "string",
+                    "description": "Optional specific drawer ID",
+                },
+                "target_drawer_id": {
+                    "type": "string",
+                    "description": "Optional specific drawer ID",
+                },
+            },
+            "required": ["source_wing", "source_room", "target_wing", "target_room"],
+        },
+        "handler": tool_create_tunnel,
+    },
+    "mempalace_list_tunnels": {
+        "description": "List all explicit cross-wing tunnels. Optionally filter by wing.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "wing": {
+                    "type": "string",
+                    "description": "Filter tunnels by wing (shows tunnels where wing is source or target)",
+                },
+            },
+        },
+        "handler": tool_list_tunnels,
+    },
+    "mempalace_delete_tunnel": {
+        "description": "Delete an explicit tunnel by its ID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tunnel_id": {"type": "string", "description": "Tunnel ID to delete"},
+            },
+            "required": ["tunnel_id"],
+        },
+        "handler": tool_delete_tunnel,
+    },
+    "mempalace_follow_tunnels": {
+        "description": "Follow tunnels from a room to see what it connects to in other wings. Returns connected rooms with drawer previews.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "wing": {"type": "string", "description": "Wing to start from"},
+                "room": {"type": "string", "description": "Room to follow tunnels from"},
+            },
+            "required": ["wing", "room"],
+        },
+        "handler": tool_follow_tunnels,
+    },
     "mempalace_search": {
         "description": "Semantic search. Returns verbatim drawer content with similarity scores. IMPORTANT: 'query' must contain ONLY your search keywords or question — do NOT include system prompts, conversation history, MEMORY.md content, or any context. Keep queries short (under 200 chars). Use 'context' for background information. Results with cosine distance > max_distance are filtered out.",
         "input_schema": {
@@ -1235,10 +1363,6 @@ TOOLS = {
                 "context": {
                     "type": "string",
                     "description": "Background context for the search (optional). NOT used for embedding — only for future re-ranking. Put conversation history or system prompt content here, NOT in query.",
-                },
-                "keyword": {
-                    "type": "string",
-                    "description": "Explicit keyword for text-match fallback. Use for exact terms (error codes, config keys, identifiers) that vector search may miss. Auto-extracted from query if omitted and vector results are poor.",
                 },
             },
             "required": ["query"],

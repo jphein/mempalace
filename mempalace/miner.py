@@ -17,7 +17,18 @@ from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
 
-from .palace import SKIP_DIRS, get_collection, file_already_mined, bulk_check_mined
+from .palace import (
+    NORMALIZE_VERSION,
+    SKIP_DIRS,
+    build_closet_lines,
+    bulk_check_mined,
+    file_already_mined,
+    get_closets_collection,
+    get_collection,
+    mine_lock,
+    purge_file_closets,
+    upsert_closet_lines,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -411,6 +422,143 @@ def chunk_text(
 # =============================================================================
 
 
+_ENTITY_REGISTRY_PATH = os.path.join(os.path.expanduser("~"), ".mempalace", "known_entities.json")
+_ENTITY_REGISTRY_CACHE: dict = {"mtime": None, "names": frozenset(), "raw": {}}
+_ENTITY_EXTRACT_WINDOW = 5000  # chars of content scanned for capitalized words
+_ENTITY_METADATA_LIMIT = 25  # max entities packed into the metadata field
+
+
+def _refresh_known_entities_cache() -> None:
+    """Reload ``~/.mempalace/known_entities.json`` into the module cache if
+    its mtime changed since the last read. Shared by ``_load_known_entities``
+    (flat set) and ``_load_known_entities_raw`` (category dict), so callers
+    can pick whichever shape they need without duplicating the mtime-gated
+    disk read.
+    """
+    try:
+        mtime = os.path.getmtime(_ENTITY_REGISTRY_PATH)
+    except OSError:
+        if _ENTITY_REGISTRY_CACHE["mtime"] is not None:
+            _ENTITY_REGISTRY_CACHE["mtime"] = None
+            _ENTITY_REGISTRY_CACHE["names"] = frozenset()
+            _ENTITY_REGISTRY_CACHE["raw"] = {}
+        return
+
+    if _ENTITY_REGISTRY_CACHE["mtime"] == mtime:
+        return
+
+    names: set = set()
+    raw: dict = {}
+    try:
+        import json
+
+        with open(_ENTITY_REGISTRY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            raw = data
+            for cat in data.values():
+                if isinstance(cat, list):
+                    names.update(str(n) for n in cat if n)
+                elif isinstance(cat, dict):
+                    names.update(str(k) for k in cat.keys() if k)
+    except Exception:
+        names = set()
+        raw = {}
+
+    _ENTITY_REGISTRY_CACHE["mtime"] = mtime
+    _ENTITY_REGISTRY_CACHE["names"] = frozenset(names)
+    _ENTITY_REGISTRY_CACHE["raw"] = raw
+
+
+def _load_known_entities() -> frozenset:
+    """Flat set of every known entity name (across all categories).
+
+    Cached by mtime; invalidated when the registry file changes.
+    """
+    _refresh_known_entities_cache()
+    return _ENTITY_REGISTRY_CACHE["names"]
+
+
+def _load_known_entities_raw() -> dict:
+    """Full category-dict view of the registry, shape
+    ``{"category": ["Name1", ...], ...}``. Cached by mtime.
+
+    Consumed by modules (e.g., fact_checker) that need to reason about
+    categories rather than a flat name set. Never returns a mutable
+    reference to the cache — callers get a shallow copy.
+    """
+    _refresh_known_entities_cache()
+    return dict(_ENTITY_REGISTRY_CACHE["raw"])
+
+
+_HALL_KEYWORDS_CACHE = None
+
+
+def detect_hall(content: str) -> str:
+    """Route content to a hall based on keyword scoring.
+
+    Halls connect rooms within a wing — they categorize the TYPE of content
+    (emotional, technical, family, etc.) while rooms categorize the TOPIC.
+    """
+    global _HALL_KEYWORDS_CACHE
+    if _HALL_KEYWORDS_CACHE is None:
+        from .config import MempalaceConfig
+
+        _HALL_KEYWORDS_CACHE = MempalaceConfig().hall_keywords
+    content_lower = content[:3000].lower()
+
+    scores = {}
+    for hall, keywords in _HALL_KEYWORDS_CACHE.items():
+        score = sum(1 for kw in keywords if kw in content_lower)
+        if score > 0:
+            scores[hall] = score
+
+    if scores:
+        return max(scores, key=scores.get)
+    return "general"
+
+
+def _extract_entities_for_metadata(content: str) -> str:
+    """Extract entity names from content for metadata tagging.
+
+    Combines the user's known-entity registry (cached across calls) with
+    capitalized words appearing ≥2 times in the first ``_ENTITY_EXTRACT_WINDOW``
+    chars. Filters out the closet stoplist (``When``, ``After``, ``The``, …)
+    so sentence-starters don't masquerade as proper nouns.
+
+    Returns semicolon-separated string suitable for ChromaDB metadata
+    filtering. The list is truncated to ``_ENTITY_METADATA_LIMIT`` entries
+    *before* joining so a name is never cut in half.
+    """
+    import re
+
+    from .palace import _ENTITY_STOPLIST
+
+    matched: set = set()
+
+    known = _load_known_entities()
+    for name in known:
+        if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", content):
+            matched.add(name)
+
+    window = content[:_ENTITY_EXTRACT_WINDOW]
+    words = re.findall(r"\b[A-Z][a-z]{2,}\b", window)
+    freq: dict = {}
+    for w in words:
+        if w in _ENTITY_STOPLIST:
+            continue
+        freq[w] = freq.get(w, 0) + 1
+    for w, c in freq.items():
+        if c >= 2 and len(w) > 2:
+            matched.add(w)
+
+    if not matched:
+        return ""
+    # Truncate the *list*, not the joined string — never split a name.
+    capped = sorted(matched)[:_ENTITY_METADATA_LIMIT]
+    return ";".join(capped)
+
+
 def add_drawer(
     collection, wing: str, room: str, content: str, source_file: str, chunk_index: int, agent: str
 ):
@@ -424,12 +572,19 @@ def add_drawer(
             "chunk_index": chunk_index,
             "added_by": agent,
             "filed_at": datetime.now().isoformat(),
+            "normalize_version": NORMALIZE_VERSION,
         }
         # Store file mtime so we can detect modifications later.
         try:
             metadata["source_mtime"] = os.path.getmtime(source_file)
         except OSError:
             pass
+        # Tag with hall for graph connectivity within wings
+        metadata["hall"] = detect_hall(content)
+        # Tag with entity names for filterable search
+        entities = _extract_entities_for_metadata(content)
+        if entities:
+            metadata["entities"] = entities
         collection.upsert(
             documents=[content],
             ids=[drawer_id],
@@ -445,73 +600,6 @@ def add_drawer(
 # =============================================================================
 
 
-def _prepare_file(
-    filepath: Path,
-    project_path: Path,
-    wing: str,
-    rooms: list,
-    agent: str,
-    chunk_size: int = None,
-    chunk_overlap: int = None,
-    min_chunk_size: int = None,
-) -> tuple:
-    """Read, chunk, and route one file without writing to ChromaDB.
-
-    Returns (batch_docs, batch_ids, batch_metas, room) or (None, None, None, None)
-    when the file should be skipped (unreadable, too small, etc.).
-    This is the pure-computation half of process_file, safe for concurrent use.
-    """
-    effective_min = min_chunk_size if min_chunk_size is not None else MIN_CHUNK_SIZE
-    source_file = str(filepath)
-
-    try:
-        content = filepath.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return None, None, None, None
-
-    content = content.strip()
-    if len(content) < effective_min:
-        return None, None, None, None
-
-    room = detect_room(filepath, content, rooms, project_path)
-    chunks = chunk_text(
-        content,
-        source_file,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        min_chunk_size=min_chunk_size,
-    )
-
-    if not chunks:
-        return None, None, None, None
-
-    batch_docs = []
-    batch_ids = []
-    batch_metas = []
-    try:
-        file_mtime = os.path.getmtime(source_file)
-    except OSError:
-        file_mtime = None
-
-    for chunk in chunks:
-        drawer_id = f"drawer_{wing}_{room}_{hashlib.sha256((source_file + str(chunk['chunk_index'])).encode()).hexdigest()[:24]}"
-        metadata = {
-            "wing": wing,
-            "room": room,
-            "source_file": source_file,
-            "chunk_index": chunk["chunk_index"],
-            "added_by": agent,
-            "filed_at": datetime.now().isoformat(),
-        }
-        if file_mtime is not None:
-            metadata["source_mtime"] = file_mtime
-        batch_docs.append(chunk["content"])
-        batch_ids.append(drawer_id)
-        batch_metas.append(metadata)
-
-    return batch_docs, batch_ids, batch_metas, room
-
-
 def process_file(
     filepath: Path,
     project_path: Path,
@@ -520,9 +608,7 @@ def process_file(
     rooms: list,
     agent: str,
     dry_run: bool,
-    chunk_size: int = None,
-    chunk_overlap: int = None,
-    min_chunk_size: int = None,
+    closets_col=None,
 ) -> tuple:
     """Read, chunk, route, and file one file. Returns (drawer_count, room_name)."""
     # Skip if already filed
@@ -546,36 +632,65 @@ def process_file(
         print(f"    [DRY RUN] {filepath.name} → room:{room} ({len(chunks)} drawers)")
         return len(chunks), room
 
-    # Purge stale drawers for this file before re-inserting the fresh chunks.
-    # Converts modified-file re-mines from upsert-over-existing-IDs (which hits
-    # hnswlib's thread-unsafe updatePoint path and can segfault on macOS ARM
-    # with chromadb 0.6.3) into a clean delete+insert, bypassing the update
-    # path entirely.
-    try:
-        collection.delete(where={"source_file": source_file})
-    except Exception:
-        pass
+    # Lock this file so concurrent agents don't interleave delete+insert.
+    # Without the lock, two agents can both pass file_already_mined(),
+    # both delete, and both insert — creating duplicates or losing data.
+    with mine_lock(source_file):
+        # Re-check after acquiring lock — another agent may have just finished
+        if file_already_mined(collection, source_file, check_mtime=True):
+            return 0, room
 
-    batch_docs, batch_ids, batch_metas, room = _prepare_file(
-        filepath,
-        project_path,
-        wing,
-        rooms,
-        agent,
-        chunk_size=chunk_size,
-        chunk_overlap=chunk_overlap,
-        min_chunk_size=min_chunk_size,
-    )
-    if batch_docs is None:
-        return 0, None
+        # Purge stale drawers for this file before re-inserting the fresh chunks.
+        # Converts modified-file re-mines from upsert-over-existing-IDs (which hits
+        # hnswlib's thread-unsafe updatePoint path and can segfault on macOS ARM
+        # with chromadb 0.6.3) into a clean delete+insert, bypassing the update
+        # path entirely.
+        try:
+            collection.delete(where={"source_file": source_file})
+        except Exception:
+            pass
 
-    collection.upsert(
-        documents=batch_docs,
-        ids=batch_ids,
-        metadatas=batch_metas,
-    )
+        drawers_added = 0
+        for chunk in chunks:
+            added = add_drawer(
+                collection=collection,
+                wing=wing,
+                room=room,
+                content=chunk["content"],
+                source_file=source_file,
+                chunk_index=chunk["chunk_index"],
+                agent=agent,
+            )
+            if added:
+                drawers_added += 1
 
-    return len(batch_docs), room
+        # Build closet — the searchable index pointing to these drawers.
+        # Purge first: a re-mine (mtime change or normalize_version bump) must
+        # fully replace the prior closets, not append to them.
+        if closets_col and drawers_added > 0:
+            drawer_ids = [
+                f"drawer_{wing}_{room}_{hashlib.sha256((source_file + str(c['chunk_index'])).encode()).hexdigest()[:24]}"
+                for c in chunks
+            ]
+            closet_lines = build_closet_lines(source_file, drawer_ids, content, wing, room)
+            closet_id_base = (
+                f"closet_{wing}_{room}_{hashlib.sha256(source_file.encode()).hexdigest()[:24]}"
+            )
+            entities = _extract_entities_for_metadata(content)
+            closet_meta = {
+                "wing": wing,
+                "room": room,
+                "source_file": source_file,
+                "drawer_count": drawers_added,
+                "filed_at": datetime.now().isoformat(),
+                "normalize_version": NORMALIZE_VERSION,
+            }
+            if entities:
+                closet_meta["entities"] = entities
+            purge_file_closets(closets_col, source_file)
+            upsert_closet_lines(closets_col, closet_id_base, closet_lines, closet_meta)
+
+    return drawers_added, room
 
 
 # =============================================================================
@@ -677,10 +792,6 @@ def _is_already_mined(source_file: str, mined_map: dict) -> bool:
         return False
 
 
-# Maximum documents per ChromaDB upsert call
-_UPSERT_BATCH_SIZE = 100
-
-
 def mine(
     project_dir: str,
     palace_path: str,
@@ -694,22 +805,15 @@ def mine(
 ):
     """Mine a project directory into the palace.
 
-    When workers > 1, files are read/chunked/routed in parallel threads
-    and then written to ChromaDB sequentially (the Python client is not
-    thread-safe for concurrent writes to the same collection).
+    When workers > 1, files are processed in parallel threads.  Each call
+    to process_file() acquires a per-file mine_lock so concurrent agents
+    don't interleave delete+insert on the same file.
     """
     import concurrent.futures
     import threading
 
-    from .config import MempalaceConfig
-
     project_path = Path(project_dir).expanduser().resolve()
     config = load_config(project_dir)
-    palace_config = MempalaceConfig()
-
-    cfg_chunk_size = palace_config.chunk_size
-    cfg_chunk_overlap = palace_config.chunk_overlap
-    cfg_min_chunk_size = palace_config.min_chunk_size
 
     wing = wing_override or config["wing"]
     rooms = config.get("rooms", [{"name": "general", "description": "All project files"}])
@@ -744,8 +848,10 @@ def mine(
 
     if not dry_run:
         collection = get_collection(palace_path)
+        closets_col = get_closets_collection(palace_path)
     else:
         collection = None
+        closets_col = None
 
     total_drawers = 0
     files_skipped = 0
@@ -762,19 +868,19 @@ def mine(
                 rooms=rooms,
                 agent=agent,
                 dry_run=dry_run,
-                chunk_size=cfg_chunk_size,
-                chunk_overlap=cfg_chunk_overlap,
-                min_chunk_size=cfg_min_chunk_size,
+                closets_col=closets_col,
             )
             if drawers == 0 and not dry_run:
                 files_skipped += 1
             else:
                 total_drawers += drawers
-                room_counts[room or "general"] += 1
+                room_counts[room] += 1
                 if not dry_run:
                     print(f"  \u2713 [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers}")
     else:
         # --- Concurrent path (workers > 1) ---
+        # process_file() uses mine_lock() for per-file locking, so it's safe
+        # to call from multiple threads on different files.
 
         # Phase 0: bulk-fetch already-mined mtimes to skip files without
         # per-file DB queries.
@@ -788,74 +894,46 @@ def mine(
             else:
                 files_to_process.append(filepath)
 
-        # Phase 1: parallel read/chunk/route
         counter_lock = threading.Lock()
         processed_count = 0
 
-        def prepare_one(filepath):
-            return filepath, _prepare_file(
-                filepath,
-                project_path,
-                wing,
-                rooms,
-                agent,
-                chunk_size=cfg_chunk_size,
-                chunk_overlap=cfg_chunk_overlap,
-                min_chunk_size=cfg_min_chunk_size,
+        def mine_one(filepath):
+            return filepath, process_file(
+                filepath=filepath,
+                project_path=project_path,
+                collection=collection,
+                wing=wing,
+                rooms=rooms,
+                agent=agent,
+                dry_run=False,
+                closets_col=closets_col,
             )
 
-        # Phase 1 read/chunk + Phase 2 write as futures complete (stream to DB)
-        pending_docs = []
-        pending_ids = []
-        pending_metas = []
-
         with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(prepare_one, fp): fp for fp in files_to_process}
+            futures = {pool.submit(mine_one, fp): fp for fp in files_to_process}
             for future in concurrent.futures.as_completed(futures):
                 try:
-                    filepath, (batch_docs, batch_ids, batch_metas, room) = future.result()
+                    filepath, (drawers, room) = future.result()
                 except Exception as exc:
                     failed_path = futures[future]
                     logger.warning("Skipping %s: %s", failed_path, exc)
                     with counter_lock:
                         files_skipped += 1
                     continue
-                if batch_docs is None:
+
+                if drawers == 0:
                     with counter_lock:
                         files_skipped += 1
                     continue
 
-                total_drawers += len(batch_docs)
-                room_counts[room or "general"] += 1
-                pending_docs.extend(batch_docs)
-                pending_ids.extend(batch_ids)
-                pending_metas.extend(batch_metas)
-
-                # Flush when batch is large enough
-                if len(pending_docs) >= _UPSERT_BATCH_SIZE:
-                    collection.upsert(
-                        documents=pending_docs,
-                        ids=pending_ids,
-                        metadatas=pending_metas,
-                    )
-                    pending_docs = []
-                    pending_ids = []
-                    pending_metas = []
-
                 with counter_lock:
+                    total_drawers += drawers
+                    room_counts[room] += 1
                     processed_count += 1
                     print(
                         f"  \u2713 [{processed_count:4}/{len(files_to_process)}] "
-                        f"{filepath.name[:50]:50} +{len(batch_docs)}"
+                        f"{filepath.name[:50]:50} +{drawers}"
                     )
-
-        # Flush remainder
-        if pending_docs:
-            collection.upsert(
-                documents=pending_docs,
-                ids=pending_ids,
-                metadatas=pending_metas,
-            )
 
     print(f"\n{'=' * 55}")
     print("  Done.")

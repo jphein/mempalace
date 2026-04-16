@@ -143,65 +143,31 @@ if [ "$SINCE_LAST" -ge "$SAVE_INTERVAL" ] && [ "$EXCHANGE_COUNT" -gt 0 ]; then
 
     echo "[$(date '+%H:%M:%S')] TRIGGERING SAVE at exchange $EXCHANGE_COUNT" >> "$STATE_DIR/hook.log"
 
-    # Optional: run mempalace ingest in background if MEMPAL_DIR is set
+    # Auto-mine the transcript. Two paths:
+    # 1. TRANSCRIPT_PATH (from Claude Code) — mine the directory it lives in
+    # 2. MEMPAL_DIR (user-configured) — mine that directory
+    # At least one should work. If neither is set, nothing mines.
+    PYTHON="$(command -v python3)"
+    MINE_DIR=""
+    if [ -n "$TRANSCRIPT_PATH" ] && [ -f "$TRANSCRIPT_PATH" ]; then
+        MINE_DIR="$(dirname "$TRANSCRIPT_PATH")"
+    fi
     if [ -n "$MEMPAL_DIR" ] && [ -d "$MEMPAL_DIR" ]; then
-        SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-        REPO_DIR="$(dirname "$SCRIPT_DIR")"
-        "$MP_PYTHON" -m mempalace mine "$MEMPAL_DIR" >> "$STATE_DIR/hook.log" 2>&1 &
+        MINE_DIR="$MEMPAL_DIR"
+    fi
+    if [ -n "$MINE_DIR" ]; then
+        "$PYTHON" -m mempalace mine "$MINE_DIR" >> "$STATE_DIR/hook.log" 2>&1 &
     fi
 
-    # Auto-mine the transcript — captures tool output that the AI would summarize away
-    if [ -f "$TRANSCRIPT_PATH" ]; then
-        "$MP_PYTHON" - "$TRANSCRIPT_PATH" <<'PYMINE'
-import sys
-try:
-    import hashlib
-    from datetime import datetime
-    from mempalace.normalize import normalize
-    from mempalace.convo_miner import chunk_exchanges, detect_convo_room
-    from mempalace.palace import get_collection
-    from mempalace.config import MempalaceConfig
-    palace = MempalaceConfig().palace_path
-    content = normalize(sys.argv[1])
-    if content and len(content.strip()) >= 50:
-        collection = get_collection(palace)
-        source = sys.argv[1]
-        # No file_already_mined check — transcript grows during session.
-        # upsert is idempotent: same chunk_index → same ID → overwrite.
-        chunks = chunk_exchanges(content)
-        if chunks:
-            room = detect_convo_room(content) or "session"
-            wing = "conversations"
-            docs, ids, metas = [], [], []
-            for chunk in chunks:
-                cid = hashlib.sha256(
-                    (source + str(chunk["chunk_index"])).encode()
-                ).hexdigest()[:24]
-                docs.append(chunk["content"])
-                ids.append(f"drawer_{wing}_{room}_{cid}")
-                metas.append({
-                    "wing": wing, "room": room, "source_file": source,
-                    "chunk_index": chunk["chunk_index"],
-                    "added_by": "hook", "filed_at": datetime.now().isoformat(),
-                    "ingest_mode": "convos", "extract_mode": "exchange",
-                })
-            for i in range(0, len(docs), 100):
-                collection.upsert(
-                    documents=docs[i:i+100], ids=ids[i:i+100],
-                    metadatas=metas[i:i+100],
-                )
-except Exception:
-    pass  # Hook must never crash the AI
-PYMINE
-        >> "$STATE_DIR/hook.log" 2>&1
-    fi
-
-    # Block the AI and tell it to save
-    # The "reason" becomes a system message the AI sees and acts on
+    # Notify the AI that a checkpoint happened — but do NOT ask it to write
+    # anything in chat. All filing happens in the background via the pipeline.
+    # The old version asked the agent to write diary entries, add drawers, and
+    # add KG triples in the chat window — that cost ~$1/session in retransmitted
+    # tokens and cluttered the conversation.
     cat << 'HOOKJSON'
 {
-  "decision": "block",
-  "reason": "AUTO-SAVE checkpoint (MemPalace). Save this session's key content:\n1. mempalace_diary_write — session summary (what was discussed, key decisions, current state of work)\n2. mempalace_add_drawer — verbatim quotes, decisions, code snippets (place in appropriate wing and room)\n3. mempalace_kg_add — entity relationships (optional)\nFor THIS save, use MemPalace MCP tools only (not auto-memory .md files). Use verbatim quotes where possible. Continue conversation after saving."
+  "decision": "allow",
+  "reason": "MemPalace auto-save checkpoint. Your conversation is being saved verbatim in the background — no action needed from you. Continue working."
 }
 HOOKJSON
 else

@@ -65,7 +65,7 @@ mempalace status
 ### MCP Server (Claude Code / Cursor / Gemini)
 
 ```bash
-claude plugin marketplace add milla-jovovich/mempalace
+claude plugin marketplace add MemPalace/mempalace
 claude plugin install --scope user mempalace
 ```
 
@@ -97,7 +97,7 @@ mempalace wake-up > context.txt
 # Paste context.txt into your local model's system prompt
 ```
 
-This gives your local model ~170 tokens of critical facts (in AAAK if you prefer) before you ask a single question.
+This gives your local model ~600-900 tokens of critical facts (in AAAK if you prefer) before you ask a single question.
 
 **2. CLI search** — query on demand, feed results into your prompt:
 
@@ -128,10 +128,10 @@ Decisions happen in conversations now. Not in docs. Not in Jira. In conversation
 |----------|--------------|-------------|
 | Paste everything | 19.5M — doesn't fit any context window | Impossible |
 | LLM summaries | ~650K | ~$507/yr |
-| **MemPalace wake-up** | **~170 tokens** | **~$0.70/yr** |
+| **MemPalace wake-up** | **~600-900 tokens** | **~$0.70/yr** |
 | **MemPalace + 5 searches** | **~13,500 tokens** | **~$10/yr** |
 
-MemPalace loads 170 tokens of critical facts on wake-up — your team, your projects, your preferences. Then searches only when needed. $10/year to remember everything vs $507/year for summaries that lose context.
+MemPalace loads ~600-900 tokens of critical facts on wake-up — your team, your projects, your preferences. Then searches only when needed. $10/year to remember everything vs $507/year for summaries that lose context.
 
 ---
 
@@ -187,7 +187,7 @@ You say what you're looking for and boom, it already knows which wing to go to. 
 **Rooms** — specific topics within a wing. Auth, billing, deploy — endless rooms.
 **Halls** — connections between related rooms *within* the same wing. If Room A (auth) and Room B (security) are related, a hall links them.
 **Tunnels** — connections *between* wings. When Person A and a Project both have a room about "auth," a tunnel cross-references them automatically.
-**Closets** — summaries that point to the original content. (In v3.0.0 these are plain-text summaries; AAAK-encoded closets are coming in a future update — see [Task #30](https://github.com/milla-jovovich/mempalace/issues/30).)
+**Closets** — summaries that point to the original content. (In v3.0.0 these are plain-text summaries; AAAK-encoded closets are coming in a future update — see [Task #30](https://github.com/MemPalace/mempalace/issues/30).)
 **Drawers** — the original verbatim files. The exact words, never summarized.
 
 **Halls** are memory types — the same in every wing, acting as corridors:
@@ -222,7 +222,7 @@ Our fork's [direction doc](docs/fork-direction.md) has the full analysis. The sh
 | **L2** | Room recall — recent sessions, current project | On demand | When topic comes up |
 | **L3** | Deep search — semantic query across all closets | On demand | When explicitly asked |
 
-Your AI wakes up with L0 + L1 (~170 tokens) and knows your world. Searches only fire when needed.
+Your AI wakes up with L0 + L1 (~600-900 tokens) and knows your world. Searches only fire when needed.
 
 ### AAAK Dialect (experimental)
 
@@ -236,11 +236,11 @@ AAAK is a lossy abbreviation system — entity codes, structural markers, and se
 - **AAAK currently regresses LongMemEval** vs raw verbatim retrieval (84.2% R@5 vs 96.6%). The 96.6% headline number is from **raw mode**, not AAAK mode.
 - **The MemPalace storage default is raw verbatim text in ChromaDB** — that's where the benchmark wins come from. AAAK is a separate compression layer for context loading, not the storage format.
 
-We're iterating on the dialect spec, adding a real tokenizer for stats, and exploring better break points for when to use it. Track progress in [Issue #43](https://github.com/milla-jovovich/mempalace/issues/43) and [#27](https://github.com/milla-jovovich/mempalace/issues/27).
+We're iterating on the dialect spec, adding a real tokenizer for stats, and exploring better break points for when to use it. Track progress in [Issue #43](https://github.com/MemPalace/mempalace/issues/43) and [#27](https://github.com/MemPalace/mempalace/issues/27).
 
 ### Contradiction Detection (experimental, not yet wired into KG)
 
-A separate utility (`fact_checker.py`) can check assertions against entity facts. It's not currently called automatically by the knowledge graph operations — this is being fixed (track in [Issue #27](https://github.com/milla-jovovich/mempalace/issues/27)). When enabled it catches things like:
+A separate utility (`fact_checker.py`) can check assertions against entity facts. It's not currently called automatically by the knowledge graph operations — this is being fixed (track in [Issue #27](https://github.com/MemPalace/mempalace/issues/27)). When enabled it catches things like:
 
 ```
 Input:  "Soren finished the auth migration"
@@ -392,7 +392,7 @@ Letta charges $20–200/mo for agent-managed memory. MemPalace does it with a wi
 
 ```bash
 # Via plugin (recommended)
-claude plugin marketplace add milla-jovovich/mempalace
+claude plugin marketplace add MemPalace/mempalace
 claude plugin install --scope user mempalace
 
 # Or manual MCP
@@ -453,8 +453,8 @@ All fork changes submitted as separate focused PRs to [milla-jovovich/mempalace]
 MIT — see [LICENSE](LICENSE).
 
 <!-- Link Definitions -->
-[version-shield]: https://img.shields.io/badge/version-3.2.0-4dc9f6?style=flat-square&labelColor=0a0e14
-[release-link]: https://github.com/milla-jovovich/mempalace/releases
+[version-shield]: https://img.shields.io/badge/version-3.3.0-4dc9f6?style=flat-square&labelColor=0a0e14
+[release-link]: https://github.com/MemPalace/mempalace/releases
 [python-shield]: https://img.shields.io/badge/python-3.9+-7dd8f8?style=flat-square&labelColor=0a0e14&logo=python&logoColor=7dd8f8
 [python-link]: https://www.python.org/
 [license-shield]: https://img.shields.io/badge/license-MIT-b0e8ff?style=flat-square&labelColor=0a0e14
