@@ -1,5 +1,6 @@
 """ChromaDB-backed MemPalace collection adapter."""
 
+import datetime as _dt
 import logging
 import os
 import sqlite3
@@ -12,6 +13,69 @@ logger = logging.getLogger(__name__)
 
 
 _BLOB_FIX_MARKER = ".blob_seq_ids_migrated"
+
+
+def quarantine_stale_hnsw(palace_path: str, stale_seconds: float = 3600.0) -> list:
+    """Rename HNSW segment dirs whose files are stale vs. chroma.sqlite3.
+
+    When ChromaDB 1.5.x loads an HNSW segment that disagrees with the live
+    ``embeddings`` table in sqlite, the Rust graph-walk dereferences dangling
+    neighbor pointers and segfaults in a background thread (the failure
+    mirrored at neo-cortex-mcp#2 and observed locally at offset ``a3ee57``
+    in ``chromadb_rust_bindings.abi3.so``).
+
+    Heuristic: if the sqlite mtime is more than *stale_seconds* newer than
+    the HNSW ``data_level0.bin`` mtime, the segment is suspect and gets
+    renamed out of the way. Chroma reopens cleanly without it and rebuilds
+    index files on next write. The original directory is renamed, not
+    deleted, so recovery remains possible.
+
+    Returns the list of quarantined segment paths.
+    """
+    db_path = os.path.join(palace_path, "chroma.sqlite3")
+    if not os.path.isfile(db_path):
+        return []
+    try:
+        sqlite_mtime = os.path.getmtime(db_path)
+    except OSError:
+        return []
+
+    moved: list = []
+    try:
+        entries = os.listdir(palace_path)
+    except OSError:
+        return []
+
+    for name in entries:
+        if "-" not in name or name.startswith(".") or ".drift-" in name:
+            continue
+        seg_dir = os.path.join(palace_path, name)
+        if not os.path.isdir(seg_dir):
+            continue
+        hnsw_bin = os.path.join(seg_dir, "data_level0.bin")
+        if not os.path.isfile(hnsw_bin):
+            continue
+        try:
+            hnsw_mtime = os.path.getmtime(hnsw_bin)
+        except OSError:
+            continue
+        if sqlite_mtime - hnsw_mtime < stale_seconds:
+            continue
+        stamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = f"{seg_dir}.drift-{stamp}"
+        try:
+            os.rename(seg_dir, target)
+            moved.append(target)
+            logger.warning(
+                "Quarantined stale HNSW segment %s "
+                "(sqlite %.0fs newer than HNSW); renamed to %s",
+                seg_dir,
+                sqlite_mtime - hnsw_mtime,
+                target,
+            )
+        except OSError:
+            logger.exception("Failed to quarantine stale HNSW segment %s", seg_dir)
+    return moved
 
 
 def _fix_blob_seq_ids(palace_path: str):
