@@ -111,7 +111,7 @@ What this fork adds beyond upstream v3.3.1.
 
 ## Roadmap
 
-Ordered by impact. Informed by competitive research (Karta, Hindsight, engram, context-engine, CaviraOSS) and our own usage patterns. Each item is evaluated against the three principles above.
+Ordered by impact. Informed by competitive research ([Karta](https://github.com/rohithzr/karta), Hindsight, [engram](https://github.com/NickCirv/engram), [context-engine](https://github.com/Emmimal/context-engine), CaviraOSS) and our own usage patterns — see [Sources](#sources) at the bottom for the full reference list. Each item is evaluated against the three principles above.
 
 ### Done
 - Hybrid search fallback (superseded by upstream BM25)
@@ -166,7 +166,7 @@ Strip known injection patterns (role-play instructions, "ignore previous instruc
 - **Expanding hierarchy types** (tunnels, closets, new room categories). Adding more categories doesn't address the write-time classification problem. Tags (P0) and derived scope (P1) do.
 - **Benchmark work** — our value is "134K drawers of verbatim local history with fast search," not upstream's LongMemEval score.
 - **Full architecture rewrite** — not worth the migration cost.
-- **Dual-granularity ANN, dream engine, foresight signals** — Karta-inspired features that require LLM calls on every write. Our zero-LLM philosophy makes these opt-in at best.
+- **Dual-granularity ANN, dream engine, foresight signals** — [Karta](https://github.com/rohithzr/karta)-inspired features that require LLM calls on every write. Our zero-LLM philosophy makes these opt-in at best.
 - **FTS5 parallel index** — right idea (engram proves it), but significant infrastructure alongside ChromaDB. Revisit after tags and decay are proven.
 
 ## Open problems
@@ -235,6 +235,31 @@ python -m pytest tests/ -q              # ~900 tests (benchmarks deselected)
 mempalace status                         # palace health
 ruff check . && ruff format --check .    # lint + format
 ```
+
+## Sources
+
+Articles and surveys that shaped the fork's direction, competitive framing, and roadmap. Referenced throughout this README.
+
+### Primary research
+
+- [**lhl/agentic-memory**](https://github.com/lhl/agentic-memory) — multi-system analysis of agentic memory architectures. [`ANALYSIS-mempalace.md`](https://github.com/lhl/agentic-memory/blob/main/ANALYSIS-mempalace.md) is the specific MemPalace review that seeded our 7-item roadmap on 2026-04-11; [`ANALYSIS-karta.md`](https://github.com/lhl/agentic-memory/blob/main/ANALYSIS-karta.md) anchors the "deprioritized Karta-inspired features" list.
+- [**codingwithcody.com — "MemPalace: digital castles on sand"**](https://codingwithcody.com/2026/04/13/mempalace-digital-castles-on-sand/) — 2026-04-13 critique (a TagMem promotion piece) whose hierarchy-causes-bugs argument directly produced architectural principles 1 and 2.
+- [**OSS Insight — Agent Memory Race 2026**](https://ossinsight.io/blog/agent-memory-race-2026) — competitive landscape survey we cross-referenced against `lhl/agentic-memory` before writing the comparison table.
+
+### Systems inspiring roadmap items
+
+- [**Karta**](https://github.com/rohithzr/karta) — contradiction detection, dream-engine feedback loop, foresight signals, dual-granularity search, 14-step read pipeline with abstention. Inspires parts of P3/P4/P5; the heavier LLM-per-write features are deprioritized.
+- [**Gigabrain**](https://github.com/legendaryvibecoder/gigabrain) — 30+ junk-filter patterns on write, event-sourced audit trail, nightly 8-stage maintenance. Pattern to steal for the stale-docs problem.
+- [**Codex memory**](https://github.com/openai/codex) — citation-driven retention (usage count feeds selection and pruning), two-phase extraction → consolidation. Influences P3 feedback loops.
+- [**ByteRover CLI**](https://github.com/campfirein/byterover-cli) — 5-tier progressive retrieval (exact cache → fuzzy cache → index → LLM → agentic). Pattern to consider for the context-feeding open problem.
+- [**engram**](https://github.com/NickCirv/engram) — Go + SQLite FTS5 parallel index; file-read interception prototype referenced in [discussion #798](https://github.com/MemPalace/mempalace/discussions/798). Cited in deprioritized FTS5 item and the auto-surfacing open problem.
+- [**context-engine**](https://github.com/Emmimal/context-engine) — ~200-line exponential decay implementation that ports directly into P2.
+
+### Systems mentioned without captured primary URLs
+
+The comparison table names several systems whose primary repos we did not record when writing it. Anyone sourcing from this README should cite their upstream directly:
+
+- Hindsight, Mem0 / OpenMemory, Cognee, Letta, CaviraOSS OpenMemory, Zep / Graphiti, TagMem.
 
 ## License
 
