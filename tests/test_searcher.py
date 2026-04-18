@@ -89,6 +89,37 @@ class TestSearchMemories:
         assert result["filters"]["wing"] == "project"
         assert result["filters"]["room"] == "backend"
 
+    def test_search_memories_handles_none_metadata(self):
+        """API path: `None` entries in the drawer results' metadatas list must
+        fall back to the sentinel strings (wing/room 'unknown', source '?')
+        rather than raising `AttributeError: 'NoneType' object has no
+        attribute 'get'` while the rest of the result set renders."""
+        mock_col = MagicMock()
+        mock_col.query.return_value = {
+            "documents": [["first doc", "second doc"]],
+            "metadatas": [[{"source_file": "a.md", "wing": "w", "room": "r"}, None]],
+            "distances": [[0.1, 0.2]],
+            "ids": [["d1", "d2"]],
+        }
+
+        def mock_get_collection(path, create=False):
+            # First call: drawers. Second call: closets — raise so hybrid
+            # degrades to pure drawer search (the catch block covers it).
+            if not hasattr(mock_get_collection, "_called"):
+                mock_get_collection._called = True
+                return mock_col
+            raise RuntimeError("no closets")
+
+        with patch("mempalace.searcher.get_collection", side_effect=mock_get_collection):
+            result = search_memories("anything", "/fake/path")
+        assert "results" in result
+        assert len(result["results"]) == 2
+        # The None-metadata hit renders with sentinel values, not a crash.
+        none_hit = result["results"][1]
+        assert none_hit["text"] == "second doc"
+        assert none_hit["wing"] == "unknown"
+        assert none_hit["room"] == "unknown"
+
 
 # ── search() (CLI print function) ─────────────────────────────────────
 

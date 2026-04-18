@@ -378,6 +378,7 @@ def search_memories(
                 _first_or_empty(closet_results, "distances"),
             )
         ):
+            cmeta = cmeta or {}
             source = cmeta.get("source_file", "")
             if source and source not in closet_boost_by_source:
                 closet_boost_by_source[source] = (rank, cdist, cdoc[:200])
@@ -400,6 +401,7 @@ def search_memories(
         if max_distance > 0.0 and dist > max_distance:
             continue
 
+        meta = meta or {}
         source = meta.get("source_file", "") or ""
         boost = 0.0
         matched_via = "drawer"
