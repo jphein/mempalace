@@ -282,10 +282,17 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
     """
     result = search_memories(query, palace_path, wing=wing, room=room, n_results=n_results)
     if "error" in result and not result.get("results"):
-        print(f"\n  {result['error']}")
+        # Preserve the palace path in the printed error so the user sees
+        # which palace the search tried to open (a common source of
+        # confusion when more than one palace is in play). The structured
+        # error payload from search_memories is intentionally path-agnostic.
+        error_message = result["error"]
+        if error_message == "No palace found":
+            error_message = f"{error_message} at {palace_path}"
+        print(f"\n  {error_message}")
         if "hint" in result:
             print(f"  {result['hint']}")
-        raise SearchError(result["error"])
+        raise SearchError(error_message)
 
     warnings = result.get("warnings") or []
     hits = result.get("results") or []
@@ -341,29 +348,81 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
     print()
 
 
+def _count_in_scope(drawers_col, where: dict) -> int | None:
+    """Return the total number of drawers matching ``where`` via paginated
+    ``col.get(include=[], ...)`` calls.
+
+    ChromaDB's ``Collection.count()`` does not accept a ``where`` filter, so
+    for a sqlite-authoritative per-scope count we paginate ``get()`` with
+    ``include=[]`` (ids are always returned by Chroma, even when include is
+    empty) and sum the batch sizes. Pagination keeps each query well under
+    the #950 "too many SQL variables" limit.
+
+    Returns ``None`` if the count could not be computed (e.g., filter
+    planner error).
+    """
+    PAGE = 5000
+    offset = 0
+    total = 0
+    try:
+        while True:
+            kwargs: dict = {"limit": PAGE, "offset": offset, "include": []}
+            if where:
+                kwargs["where"] = where
+            batch = drawers_col.get(**kwargs)
+            batch_ids = batch.get("ids") or []
+            if not batch_ids:
+                break
+            total += len(batch_ids)
+            if len(batch_ids) < PAGE:
+                break
+            offset += len(batch_ids)
+    except Exception:
+        return None
+    return total
+
+
 def _sqlite_fallback_and_scope(
     drawers_col,
     query: str,
     where: dict,
     hits: list,
     n_results: int,
+    vector_underdelivered: bool,
     allow_fallback: bool,
 ) -> tuple:
-    """Count in-scope drawers via sqlite and, if enabled, top up the hits
-    list with BM25-ranked sqlite candidates when the vector path returned
-    fewer than ``n_results``.
+    """Compute the sqlite-authoritative in-scope count and, if enabled, top
+    up the hits list with BM25-ranked sqlite candidates when the vector
+    path returned fewer than ``n_results``.
+
+    ``vector_underdelivered`` is independent from ``len(hits) < n_results``
+    after this function mutates ``hits``, so callers can gate the "more in
+    scope than we could rank" warning on whether the *vector path* was the
+    degraded layer, rather than on the final hit count after BM25 top-up.
 
     Returns ``(available_in_scope, warnings)``. Mutates ``hits`` in place
     when it adds fallback entries.
     """
     warnings: list[str] = []
-    available_in_scope: int | None = None
+
+    # Sqlite-authoritative scope count (paginated, independent of the pool
+    # we read for BM25 ranking). None on failure — caller treats that as
+    # "unknown" rather than crashing.
+    available_in_scope = _count_in_scope(drawers_col, where)
+
+    if not allow_fallback or not vector_underdelivered:
+        return available_in_scope, warnings
+
+    shortfall = n_results - len(hits)
+    if shortfall <= 0:
+        return available_in_scope, warnings
+
+    # Fetch a bounded BM25 candidate pool. Cap keeps #950 at bay and a
+    # pool 20x the request is plenty for keyword-rank top-up.
     try:
         pool_kwargs: dict = {"include": ["documents", "metadatas"]}
         if where:
             pool_kwargs["where"] = where
-        # Cap the pool — sqlite-variable limits (#950) bite around 32k, and
-        # a fallback pool 20x the request is plenty for BM25 ranking.
         pool_kwargs["limit"] = max(n_results * 20, 100)
         pool = drawers_col.get(**pool_kwargs)
     except Exception as e:
@@ -372,12 +431,9 @@ def _sqlite_fallback_and_scope(
 
     pool_docs = pool.get("documents") or []
     pool_metas = pool.get("metadatas") or []
-    available_in_scope = len(pool_docs)
-
-    if not allow_fallback or len(hits) >= n_results or not pool_docs:
+    if not pool_docs:
         return available_in_scope, warnings
 
-    shortfall = n_results - len(hits)
     seen_texts = {h.get("text") for h in hits if h.get("text")}
     candidate_docs: list = []
     candidate_metas: list = []
@@ -639,6 +695,14 @@ def search_memories(
         h.pop("_source_file_full", None)
         h.pop("_chunk_index", None)
 
+    # Track whether the VECTOR path was the degraded layer, separate from
+    # the final hit count. This lets the "more in scope than we could rank"
+    # warning fire correctly even when the BM25 fallback happened to fill
+    # the request — the vector index still underdelivered, which is the
+    # real signal pointing at `mempalace repair`.
+    vector_hit_count = len(hits)
+    vector_underdelivered = vector_hit_count < n_results
+
     # Sqlite-authoritative scope count + top-up fallback. When max_distance
     # is set, the caller wants strict similarity — don't pad with BM25-only
     # hits that have no vector distance. Scope count still runs so callers
@@ -649,16 +713,26 @@ def search_memories(
         where,
         hits,
         n_results=n_results,
+        vector_underdelivered=vector_underdelivered,
         allow_fallback=(max_distance <= 0.0),
     )
     warnings.extend(fallback_warnings)
 
-    # Surface unreachable data: scope has more matches than we could rank.
-    if available_in_scope is not None and available_in_scope > len(hits) and len(hits) < n_results:
+    # Surface unreachable data: the scope in sqlite has more drawers than
+    # the vector path could rank. Gate off vector_underdelivered (not final
+    # hit count) so the warning still surfaces when BM25 fallback filled
+    # the request — vector is still the degraded layer; the fallback is
+    # keyword-only and doesn't have semantic recall.
+    if (
+        vector_underdelivered
+        and available_in_scope is not None
+        and available_in_scope > vector_hit_count
+    ):
         warnings.append(
             f"{available_in_scope} drawers match this scope in sqlite; "
-            f"{len(hits)} ranked — the rest are unreachable via the current "
-            f"HNSW index. Run `mempalace repair` to rebuild."
+            f"vector ranked {vector_hit_count} — the rest are only reachable "
+            f"by keyword match. Run `mempalace repair` to rebuild the HNSW "
+            f"index for full semantic recall."
         )
 
     return {
