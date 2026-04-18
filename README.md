@@ -77,11 +77,12 @@ What this fork adds beyond upstream v3.3.1.
 | **Reliability** | Guard ChromaDB 1.5.x metadata-mismatch segfault — `try get → fallback create` instead of `get_or_create_collection(metadata=…)` | `backends/chroma.py`, `mcp_server.py` |
 | **Reliability** | Skip `_fix_blob_seq_ids` sqlite open after first successful migration via `.blob_seq_ids_migrated` marker — opening sqlite3 against a live ChromaDB 1.5.x file corrupts the next PersistentClient | `backends/chroma.py` |
 | **Reliability** | `quarantine_stale_hnsw()` helper — renames HNSW segments whose `data_level0.bin` is 1h+ older than `chroma.sqlite3`, sidesteps read-path SIGSEGV from dangling neighbor pointers (same failure mode as neo-cortex-mcp#2) | `backends/chroma.py` |
-| **Reliability** | Guard `meta or {}` in CLI search print path — upstream `searcher.py:273` raises `AttributeError` on `None` metadata mid-render | `searcher.py` |
+| **Reliability** | `meta or {}` None-metadata guards across 8 read-path loops — ChromaDB's `query()`/`get()` return `None` entries for drawers with no stored metadata, which crashed `searcher.py` (CLI + API + closet-boost), `miner.status()`, and 4 MCP handlers (`tool_status`, `tool_list_wings`, `tool_list_rooms`, `tool_get_taxonomy`) with `AttributeError` mid-tally | `searcher.py`, `miner.py`, `mcp_server.py` |
 | **Performance** | `bulk_check_mined()` — paginated pre-fetch for concurrent mining | `palace.py`, `miner.py` |
 | **Performance** | Graph cache — 60s TTL, invalidated on writes | `palace_graph.py` |
 | **Performance** | L1 importance pre-filter — `importance >= 3` first, full scan fallback | `layers.py` |
 | **Search** | `max_distance` parameter (cosine distance threshold, default 1.5) | `mcp_server.py`, `searcher.py` |
+| **Search** | Warnings + sqlite BM25 top-up when vector underdelivers — `search_memories` returns `warnings: [...]` and `available_in_scope: N` so callers see why recall was partial; fallback hits tagged `matched_via: "sqlite_bm25_fallback"`. The palace never silently returns fewer results than the scope contains (sibling of #951, addresses read-side of #823) | `searcher.py` |
 | **Hooks** | Silent save mode — direct Python API, deterministic, zero data loss | `hooks_cli.py` |
 | **Hooks** | Tool output mining — per-tool formatting strategies in `normalize.py` | `normalize.py` |
 | **Features** | Diary wing routing — derive project wing from transcript path | `hooks_cli.py`, `mcp_server.py` |
@@ -212,8 +213,9 @@ Neither has automatic consolidation. Claude Code has unreleased "Auto Dream" con
 | [#661](https://github.com/milla-jovovich/mempalace/pull/661) | feedback addressed (threading.Lock in 8adf35a), waiting `@bensig` re-review | Graph cache with write-invalidation |
 | [#673](https://github.com/milla-jovovich/mempalace/pull/673) | APPROVED by external reviewer on 2026-04-12, waiting maintainer merge | Deterministic hook saves (broader than upstream's narrower #966) |
 | [#681](https://github.com/milla-jovovich/mempalace/pull/681) | clean, waiting review | Unicode checkmark → ASCII |
-| [#999](https://github.com/milla-jovovich/mempalace/pull/999) | `MERGEABLE`, Copilot review addressed + tests added | `None`-metadata guards on `searcher.py` + `miner.status()` |
-| [#1000](https://github.com/milla-jovovich/mempalace/pull/1000) | `MERGEABLE`, closes #823, Copilot nit addressed | `quarantine_stale_hnsw()` for HNSW/sqlite drift crashes |
+| [#999](https://github.com/milla-jovovich/mempalace/pull/999) | `MERGEABLE`, Copilot review addressed, 8 sites covered, architectural layer note posted | `None`-metadata guards on `searcher.py`, `miner.status()`, and 4 `mcp_server.py` handlers |
+| [#1000](https://github.com/milla-jovovich/mempalace/pull/1000) | `MERGEABLE`, closes #823, Copilot nit addressed, rebased onto #995's new backend surface | `quarantine_stale_hnsw()` for HNSW/sqlite drift crashes |
+| [#1005](https://github.com/milla-jovovich/mempalace/pull/1005) | `MERGEABLE`, Copilot review addressed (authoritative scope count via paginated `col.get`, gate "run repair" on vector underdelivery, restore palace path in CLI error) | Warnings + sqlite BM25 top-up — never silently return fewer results than scope contains |
 
 Closed: #626, #633, #662 (superseded by BM25), #663 (upstream wrote #757), #738 (docs stale), #629 (superseded — upstream shipped batching + file locking), #632 (superseded — `--version`, `purge`, `repair` all shipped in v3.3.0).
 
