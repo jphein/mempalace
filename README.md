@@ -12,7 +12,11 @@
 
 ---
 
-Fork of [MemPalace v3.3.1](https://github.com/milla-jovovich/mempalace/releases/tag/v3.3.1). Running in production with 135K+ drawers across 60+ rooms. See upstream README for full feature docs.
+Fork of [MemPalace v3.3.1](https://github.com/milla-jovovich/mempalace/releases/tag/v3.3.1). Running in production since 2026-04-09 — currently 137,949 drawers across 68 rooms in 22 wings, 8 open PRs upstream. See upstream README for full feature docs.
+
+What this fork adds that you won't get from upstream: a **deterministic silent-save hook architecture** (zero data loss, `systemMessage` notification), **ChromaDB 1.5.x hardening** (`quarantine_stale_hnsw` drift recovery, segfault-trigger guards, 8-site `None`-metadata safety), and **search that never silently misses** (`search_memories` returns warnings + sqlite BM25 top-up + `available_in_scope` so callers can see what they aren't getting). Full list below.
+
+**Status at a glance:** active as of 2026-04-18 · [Discussion #1017](https://github.com/MemPalace/mempalace/discussions/1017) introduces the fork upstream · 998 tests pass on `main` · [Open upstream PRs](#open-upstream-prs) (8) are the contribution pipeline · [Issues on this repo](https://github.com/jphein/mempalace/issues) for fork-specific feedback.
 
 ## Why this fork exists
 
@@ -20,7 +24,7 @@ We surveyed the memory-system landscape in April 2026 and found no verbatim-firs
 
 | System | Verbatim? | Local? | MCP? | Notes |
 |---|---|---|---|---|
-| **MemPalace** | Yes | Yes | Yes | What we have. 135K drawers. |
+| **MemPalace** | Yes | Yes | Yes | What we have. 137,949 drawers as of 2026-04-18. |
 | Hindsight | No — LLM extracts facts | Yes (Docker) | Yes | Original text is lost. |
 | Mem0 / OpenMemory | No — extracts "memories" | Partial | Yes | Cloud-first. |
 | Cognee | No — knowledge graph | Yes | No | |
@@ -32,11 +36,11 @@ We surveyed the memory-system landscape in April 2026 and found no verbatim-firs
 
 ## Architectural principles
 
-Three principles that emerged from 134K drawers of production use. They explain most of this fork's decisions and should guide future ones. Contributors: use these to evaluate PRs.
+Three principles that emerged from 137K drawers of production use. They explain most of this fork's decisions and should guide future ones. Contributors: use these to evaluate PRs.
 
 ### 1. Transforms on write are the enemy
 
-Every operation that interprets content at write time is a failure surface. Entity detection misfires. Classifiers force wrong rooms. LLM-extracted "facts" lose nuance and can't be un-extracted. Half of this fork's bugs (`room=None` crashes, 73-stopword false positives, wing misassignment) trace to a single mistake: making classification a *gate* instead of a best-effort enrichment.
+Every operation that interprets content at write time is a failure surface. Entity detection misfires. Classifiers force wrong rooms. LLM-extracted "facts" lose nuance and can't be un-extracted. Many of this fork's visible bugs (`room=None` crashes, a stopword list that's grown to [285 English entries and counting](mempalace/i18n/en.json) to paper over false positives, wing misassignment) trace to a single mistake: making classification a *gate* instead of a best-effort enrichment.
 
 Write the raw text. Derive everything else lazily, from unambiguous signals, with a graceful fallback when derivation fails. The verbatim archive is the one thing that must always succeed.
 
@@ -45,7 +49,7 @@ Write the raw text. Derive everything else lazily, from unambiguous signals, wit
 Hierarchy isn't wrong — *mandatory synchronous classification* is wrong. Those are different claims, and conflating them was our earlier mistake.
 
 **Good uses of hierarchy, which we keep:**
-- **Browseable scope** for serendipitous recall across 134K drawers. Search answers "when did I hit this error"; browse answers "what was I working on last November."
+- **Browseable scope** for serendipitous recall across 137K drawers. Search answers "when did I hit this error"; browse answers "what was I working on last November."
 - **Deletion and retention as a unit.** Purging drawers from an abandoned experiment is one operation, not a risky query-then-delete with collateral damage.
 - **Disambiguation without query gymnastics.** The same keyword appears in unrelated contexts across years of work. Scope separates them by default.
 - **Auto-surfacing priors.** A wing derived from the current working directory is a cheap, unambiguous signal for what to search first. This matters for the open problem below.
@@ -63,6 +67,17 @@ Filesystems, Gmail, and Notion all pair hierarchy with tags and derive hierarchy
 Search quality compounds. Classification quality has a hard ceiling set by the accuracy of the classifier, and ours isn't good enough to justify the complexity it imposes. Vector + BM25 + optional scope filter already beats anything the hierarchy provides on its own. Tags (P0) extend this without requiring write-time commitment. Feedback loops (P3) and decay (P2) extend it further.
 
 Effort spent tuning the entity detector is effort not spent on the thing that actually pays compounding returns.
+
+## Two-layer memory model
+
+Claude Code has two complementary memory layers, used in tandem:
+
+| Layer | Storage | Size | Consolidation | Purpose |
+|---|---|---|---|---|
+| **Auto-memory** | `~/.claude/projects/*/memory/*.md` | 17 files (this project) | None (manual writes) | Preferences, feedback, context |
+| **MemPalace** | `~/.mempalace/palace/` (ChromaDB) | 137K+ drawers | None (write-only archive) | Verbatim conversations, tool output, code |
+
+Neither has automatic consolidation. Claude Code has unreleased "Auto Dream" consolidation code behind a disabled feature flag ([anthropics/claude-code#38461](https://github.com/anthropics/claude-code/issues/38461)) — if it ships, it covers only the lightweight layer. MemPalace decay (P2) and feedback (P3) remain the right priorities for the verbatim archive.
 
 ## Fork Changes
 
@@ -106,8 +121,8 @@ What this fork adds beyond upstream v3.3.1.
 
 ### Superseded by upstream
 
-- Hybrid keyword fallback (`$contains`) — upstream shipped Okapi-BM25 (60/40 blend)
-- Batch ChromaDB writes — upstream has file-level locking for concurrent agents
+- Hybrid keyword fallback (`$contains`) — upstream shipped Okapi-BM25 (60/40 blend) via [#789](https://github.com/milla-jovovich/mempalace/pull/789)
+- Batch ChromaDB writes — upstream has file-level locking for concurrent agents via [#784](https://github.com/milla-jovovich/mempalace/pull/784)
 - Inline transcript mining in hooks — upstream uses `mempalace mine` in background
 
 ## Roadmap
@@ -155,7 +170,7 @@ Triples are **derived** from the verbatim archive, not parallel to it. If extrac
 
 ### P5 — Temporal fact validity *(1 day, depends on P4)*
 
-KG triples get a context slot (SPOC: subject-predicate-object-context) rather than only `valid_from` / `valid_to` columns. Context acts as a namespace — `(LeBron, played_for, Beavers, "2023_season")` vs `(LeBron, played_for, Lakers, "2022_season")` — making contradiction detection "same S+P, different O, overlapping contexts" rather than timestamp-range logic. On write, close any existing triple with the same subject+predicate+context before opening a new one. Reference: Zep/Graphiti's temporal graph model.
+KG triples get a context slot (SPOC: subject-predicate-object-context) rather than only `valid_from` / `valid_to` columns. Context acts as a namespace — `(LeBron, played_for, Beavers, "2023_season")` vs `(LeBron, played_for, Lakers, "2022_season")` — making contradiction detection "same S+P, different O, overlapping contexts" rather than timestamp-range logic. On write, close any existing triple with the same subject+predicate+context before opening a new one. Reference: Zep's [Graphiti](https://github.com/getzep/graphiti) temporal graph model.
 
 ### P6 — Input sanitization on writes *(half day)*
 
@@ -165,12 +180,12 @@ Strip known injection patterns (role-play instructions, "ignore previous instruc
 
 - **AAAK work** — upstream's problem; we store verbatim.
 - **Expanding hierarchy types** (tunnels, closets, new room categories). Adding more categories doesn't address the write-time classification problem. Tags (P0) and derived scope (P1) do.
-- **Benchmark work** — our value is "134K drawers of verbatim local history with fast search," not upstream's LongMemEval score.
+- **Benchmark work** — our value is "137K drawers of verbatim local history with fast search," not upstream's LongMemEval score.
 - **Full architecture rewrite** — not worth the migration cost.
 - **Dual-granularity ANN, dream engine, foresight signals** — [Karta](https://github.com/rohithzr/karta)-inspired features that require LLM calls on every write. Our zero-LLM philosophy makes these opt-in at best.
 - **FTS5 parallel index** — right idea (engram proves it), but significant infrastructure alongside ChromaDB. Revisit after tags and decay are proven.
 
-## Open problems
+## Active investigations
 
 ### Auto-surfacing context Claude doesn't know to ask for
 
@@ -193,17 +208,6 @@ Tools and patterns we're evaluating for the two open problems above. Not competi
 - [**Mintlify**](https://www.mintlify.com/) — docs platform pitched as "self-updating knowledge management," with MCP and `llms.txt` support for AI-consumable docs. Useful reference for the stale-docs problem: their agent-driven update model is one approach to keeping auto-loaded context fresh. Cloud-hosted, so not a drop-in for local palaces, but the surface area (what they expose to AI, how they structure agent-readable docs) is worth studying.
 - [**Context engineering (Emmimal P Alexander)**](https://towardsdatascience.com/rag-isnt-enough-i-built-the-missing-context-layer-that-makes-llm-systems-work/) — argues the bottleneck isn't retrieval but *what actually enters the context window*. Five components: hybrid retrieval, re-ranking with domain weighting, memory with exponential decay, intelligent compression, token-budget enforcement. The reference implementation is [context-engine](https://github.com/Emmimal/context-engine), already cited for P2 decay. The article frames the auto-surfacing problem as an engineering discipline rather than a product feature — useful scaffolding for the open problem above.
 
-### Two-layer memory architecture
-
-Claude Code has two complementary memory layers, used in tandem:
-
-| Layer | Storage | Size | Consolidation | Purpose |
-|---|---|---|---|---|
-| **Auto-memory** | `~/.claude/projects/*/memory/*.md` | ~dozens of files | None (manual writes) | Preferences, feedback, context |
-| **MemPalace** | `~/.mempalace/palace/` (ChromaDB) | 137K+ drawers | None (write-only archive) | Verbatim conversations, tool output, code |
-
-Neither has automatic consolidation. Claude Code has unreleased "Auto Dream" consolidation code behind a disabled feature flag ([#38461](https://github.com/anthropics/claude-code/issues/38461)) — if it ships, it covers only the lightweight layer. MemPalace decay (P2) and feedback (P3) remain the right priorities for the verbatim archive.
-
 ## Open upstream PRs
 
 | PR | Status | Description |
@@ -217,7 +221,7 @@ Neither has automatic consolidation. Claude Code has unreleased "Auto Dream" con
 | [#1000](https://github.com/milla-jovovich/mempalace/pull/1000) | `MERGEABLE`, closes #823, Copilot nit addressed, rebased onto #995's new backend surface | `quarantine_stale_hnsw()` for HNSW/sqlite drift crashes |
 | [#1005](https://github.com/milla-jovovich/mempalace/pull/1005) | `MERGEABLE`, Copilot review addressed (authoritative scope count via paginated `col.get`, gate "run repair" on vector underdelivery, restore palace path in CLI error) | Warnings + sqlite BM25 top-up — never silently return fewer results than scope contains |
 
-Closed: #626, #633, #662 (superseded by BM25), #663 (upstream wrote #757), #738 (docs stale), #629 (superseded — upstream shipped batching + file locking), #632 (superseded — `--version`, `purge`, `repair` all shipped in v3.3.0).
+Closed: [#626](https://github.com/milla-jovovich/mempalace/pull/626), [#633](https://github.com/milla-jovovich/mempalace/pull/633), [#662](https://github.com/milla-jovovich/mempalace/pull/662) (superseded by BM25), [#663](https://github.com/milla-jovovich/mempalace/pull/663) (upstream wrote [#757](https://github.com/milla-jovovich/mempalace/pull/757)), [#738](https://github.com/milla-jovovich/mempalace/pull/738) (docs stale), [#629](https://github.com/milla-jovovich/mempalace/pull/629) (superseded — upstream shipped batching + file locking), [#632](https://github.com/milla-jovovich/mempalace/pull/632) (superseded — `--version`, `purge`, `repair` all shipped in v3.3.0).
 
 ## Setup
 
