@@ -276,56 +276,30 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
     """
     Search the palace. Returns verbatim drawer content.
     Optionally filter by wing (project) or room (aspect).
+
+    Delegates to ``search_memories`` so CLI and MCP callers share the same
+    hybrid ranking, sqlite-BM25 fallback, and scope-aware warnings.
     """
-    try:
-        col = get_collection(palace_path, create=False)
-    except Exception:
-        print(f"\n  No palace found at {palace_path}")
-        print("  Run: mempalace init <dir> then mempalace mine <dir>")
-        raise SearchError(f"No palace found at {palace_path}")
+    result = search_memories(query, palace_path, wing=wing, room=room, n_results=n_results)
+    if "error" in result and not result.get("results"):
+        print(f"\n  {result['error']}")
+        if "hint" in result:
+            print(f"  {result['hint']}")
+        raise SearchError(result["error"])
 
-    # Alert the user if this palace predates hnsw:space=cosine being set on
-    # creation — their similarity scores will be junk until they run repair.
-    _warn_if_legacy_metric(col)
+    warnings = result.get("warnings") or []
+    hits = result.get("results") or []
 
-    where = build_where_filter(wing, room)
-
-    try:
-        kwargs = {
-            "query_texts": [query],
-            "n_results": n_results,
-            "include": ["documents", "metadatas", "distances"],
-        }
-        if where:
-            kwargs["where"] = where
-
-        results = col.query(**kwargs)
-
-    except Exception as e:
-        print(f"\n  Search error: {e}")
-        raise SearchError(f"Search error: {e}") from e
-
-    docs = _first_or_empty(results, "documents")
-    metas = _first_or_empty(results, "metadatas")
-    dists = _first_or_empty(results, "distances")
-
-    if not docs:
+    if not hits:
         print(f'\n  No results found for: "{query}"')
+        for w in warnings:
+            print(f"  ! {w}")
         return
 
-    # Pure-cosine retrieval on the CLI path was missing lexical matches:
-    # a drawer whose text contains every query term can still score distance
-    # >= 1.0 against the natural-language query when the drawer is a
-    # mechanical artifact (directory listing, diff, log fragment) that
-    # embeds as file-tree noise rather than as prose about its subject.
-    # The MCP tool path already hybridizes BM25 with vector sim via
-    # `_hybrid_rank`; do the same here so CLI results match what agents
-    # see via `mempalace_search`.
-    hits = [
-        {"text": doc, "distance": float(dist), "metadata": meta or {}}
-        for doc, meta, dist in zip(docs, metas, dists)
-    ]
-    hits = _hybrid_rank(hits, query)
+    # Hits are already built and hybrid-reranked by search_memories(); the
+    # delegate path centralizes retrieval, BM25-sqlite fallback, and
+    # legacy-metric warning so CLI and MCP callers share a single source
+    # of truth.
 
     print(f"\n{'=' * 60}")
     print(f'  Results for: "{query}"')
@@ -333,27 +307,125 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
         print(f"  Wing: {wing}")
     if room:
         print(f"  Room: {room}")
+    if result.get("available_in_scope") is not None:
+        print(f"  Scope has: {result['available_in_scope']} drawers matching filter")
+    if warnings:
+        for w in warnings:
+            print(f"  ! {w}")
     print(f"{'=' * 60}\n")
 
     for i, hit in enumerate(hits, 1):
-        vec_sim = round(max(0.0, 1 - hit["distance"]), 3)
-        bm25 = hit.get("bm25_score", 0.0)
-        meta = hit["metadata"]
-        source = Path(meta.get("source_file", "?")).name
-        wing_name = meta.get("wing", "?")
-        room_name = meta.get("room", "?")
+        wing_name = hit.get("wing", "?")
+        room_name = hit.get("room", "?")
+        source = hit.get("source_file", "?")
+        similarity = hit.get("similarity")
+        bm25 = hit.get("bm25_score")
+        matched_via = hit.get("matched_via", "drawer")
 
         print(f"  [{i}] {wing_name} / {room_name}")
         print(f"      Source: {source}")
-        print(f"      Match:  cosine={vec_sim}  bm25={bm25}")
+        if similarity is not None and bm25 is not None:
+            print(f"      Match:  cosine={similarity}  bm25={bm25}")
+        elif similarity is not None:
+            print(f"      Match:  {similarity}")
+        elif bm25 is not None:
+            print(f"      BM25:   {bm25}  (matched_via: {matched_via})")
+        else:
+            print(f"      (matched_via: {matched_via})")
         print()
-        # Print the verbatim text, indented
-        for line in hit["text"].strip().split("\n"):
+        for line in (hit.get("text") or "").strip().split("\n"):
             print(f"      {line}")
         print()
         print(f"  {'─' * 56}")
 
     print()
+
+
+def _sqlite_fallback_and_scope(
+    drawers_col,
+    query: str,
+    where: dict,
+    hits: list,
+    n_results: int,
+    allow_fallback: bool,
+) -> tuple:
+    """Count in-scope drawers via sqlite and, if enabled, top up the hits
+    list with BM25-ranked sqlite candidates when the vector path returned
+    fewer than ``n_results``.
+
+    Returns ``(available_in_scope, warnings)``. Mutates ``hits`` in place
+    when it adds fallback entries.
+    """
+    warnings: list[str] = []
+    available_in_scope: int | None = None
+    try:
+        pool_kwargs: dict = {"include": ["documents", "metadatas"]}
+        if where:
+            pool_kwargs["where"] = where
+        # Cap the pool — sqlite-variable limits (#950) bite around 32k, and
+        # a fallback pool 20x the request is plenty for BM25 ranking.
+        pool_kwargs["limit"] = max(n_results * 20, 100)
+        pool = drawers_col.get(**pool_kwargs)
+    except Exception as e:
+        warnings.append(f"sqlite fallback unavailable: {e}")
+        return available_in_scope, warnings
+
+    pool_docs = pool.get("documents") or []
+    pool_metas = pool.get("metadatas") or []
+    available_in_scope = len(pool_docs)
+
+    if not allow_fallback or len(hits) >= n_results or not pool_docs:
+        return available_in_scope, warnings
+
+    shortfall = n_results - len(hits)
+    seen_texts = {h.get("text") for h in hits if h.get("text")}
+    candidate_docs: list = []
+    candidate_metas: list = []
+    for d, m in zip(pool_docs, pool_metas):
+        if d in seen_texts:
+            continue
+        candidate_docs.append(d)
+        candidate_metas.append(m or {})
+
+    if not candidate_docs:
+        return available_in_scope, warnings
+
+    bm25 = _bm25_scores(query, candidate_docs)
+    ranked = sorted(
+        zip(candidate_docs, candidate_metas, bm25),
+        key=lambda t: t[2],
+        reverse=True,
+    )
+    added = 0
+    for doc, meta, score in ranked:
+        if added >= shortfall:
+            break
+        if score <= 0.0:
+            # No query term present — skip rather than pad with arbitrary
+            # content, so the warning stays accurate.
+            break
+        src = meta.get("source_file", "") or ""
+        hits.append(
+            {
+                "text": doc,
+                "wing": meta.get("wing", "unknown"),
+                "room": meta.get("room", "unknown"),
+                "source_file": Path(src).name if src else "?",
+                "created_at": meta.get("filed_at", "unknown"),
+                "similarity": None,
+                "distance": None,
+                "bm25_score": round(score, 3),
+                "matched_via": "sqlite_bm25_fallback",
+            }
+        )
+        added += 1
+    if added > 0:
+        vector_count = len(hits) - added
+        warnings.append(
+            f"vector search returned {vector_count} of {n_results} "
+            f"requested; filled {added} from sqlite+BM25 keyword match"
+        )
+    return available_in_scope, warnings
 
 
 def search_memories(
@@ -388,6 +460,14 @@ def search_memories(
             "hint": "Run: mempalace init <dir> && mempalace mine <dir>",
         }
 
+    # Alert if this palace predates hnsw:space=cosine being set on creation —
+    # similarity scores will be junk until `mempalace repair` rebuilds the
+    # index. Centralized here so both CLI search() and MCP mempalace_search
+    # benefit from the warning via the delegate path. (Upstream #1179 added
+    # the warning inline in CLI search(); the fork's delegation pattern needs
+    # it one layer up so the same warning surface stays live.)
+    _warn_if_legacy_metric(drawers_col)
+
     where = build_where_filter(wing, room)
 
     # Hybrid retrieval: always query drawers directly (the floor), then use
@@ -397,6 +477,8 @@ def search_memories(
     # This avoids the "weak-closets regression" where narrative content
     # produces low-signal closets (regex extraction matches few topics)
     # and closet-first routing hides drawers that direct search would find.
+    warnings: list[str] = []
+    drawer_results: dict = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
     try:
         dkwargs = {
             "query_texts": [query],
@@ -407,7 +489,12 @@ def search_memories(
             dkwargs["where"] = where
         drawer_results = drawers_col.query(**dkwargs)
     except Exception as e:
-        return {"error": f"Search error: {e}"}
+        # Don't hard-fail: degrade to sqlite fallback below so callers still
+        # get the drawers that match the scope, with a warning explaining why
+        # vector ranking was unavailable. This covers the #951 filter-planner
+        # "Error finding id" failure mode and HNSW runtime errors on drifted
+        # indexes.
+        warnings.append(f"vector search unavailable: {e}")
 
     # Gather closet hits (best-per-source) to build a boost lookup.
     closet_boost_by_source: dict = {}  # source_file -> (rank, closet_dist, preview)
@@ -552,9 +639,33 @@ def search_memories(
         h.pop("_source_file_full", None)
         h.pop("_chunk_index", None)
 
+    # Sqlite-authoritative scope count + top-up fallback. When max_distance
+    # is set, the caller wants strict similarity — don't pad with BM25-only
+    # hits that have no vector distance. Scope count still runs so callers
+    # can see what they're missing.
+    available_in_scope, fallback_warnings = _sqlite_fallback_and_scope(
+        drawers_col,
+        query,
+        where,
+        hits,
+        n_results=n_results,
+        allow_fallback=(max_distance <= 0.0),
+    )
+    warnings.extend(fallback_warnings)
+
+    # Surface unreachable data: scope has more matches than we could rank.
+    if available_in_scope is not None and available_in_scope > len(hits) and len(hits) < n_results:
+        warnings.append(
+            f"{available_in_scope} drawers match this scope in sqlite; "
+            f"{len(hits)} ranked — the rest are unreachable via the current "
+            f"HNSW index. Run `mempalace repair` to rebuild."
+        )
+
     return {
         "query": query,
         "filters": {"wing": wing, "room": room},
         "total_before_filter": len(_first_or_empty(drawer_results, "documents")),
+        "available_in_scope": available_in_scope,
+        "warnings": warnings,
         "results": hits,
     }
