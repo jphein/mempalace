@@ -166,8 +166,24 @@ def _log(message: str):
 
 
 def _output(data: dict):
-    """Print JSON to stdout with consistent formatting (pretty-printed)."""
-    print(json.dumps(data, indent=2, ensure_ascii=False))
+    """Print JSON to the real stdout, even if mcp_server has hijacked sys.stdout.
+
+    mempalace.mcp_server redirects stdout → stderr at module import (fd and
+    sys-level) to protect the MCP stdio protocol from ChromaDB's C-level
+    prints. Silent-save imports it transitively via _save_diary_direct, so
+    sys.stdout is stderr by the time we get here. Claude Code reads hook
+    output from fd 1, so we write there directly using the saved fd.
+    """
+    payload = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    try:
+        from .mcp_server import _REAL_STDOUT_FD
+        if _REAL_STDOUT_FD is not None:
+            os.write(_REAL_STDOUT_FD, payload.encode("utf-8"))
+            return
+    except Exception:
+        pass
+    sys.stdout.write(payload)
+    sys.stdout.flush()
 
 
 def _desktop_toast(body: str, title: str = "MemPalace"):
