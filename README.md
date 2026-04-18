@@ -12,7 +12,7 @@
 
 ---
 
-Fork of [MemPalace v3.3.0](https://github.com/milla-jovovich/mempalace/releases/tag/v3.3.0). Running in production with 134K+ drawers across 60+ rooms. See upstream README for full feature docs.
+Fork of [MemPalace v3.3.1](https://github.com/milla-jovovich/mempalace/releases/tag/v3.3.1). Running in production with 135K+ drawers across 60+ rooms. See upstream README for full feature docs.
 
 ## Why this fork exists
 
@@ -20,13 +20,14 @@ We surveyed the memory-system landscape in April 2026 and found no verbatim-firs
 
 | System | Verbatim? | Local? | MCP? | Notes |
 |---|---|---|---|---|
-| **MemPalace** | Yes | Yes | Yes | What we have. 134K drawers. |
+| **MemPalace** | Yes | Yes | Yes | What we have. 135K drawers. |
 | Hindsight | No — LLM extracts facts | Yes (Docker) | Yes | Original text is lost. |
 | Mem0 / OpenMemory | No — extracts "memories" | Partial | Yes | Cloud-first. |
 | Cognee | No — knowledge graph | Yes | No | |
 | Letta | No — tiered summarization | Yes | No | |
 | engram | Structured fields, not raw | Yes | Yes | Go + SQLite FTS5. |
 | CaviraOSS OpenMemory | No — temporal graph | Yes | Yes | SQL-native. |
+| [Mintlify](https://www.mintlify.com/) | No — summarized for chat | No (cloud) | Yes | Docs platform pitched as "self-updating knowledge management"; aimed at team docs, not personal conversation memory. |
 
 **Verbatim storage is the differentiator.** For recovering exact commands, error messages, code snippets, and what someone actually said, you need the original text. Everything else — hierarchy, tags, knowledge graphs, decay — is enrichment *layered on top of* a faithful archive. If any of those layers fails or needs rebuilding, the underlying truth is still there.
 
@@ -66,7 +67,7 @@ Effort spent tuning the entity detector is effort not spent on the thing that ac
 
 ## Fork Changes
 
-What this fork adds beyond upstream v3.3.0.
+What this fork adds beyond upstream v3.3.1.
 
 ### Still ahead of upstream
 
@@ -94,6 +95,15 @@ What this fork adds beyond upstream v3.3.0.
 - VAR_KEYWORD kwargs check (#684)
 - New MCP tools + export (via #667)
 
+### Pulled in from upstream v3.3.1
+
+- Multi-language entity detection: Portuguese, Russian, Italian, Hindi, Indonesian, Chinese (#907, #911, #928, #931, #932, #945, #760, #156, #773, #778)
+- BCP-47 case-insensitive locale resolution (#928)
+- Script-aware word boundaries for Devanagari/Arabic/Hebrew/Thai (#932)
+- UTF-8 encoding on `Path.read_text()` — fixes GBK/non-UTF-8 locale corruption (#946)
+- Non-blocking precompact hook (#863) — replaces our fork's blocking precompact
+- Basic `silent_save` honoring in stop hook (#966) — narrower than our fork's deterministic-save architecture (below), so we keep the fork version
+
 ### Superseded by upstream
 
 - Hybrid keyword fallback (`$contains`) — upstream shipped Okapi-BM25 (60/40 blend)
@@ -109,7 +119,7 @@ Ordered by impact. Informed by competitive research (Karta, Hindsight, engram, c
 - Graph cache with write-invalidation (shipped in this fork; #661 rebased, threading.Lock added, awaiting re-review)
 - L1 importance pre-filter (#660 rebased, clean)
 - Convo miner wing assignment (#659 rebased, clean)
-- Silent hook saves (shipped in this fork; #673 pending rebase against #863)
+- Silent hook saves (shipped in this fork; #673 still ahead of upstream's #966 — ours has marker-after-confirmed-save, themes extraction, systemMessage notification)
 
 ### P0 — Multi-label tags *(1-2 days, additive, upstream candidate)*
 
