@@ -8,7 +8,7 @@
 
 ---
 
-Fork of [MemPalace v3.3.1](https://github.com/milla-jovovich/mempalace/releases/tag/v3.3.1), tracking `upstream/develop`. Running in production since 2026-04-09 — currently 137,949 drawers across 68 rooms in 22 wings, 8 open PRs upstream (#999 merged 2026-04-18). See upstream README for full feature docs.
+Fork of [MemPalace v3.3.1](https://github.com/milla-jovovich/mempalace/releases/tag/v3.3.1), tracking `upstream/develop`. Running in production since 2026-04-09 — currently 152,682 drawers across 68 rooms in 22 wings, 8 open PRs upstream (#999 merged 2026-04-18). See upstream README for full feature docs.
 
 What this fork adds that you won't get from upstream yet: a **deterministic silent-save hook architecture** (zero data loss, `systemMessage` notification), **ChromaDB 1.5.x hardening** (`quarantine_stale_hnsw` drift recovery, segfault-trigger guards, 8-site `None`-metadata safety), and **search that never silently misses** (`search_memories` returns warnings + sqlite BM25 top-up + `available_in_scope` so callers can see what they aren't getting). Full list below.
 
@@ -47,7 +47,7 @@ We surveyed the memory-system landscape in April 2026 and found no verbatim-firs
 
 | System | Verbatim? | Local? | MCP? | Notes |
 |---|---|---|---|---|
-| **MemPalace** | Yes | Yes | Yes | What we have. 137,949 drawers as of 2026-04-18. |
+| **MemPalace** | Yes | Yes | Yes | What we have. 152,682 drawers as of 2026-04-18. |
 | [Hindsight](https://github.com/vectorize-io/hindsight) | No — LLM extracts facts | Yes (Docker) | Yes | Three ops: retain / recall / reflect. Original text is lost. |
 | [Mem0](https://github.com/mem0ai/mem0) / [OpenMemory](https://github.com/mem0ai/mem0/tree/main/openmemory) | No — extracts "memories" | Partial | Yes | Cloud-first; OpenMemory is the local-mode sibling. |
 | [Cognee](https://github.com/topoteretes/cognee) | No — knowledge graph | Yes | Yes (added since we wrote this row) | "Knowledge Engine" via ECL pipeline. |
@@ -59,7 +59,7 @@ We surveyed the memory-system landscape in April 2026 and found no verbatim-firs
 
 ## Architectural principles
 
-Three principles that emerged from 137K drawers of production use. They explain most of this fork's decisions and should guide future ones. Contributors: use these to evaluate PRs.
+Three principles that emerged from 152K drawers of production use. They explain most of this fork's decisions and should guide future ones. Contributors: use these to evaluate PRs.
 
 ### 1. Forced transforms on write are the enemy
 
@@ -72,7 +72,7 @@ Write the raw text. Derive everything else lazily, from unambiguous signals, wit
 Hierarchy isn't wrong — *mandatory synchronous classification* is wrong. Those are different claims, and conflating them was our earlier mistake.
 
 **Good uses of hierarchy, which we keep:**
-- **Browseable scope** for serendipitous recall across 137K drawers. Search answers "when did I hit this error"; browse answers "what was I working on last November."
+- **Browseable scope** for serendipitous recall across 152K drawers. Search answers "when did I hit this error"; browse answers "what was I working on last November."
 - **Deletion and retention as a unit.** Purging drawers from an abandoned experiment is one operation, not a risky query-then-delete with collateral damage.
 - **Disambiguation without query gymnastics.** The same keyword appears in unrelated contexts across years of work. Scope separates them by default.
 - **Auto-surfacing priors.** A wing derived from the current working directory is a cheap, unambiguous signal for what to search first. This matters for the open problem below.
@@ -98,7 +98,7 @@ Claude Code has two complementary memory layers, used in tandem:
 | Layer | Storage | Size | Consolidation | Purpose |
 |---|---|---|---|---|
 | **Auto-memory** | `~/.claude/projects/*/memory/*.md` | 17 files (this project) | None (manual writes) | Preferences, feedback, context |
-| **MemPalace** | `~/.mempalace/palace/` (ChromaDB) | 137K+ drawers | None (write-only archive) | Verbatim conversations, tool output, code |
+| **MemPalace** | `~/.mempalace/palace/` (ChromaDB) | 152K+ drawers | None (write-only archive) | Verbatim conversations, tool output, code |
 
 Neither has automatic consolidation. Claude Code has unreleased "Auto Dream" consolidation code behind a disabled feature flag ([anthropics/claude-code#38461](https://github.com/anthropics/claude-code/issues/38461)) — if it ships, it covers only the lightweight layer. MemPalace decay (P2) and feedback (P3) remain the right priorities for the verbatim archive.
 
@@ -236,7 +236,7 @@ The verbatim path is the default and should stay the default. But there is real 
 ### Deprioritized
 
 - **Expanding hierarchy types** (tunnels, closets, new room categories). Adding more categories doesn't address the write-time classification problem. Tags (P0) and derived scope (P1) do.
-- **Benchmark work** — our value is "137K drawers of verbatim local history with fast search," not upstream's LongMemEval score.
+- **Benchmark work** — our value is "152K drawers of verbatim local history with fast search," not upstream's LongMemEval score.
 - **Full architecture rewrite** — not worth the migration cost.
 - **Dual-granularity ANN, dream engine, foresight signals** — [Karta](https://github.com/rohithzr/karta)-inspired features that require LLM calls on every write. Our zero-LLM philosophy makes these opt-in at best.
 - **FTS5 parallel index** — right idea (engram proves it), but significant infrastructure alongside ChromaDB. Revisit after tags and decay are proven.

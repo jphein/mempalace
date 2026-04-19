@@ -5,7 +5,7 @@
 JP's fork of [milla-jovovich/mempalace](https://github.com/milla-jovovich/mempalace) — a local AI memory system using ChromaDB for verbatim storage and semantic search.
 
 - **Fork**: `jphein/mempalace` (origin) / `milla-jovovich/mempalace` (upstream)
-- **Version**: 3.3.0 (merged upstream v3.3.0 on 2026-04-16)
+- **Version**: 3.3.1 (merged upstream v3.3.1 on 2026-04-18)
 - **Python**: venv at `./venv/`, editable install with dev deps
 - **Palace data**: `~/.mempalace/palace` (ChromaDB) + `~/.mempalace/config.json`
 
