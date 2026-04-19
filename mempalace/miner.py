@@ -833,6 +833,7 @@ def status(palace_path: str):
         if not batch:
             break
         for m in batch:
+            m = m or {}
             wing_rooms[m.get("wing", "?")][m.get("room", "?")] += 1
         offset += len(batch)
 
