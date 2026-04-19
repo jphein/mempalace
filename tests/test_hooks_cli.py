@@ -683,7 +683,9 @@ def test_stop_hook_rejects_injected_stop_hook_active(tmp_path):
         transcript,
         [{"message": {"role": "user", "content": f"msg {i}"}} for i in range(SAVE_INTERVAL)],
     )
-    with patch("mempalace.hooks_cli._save_diary_direct", return_value={"count": 1, "themes": []}) as mock_save:
+    with patch(
+        "mempalace.hooks_cli._save_diary_direct", return_value={"count": 1, "themes": []}
+    ) as mock_save:
         _capture_hook_output(
             hook_stop,
             {
