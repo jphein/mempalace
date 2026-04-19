@@ -174,7 +174,7 @@ def test_stop_hook_blocks_at_interval(tmp_path):
     assert result["decision"] == "block"
     assert result["reason"].startswith(STOP_BLOCK_REASON)
     # Default wing when transcript path doesn't match Claude Code pattern
-    assert "wing=sessions" in result["reason"]
+    assert "wing=wing_sessions" in result["reason"]
 
 
 def test_stop_hook_derives_wing_from_transcript_path(tmp_path):
@@ -192,7 +192,7 @@ def test_stop_hook_derives_wing_from_transcript_path(tmp_path):
         state_dir=tmp_path,
     )
     assert result["decision"] == "block"
-    assert "wing=myproject" in result["reason"]
+    assert "wing=wing_myproject" in result["reason"]
 
 
 def test_stop_hook_tracks_save_point(tmp_path):
@@ -241,21 +241,21 @@ def test_precompact_allows(tmp_path):
 
 def test_wing_from_transcript_path_extracts_project():
     path = "/home/jp/.claude/projects/-home-jp-Projects-memorypalace/session.jsonl"
-    assert _wing_from_transcript_path(path) == "memorypalace"
+    assert _wing_from_transcript_path(path) == "wing_memorypalace"
 
 
 def test_wing_from_transcript_path_fallback():
-    assert _wing_from_transcript_path("/some/random/path.jsonl") == "sessions"
+    assert _wing_from_transcript_path("/some/random/path.jsonl") == "wing_sessions"
 
 
 def test_wing_from_transcript_path_windows_backslashes():
     path = "C:\\Users\\jp\\.claude\\projects\\-home-jp-Projects-myapp\\session.jsonl"
-    assert _wing_from_transcript_path(path) == "myapp"
+    assert _wing_from_transcript_path(path) == "wing_myapp"
 
 
 def test_wing_from_transcript_path_lowercases():
     path = "/home/jp/.claude/projects/-home-jp-Projects-MyProject/session.jsonl"
-    assert _wing_from_transcript_path(path) == "myproject"
+    assert _wing_from_transcript_path(path) == "wing_myproject"
 
 
 # --- _log ---
