@@ -61,11 +61,11 @@ We surveyed the memory-system landscape in April 2026 and found no verbatim-firs
 
 Three principles that emerged from 137K drawers of production use. They explain most of this fork's decisions and should guide future ones. Contributors: use these to evaluate PRs.
 
-### 1. Transforms on write are the enemy
+### 1. Forced transforms on write are the enemy
 
-Every operation that interprets content at write time is a failure surface. Entity detection misfires. Classifiers force wrong rooms. LLM-extracted "facts" lose nuance and can't be un-extracted. Many of this fork's visible bugs (`room=None` crashes, a stopword list that's grown to [285 English entries and counting](mempalace/i18n/en.json) to paper over false positives, wing misassignment) trace to a single mistake: making classification a *gate* instead of a best-effort enrichment.
+Every operation that *requires* interpreting content at write time is a failure surface. Entity detection misfires. Classifiers force wrong rooms. LLM-extracted "facts" lose nuance and can't be un-extracted. Many of this fork's visible bugs (`room=None` crashes, a stopword list that's grown to [285 English entries and counting](mempalace/i18n/en.json) to paper over false positives, wing misassignment) trace to a single mistake: making classification a *gate* instead of a best-effort enrichment.
 
-Write the raw text. Derive everything else lazily, from unambiguous signals, with a graceful fallback when derivation fails. The verbatim archive is the one thing that must always succeed.
+Write the raw text. Derive everything else lazily, from unambiguous signals, with a graceful fallback when derivation fails. The verbatim archive is the one thing that must always succeed. Optional enrichment modes (LLM topic extraction, AAAK encoding, concept chunking) are welcome as long as they are exactly that — opt-in, additive, and never a prerequisite for the write to complete.
 
 ### 2. Hierarchy as optional scope, not required metadata
 
@@ -222,10 +222,18 @@ KG triples get a context slot (SPOC: subject-predicate-object-context) rather th
 
 Strip known injection patterns (role-play instructions, "ignore previous instructions"). Flag with `sanitized: true` metadata rather than blocking. Length cap at 10K chars. Low priority while we're local-only; matters if the MCP server is ever exposed more broadly.
 
+### P7 — Alternative storage modes *(opt-in, non-destructive)*
+
+The verbatim path is the default and should stay the default. But there is real value in opt-in alternatives — the key constraint is that they must be additive or switchable, never forced replacements.
+
+**Flashcard / concept chunking** — Milla's approach (session_extract → session_chunker → palace_ingest_incremental) breaks sessions into small concept-scoped cards as the conversation progresses, in real time. The appeal: smaller units surface cleanly in search, token overhead drops, and there's no 3,844-drawer mine to kill at shutdown. The tradeoff: cards are LLM-summarized, not verbatim. Viable as an opt-in `--mode flashcard` for users who prefer token economy over completeness. Can coexist with verbatim — run both, search either.
+
+**AAAK encoding** — lossy abbreviation at scale (entity codes, pipe-separated Zettel fields, emotion markers). Benchmarks at 84.2% R@5 vs verbatim's 96.6% — 12 points of recall cost at small scale, potentially narrowing at very large scale with many repeated entities. Worth offering as `--mode aaak` alongside verbatim for users who want the compressed representation. Upstream's problem to maintain; this fork would consume it, not own it.
+
+**Diary enrichment mode** — Haiku reads completed sessions and writes a short topic-summary doc stored alongside the verbatim drawers (not replacing them). Cleaner than flashcard chunking because the verbatim archive is untouched. Feeds directly into P0 tags and P3 rerank. This is the mode to implement first of the three.
+
 ### Deprioritized
 
-- **AAAK work** — upstream's problem; we store verbatim. Benchmark confirms it: AAAK mode scores 84.2% R@5 vs verbatim's 96.6% — the lossy encoding costs 12 points of recall.
-- **Flashcard / concept chunking** — Milla's personal pipeline (session_extract → session_chunker → palace_ingest_incremental) breaks sessions into small concept-scoped cards written in real time. It's a valid approach for token economy but violates Principle 1 — the cards are summaries, not verbatim. The LLM enrichment path in P0 gets the routing benefits without replacing the source text.
 - **Expanding hierarchy types** (tunnels, closets, new room categories). Adding more categories doesn't address the write-time classification problem. Tags (P0) and derived scope (P1) do.
 - **Benchmark work** — our value is "137K drawers of verbatim local history with fast search," not upstream's LongMemEval score.
 - **Full architecture rewrite** — not worth the migration cost.
