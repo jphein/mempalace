@@ -244,12 +244,13 @@ class TestSearchCLI:
         # Should have output with at least one result block
         assert "[1]" in captured.out
 
-    def test_search_handles_none_metadata_without_crash(self, palace_path, capsys):
+    def test_search_handles_none_metadata_without_crash(self, capsys):
         """ChromaDB can return `None` entries in the metadatas list when a
         drawer has no metadata. The CLI print path must not crash on them
         mid-render — it used to raise `AttributeError: 'NoneType' object has
         no attribute 'get'` after printing earlier results."""
         mock_col = MagicMock()
+        mock_col.count.return_value = 2
         mock_col.query.return_value = {
             "documents": [["first doc", "second doc"]],
             "metadatas": [[{"source_file": "a.md", "wing": "w", "room": "r"}, None]],
