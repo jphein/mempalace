@@ -847,22 +847,32 @@ def status(palace_path: str):
         print("  Run: mempalace init <dir> then mempalace mine <dir>")
         return
 
-    # Count by wing and room
+    # Count by wing and room. Paginate col.get() in 10K-drawer batches:
+    # a single col.get(limit=total) hits SQLite's SQLITE_MAX_VARIABLE_NUMBER
+    # (default 32,766) on palaces with many thousands of drawers — see #802,
+    # #1015. Pagination keeps each query under the variable cap.
     total = col.count()
-    r = col.get(limit=total, include=["metadatas"]) if total else {"metadatas": []}
-    metas = r["metadatas"]
-
     wing_rooms = defaultdict(lambda: defaultdict(int))
-    for m in metas:
-        m = m or {}
-        wing_rooms[m.get("wing", "?")][m.get("room", "?")] += 1
+    scanned = 0
+    batch = 10000
+    offset = 0
+    while offset < total:
+        r = col.get(limit=batch, offset=offset, include=["metadatas"])
+        metas = r.get("metadatas") or []
+        if not metas:
+            break
+        for m in metas:
+            m = m or {}
+            wing_rooms[m.get("wing", "?")][m.get("room", "?")] += 1
+        scanned += len(metas)
+        offset += len(metas)
 
     print(f"\n{'=' * 55}")
-    print(f"  MemPalace Status — {len(metas)} drawers")
+    print(f"  MemPalace Status — {scanned:,} drawers")
     print(f"{'=' * 55}\n")
     for wing, rooms in sorted(wing_rooms.items()):
         print(f"  WING: {wing}")
         for room, count in sorted(rooms.items(), key=lambda x: x[1], reverse=True):
-            print(f"    ROOM: {room:20} {count:5} drawers")
+            print(f"    ROOM: {room:20} {count:>8,} drawers")
         print()
     print(f"{'=' * 55}\n")
