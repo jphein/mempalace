@@ -224,17 +224,46 @@ def _get_mine_dir(transcript_path: str = "") -> str:
 _MINE_PID_FILE = STATE_DIR / "mine.pid"
 
 
+def _pid_alive(pid: int) -> bool:
+    """Cross-platform existence check for a PID.
+
+    On POSIX, ``os.kill(pid, 0)`` is the well-known no-op existence probe.
+    On Windows, ``os.kill`` maps to ``TerminateProcess(handle, sig)`` and
+    would *terminate* the target process with exit code ``sig`` — using
+    it here would kill our own mine child (or worse, the caller itself).
+    Use ``OpenProcess`` + ``GetExitCodeProcess`` via ctypes instead.
+    """
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        STILL_ACTIVE = 259
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return False
+            return code.value == STILL_ACTIVE
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+        return True
+    except (OSError, ValueError):
+        return False
+
+
 def _mine_already_running() -> bool:
     """Return True if a background mine process from a previous hook fire is still alive."""
     try:
         pid = int(_MINE_PID_FILE.read_text().strip())
-        os.kill(pid, 0)  # signal 0 = existence check, no actual signal sent
-        return True
     except (OSError, ValueError):
-        # OSError covers: FileNotFoundError (no pid file), ProcessLookupError
-        # (dead PID on POSIX), PermissionError (not our process), and
-        # WinError 87 / "invalid parameter" (dead or unknown PID on Windows).
         return False
+    return _pid_alive(pid)
 
 
 def _spawn_mine(cmd: list) -> None:
