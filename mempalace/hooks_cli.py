@@ -221,20 +221,38 @@ def _get_mine_dir(transcript_path: str = "") -> str:
     return ""
 
 
+_MINE_PID_FILE = STATE_DIR / "mine.pid"
+
+
+def _mine_already_running() -> bool:
+    """Return True if a background mine process from a previous hook fire is still alive."""
+    try:
+        pid = int(_MINE_PID_FILE.read_text().strip())
+        os.kill(pid, 0)  # signal 0 = existence check, no actual signal sent
+        return True
+    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+        return False
+
+
+def _spawn_mine(cmd: list) -> None:
+    """Spawn a mine subprocess, write its PID to the lock file, log to hook.log."""
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    log_path = STATE_DIR / "hook.log"
+    with open(log_path, "a") as log_f:
+        proc = subprocess.Popen(cmd, stdout=log_f, stderr=log_f)
+    _MINE_PID_FILE.write_text(str(proc.pid))
+
+
 def _maybe_auto_ingest(transcript_path: str = ""):
     """Run mempalace mine in background if a mine directory is available."""
     mine_dir = _get_mine_dir(transcript_path)
     if not mine_dir:
         return
+    if _mine_already_running():
+        _log("Skipping auto-ingest: mine already running")
+        return
     try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        log_path = STATE_DIR / "hook.log"
-        with open(log_path, "a") as log_f:
-            subprocess.Popen(
-                [_mempalace_python(), "-m", "mempalace", "mine", mine_dir],
-                stdout=log_f,
-                stderr=log_f,
-            )
+        _spawn_mine([_mempalace_python(), "-m", "mempalace", "mine", mine_dir])
     except OSError:
         pass
 
@@ -403,25 +421,23 @@ def _ingest_transcript(transcript_path: str):
 
     wing = _wing_from_transcript_path(str(path))
 
+    if _mine_already_running():
+        _log(f"Skipping transcript ingest ({path.name}): mine already running")
+        return
     try:
-        log_path = STATE_DIR / "hook.log"
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a") as log_f:
-            subprocess.Popen(
-                [
-                    _mempalace_python(),
-                    "-m",
-                    "mempalace",
-                    "mine",
-                    str(path.parent),
-                    "--mode",
-                    "convos",
-                    "--wing",
-                    wing,
-                ],
-                stdout=log_f,
-                stderr=log_f,
-            )
+        _spawn_mine(
+            [
+                _mempalace_python(),
+                "-m",
+                "mempalace",
+                "mine",
+                str(path.parent),
+                "--mode",
+                "convos",
+                "--wing",
+                wing,
+            ]
+        )
         _log(f"Transcript ingest started: {path.name} -> wing:{wing}")
     except OSError:
         pass
