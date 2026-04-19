@@ -120,7 +120,6 @@ Status legend: a PR number means there's an open upstream PR for the change; **P
 
 | Area | Change | Status | Files |
 |---|---|---|---|
-| **Reliability** | Epsilon mtime comparison (`abs() < 0.01` vs `==`) prevents re-mining | PR pending (verify vs current `develop` first) | `palace.py`, `miner.py` |
 | **Reliability** | Skip `_fix_blob_seq_ids` sqlite open after first successful migration via `.blob_seq_ids_migrated` marker — opening sqlite3 against a live ChromaDB 1.5.x file corrupts the next PersistentClient | fork-only (narrow chromadb 1.5.x debugging path) | `backends/chroma.py` |
 | **Reliability** | `_get_client()` tries `get_collection` before `create_collection` — `get_or_create_collection` segfaults ChromaDB 1.5.x when the existing collection's metadata differs from the call-site metadata | fork-only | `backends/chroma.py` |
 | **Reliability** | `quarantine_stale_hnsw()` helper — renames HNSW segments whose `data_level0.bin` is 1h+ older than `chroma.sqlite3`, sidesteps read-path SIGSEGV from dangling neighbor pointers (same failure mode as neo-cortex-mcp#2) | [#1000](https://github.com/milla-jovovich/mempalace/pull/1000) · closes #823 | `backends/chroma.py` |
@@ -129,16 +128,16 @@ Status legend: a PR number means there's an open upstream PR for the change; **P
 | **Performance** | Graph cache — 60s TTL, invalidated on writes | [#661](https://github.com/milla-jovovich/mempalace/pull/661) | `palace_graph.py` |
 | **Performance** | L1 importance pre-filter — `importance >= 3` first, full scan fallback | [#660](https://github.com/milla-jovovich/mempalace/pull/660) | `layers.py` |
 | **Performance** | `miner.status()` paginates `col.get()` in 10 K-drawer batches — upstream's single `col.get(limit=total)` hits SQLite's max-variable limit on palaces with many thousands of drawers | PR pending | `miner.py` |
-| **Mining** | `.jsonl` files exempt from 500 KB `JUNK_FILE_SIZE` cap — Claude Code transcripts routinely exceed 500 KB; without the exemption, large sessions were silently dropped by the miner | PR pending | `miner.py` |
 | **Config** | Configurable chunking parameters — `chunk_size` (default 800 chars), `chunk_overlap` (100), `min_chunk_size` (50) written to `config.json` and exposed via `MempalaceConfig` properties | PR pending | `config.py` |
-| **Search** | `max_distance` parameter (cosine distance threshold, default 1.5) | PR pending | `mcp_server.py`, `searcher.py` |
 | **Search** | Warnings + sqlite BM25 top-up when vector underdelivers — `search_memories` returns `warnings: [...]` and `available_in_scope: N` so callers see why recall was partial; fallback hits tagged `matched_via: "sqlite_bm25_fallback"`. The palace never silently returns fewer results than the scope contains (sibling of #951, addresses read-side of #823) | [#1005](https://github.com/milla-jovovich/mempalace/pull/1005) | `searcher.py` |
 | **Hooks** | Silent save mode — direct Python API, deterministic, zero data loss; extracts 2–3 topic words from recent messages for the diary title; optional desktop toast via `notify-send` | [#673](https://github.com/milla-jovovich/mempalace/pull/673) · APPROVED externally 2026-04-12 | `hooks_cli.py` |
-| **Hooks** | `mempal_save_hook.sh` auto-detects Python — checks `MEMPAL_PYTHON` env var, then repo venv at `../../venv/bin/python3`, then system `python3`; no hardcoded path required | fork-only | `hooks/mempal_save_hook.sh` |
-| **Hooks** | PID file guard prevents stacking mine processes — `_ingest_transcript` and `_maybe_auto_ingest` both check `hook_state/mine.pid` via `os.kill(pid, 0)` before spawning; without this, every hook fire (every 15 messages) launched a new `mempalace mine` that piled onto previous ones still running (observed: 4 concurrent mines at ~770% CPU) | PR pending | `hooks_cli.py` |
+| **Hooks** | `mempal_save_hook.sh` auto-detects Python — checks `MEMPAL_PYTHON` env var, then repo venv at `../../venv/bin/python3`, then system `python3`; no hardcoded path required. Same pattern applied to `.claude-plugin/` stop and precompact hooks. | fork-only | `hooks/mempal_save_hook.sh`, `.claude-plugin/hooks/mempal-stop-hook.sh`, `.claude-plugin/hooks/mempal-precompact-hook.sh` |
+| **Hooks** | PID file guard prevents stacking mine processes — `_ingest_transcript` and `_maybe_auto_ingest` both check `hook_state/mine.pid` via `os.kill(pid, 0)` before spawning; without this, every hook fire (every 15 messages) launched a new `mempalace mine` that piled onto previous ones still running (observed: 4 concurrent mines at ~770% CPU) | PR pending · branch `pr/pid-file-guard` (local, not pushed) | `hooks_cli.py` |
 | **Hooks** | Honor silent_save when `stop_hook_active:true` — Claude Code 2.1.114 sets the flag on every plugin-dispatched Stop fire after the first, and the legacy block-mode loop guard was suppressing every subsequent auto-save (silent, no log entry, marker stuck). Fixed to only skip on the flag in block mode | [#1021](https://github.com/milla-jovovich/mempalace/pull/1021) | `hooks_cli.py` |
 | **Hooks** | Write hook JSON to real stdout via `sys.modules` lookup — `mempalace.mcp_server` redirects stdout→stderr at import to protect MCP stdio from ChromaDB C-level noise; `_output()` checks `sys.modules` for an already-loaded `mcp_server` and reuses its `_REAL_STDOUT_FD`, otherwise writes directly to fd 1. Avoids triggering the redirect as a side effect. | [#1021](https://github.com/milla-jovovich/mempalace/pull/1021) | `hooks_cli.py` |
 | **Features** | Diary wing routing — derive project wing from transcript path; `tool_diary_write` and `tool_diary_read` accept an optional `wing` parameter | [#659](https://github.com/milla-jovovich/mempalace/pull/659) | `hooks_cli.py`, `mcp_server.py` |
+| **Hooks** | `hooks/mempal_precompact_hook.sh` transcript auto-mining — session ID parsed from JSON input, transcript resolved by direct path or `find`-by-session-id fallback, then mined inline (chunk_exchanges → upsert) before compaction fires; includes Python auto-detection | PR pending | `hooks/mempal_precompact_hook.sh` |
+| **CLI** | `cmd_export` and `cmd_purge` CLI commands — `export` calls `export_palace()` from the exporter module; `purge` deletes drawers by wing/room, nukes the palace dir and re-inserts retained drawers (avoids HNSW ghost entries left by `delete_collection`) | PR pending | `cli.py` |
 
 ### Merged upstream (post-v3.3.1)
 
@@ -163,6 +162,9 @@ Status legend: a PR number means there's an open upstream PR for the change; **P
 
 ### Superseded by upstream
 
+- Epsilon mtime comparison (`abs() < epsilon`) — upstream merged equivalent fix as PR #610 (Arnold Wender, 2026-04-12; their threshold 0.001 vs our 0.01, semantically equivalent). `bulk_check_mined()` in the same fork commit is independent and fork-only.
+- `.jsonl` added to `READABLE_EXTENSIONS` — upstream-authored at the same SHA (560fdbd); also raised `MAX_FILE_SIZE` 10 MB → 500 MB in d137d12. Not a fork contribution.
+- `max_distance` / `min_similarity` threshold — upstream merged a superset via PR #667 (`tool_search` already has `max_distance: float = 1.5` and back-compat `min_similarity` converter).
 - Hybrid keyword fallback (`$contains`) — upstream shipped Okapi-BM25 (60/40 blend) via [#789](https://github.com/milla-jovovich/mempalace/pull/789)
 - Batch ChromaDB writes — upstream has file-level locking for concurrent agents via [#784](https://github.com/milla-jovovich/mempalace/pull/784)
 - Inline transcript mining in hooks — upstream uses `mempalace mine` in background
