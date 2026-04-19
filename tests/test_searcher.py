@@ -261,6 +261,7 @@ class TestSearchCLI:
         """
         mock_col = MagicMock()
         mock_col.metadata = {"hnsw:space": "cosine"}
+        mock_col.count.return_value = 3
         mock_col.query.return_value = {
             "documents": [
                 [
@@ -299,6 +300,7 @@ class TestSearchCLI:
         pretending the `Match` scores are meaningful."""
         mock_col = MagicMock()
         mock_col.metadata = {}  # legacy: no hnsw:space set
+        mock_col.count.return_value = 1
         mock_col.query.return_value = {
             "documents": [["some drawer content"]],
             "metadatas": [[{"source_file": "a.md", "wing": "w", "room": "r"}]],
@@ -313,6 +315,7 @@ class TestSearchCLI:
     def test_search_does_not_warn_when_palace_is_correctly_configured(self, capsys):
         mock_col = MagicMock()
         mock_col.metadata = {"hnsw:space": "cosine"}
+        mock_col.count.return_value = 1
         mock_col.query.return_value = {
             "documents": [["some drawer content"]],
             "metadatas": [[{"source_file": "a.md", "wing": "w", "room": "r"}]],
@@ -323,12 +326,13 @@ class TestSearchCLI:
         captured = capsys.readouterr()
         assert "mempalace repair" not in captured.err
 
-    def test_search_handles_none_metadata_without_crash(self, palace_path, capsys):
+    def test_search_handles_none_metadata_without_crash(self, capsys):
         """ChromaDB can return `None` entries in the metadatas list when a
         drawer has no metadata. The CLI print path must not crash on them
         mid-render — it used to raise `AttributeError: 'NoneType' object has
         no attribute 'get'` after printing earlier results."""
         mock_col = MagicMock()
+        mock_col.count.return_value = 2
         mock_col.query.return_value = {
             "documents": [["first doc", "second doc"]],
             "metadatas": [[{"source_file": "a.md", "wing": "w", "room": "r"}, None]],
