@@ -663,41 +663,41 @@ def test_run_hook_unknown_hook():
 
 
 def test_wing_from_claude_code_path():
-    """Standard Claude Code transcript path extracts project name."""
+    """Standard Claude Code transcript path extracts project name with wing_ prefix."""
     path = "/home/jp/.claude/projects/-home-jp-Projects-kiyo-xhci-fix/session.jsonl"
-    assert _wing_from_transcript_path(path) == "kiyo-xhci-fix"
+    assert _wing_from_transcript_path(path) == "wing_kiyo-xhci-fix"
 
 
 def test_wing_from_nested_project_path():
     path = "/home/jp/.claude/projects/-home-jp-Projects-memorypalace/abc123.jsonl"
-    assert _wing_from_transcript_path(path) == "memorypalace"
+    assert _wing_from_transcript_path(path) == "wing_memorypalace"
 
 
 def test_wing_fallback_non_projects_path():
-    """Paths not matching the -Projects- pattern fall back to 'sessions'."""
+    """Paths not matching the -Projects- pattern fall back to 'wing_sessions'."""
     path = "/home/jp/.claude/projects/-home-jp-Documents-notes/session.jsonl"
-    assert _wing_from_transcript_path(path) == "sessions"
+    assert _wing_from_transcript_path(path) == "wing_sessions"
 
 
 def test_wing_from_path_with_spaces():
-    """Spaces in project names are replaced with underscores."""
+    """Spaces in project names are replaced with underscores, wing_ prefix stays."""
     path = "/home/jp/.claude/projects/-home-jp-Projects-my project/s.jsonl"
-    assert _wing_from_transcript_path(path) == "my_project"
+    assert _wing_from_transcript_path(path) == "wing_my_project"
 
 
 def test_wing_lowercased():
     path = "/home/jp/.claude/projects/-home-jp-Projects-RealmWatch/s.jsonl"
-    assert _wing_from_transcript_path(path) == "realmwatch"
+    assert _wing_from_transcript_path(path) == "wing_realmwatch"
 
 
 def test_wing_from_path_ending_with_project():
     """Path where -Projects-<name> is the last component (no trailing file)."""
     path = "/home/jp/.claude/projects/-home-jp-Projects-oracle"
-    assert _wing_from_transcript_path(path) == "oracle"
+    assert _wing_from_transcript_path(path) == "wing_oracle"
 
 
 def test_wing_empty_string():
-    assert _wing_from_transcript_path("") == "sessions"
+    assert _wing_from_transcript_path("") == "wing_sessions"
 
 
 def test_run_hook_invalid_json(tmp_path):

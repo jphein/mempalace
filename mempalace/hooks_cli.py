@@ -430,12 +430,15 @@ def _wing_from_transcript_path(transcript_path: str) -> str:
 
     Claude Code stores transcripts at:
         ~/.claude/projects/-home-<user>-Projects-<project>/session.jsonl
-    We extract <project> as the wing name.  Falls back to "sessions".
+    We extract <project> and return ``wing_<project>`` to match the
+    AAAK_SPEC convention (``wing_user``, ``wing_agent``, ``wing_code``,
+    ``wing_<project>``…). Falls back to ``wing_sessions``.
     """
     match = re.search(r"-Projects-([^/]+?)(?:/|$)", transcript_path)
     if match:
-        return match.group(1).lower().replace(" ", "_")
-    return "sessions"
+        project = match.group(1).lower().replace(" ", "_")
+        return f"wing_{project}"
+    return "wing_sessions"
 
 
 def _ingest_transcript(transcript_path: str):
