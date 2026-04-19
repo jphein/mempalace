@@ -458,12 +458,16 @@ def hook_stop(data: dict, harness: str):
         try:
             from .config import MempalaceConfig
         except ImportError as exc:
-            _log(f"WARNING: could not import MempalaceConfig for stop guard: {exc}; preserving block-mode guard")
+            _log(
+                f"WARNING: could not import MempalaceConfig for stop guard: {exc}; preserving block-mode guard"
+            )
         else:
             try:
                 silent_guard = MempalaceConfig().hook_silent_save
             except AttributeError as exc:
-                _log(f"WARNING: could not read hook_silent_save: {exc}; preserving block-mode guard")
+                _log(
+                    f"WARNING: could not read hook_silent_save: {exc}; preserving block-mode guard"
+                )
         if not silent_guard:
             _output({})
             return

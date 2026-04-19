@@ -316,10 +316,12 @@ def test_output_falls_back_to_fd1_when_mcp_server_absent():
         os.dup2(write_fd, 1)
         os.close(write_fd)
         try:
-            modules_without_mcp = {k: v for k, v in __import__("sys").modules.items()
-                                    if "mcp_server" not in k}
+            modules_without_mcp = {
+                k: v for k, v in __import__("sys").modules.items() if "mcp_server" not in k
+            }
             with patch.dict("sys.modules", modules_without_mcp, clear=True):
                 from mempalace.hooks_cli import _output
+
                 _output({"continue": True})
         finally:
             os.dup2(orig_fd1, 1)
