@@ -141,7 +141,7 @@ Status legend: a PR number means there's an open upstream PR for the change; **P
 
 - `None`-metadata guards across 8 read-path loops — `searcher.py` (CLI + API + closet-boost), `miner.status()`, and 4 MCP handlers ([#999](https://github.com/milla-jovovich/mempalace/pull/999), merged 2026-04-18)
 - `quarantine_stale_hnsw()` helper — renames HNSW segments whose `data_level0.bin` is 1h+ older than `chroma.sqlite3`, sidesteps read-path SIGSEGV ([#1000](https://github.com/milla-jovovich/mempalace/pull/1000), closes #823, merged 2026-04-19)
-- PID file guard prevents stacking `mempalace mine` processes on every hook fire ([#1023](https://github.com/milla-jovovich/mempalace/pull/1023), merged 2026-04-19). Includes the cross-platform PID-check fix: `os.kill(pid, 0)` on Windows *terminates* the target via `TerminateProcess` instead of acting as an existence probe — replaced with `ctypes` `OpenProcess`/`GetExitCodeProcess`.
+- PID file guard prevents stacking `mempalace mine` processes on every hook fire ([#1023](https://github.com/milla-jovovich/mempalace/pull/1023), merged 2026-04-19). Includes the cross-platform PID-check fix: `os.kill(pid, 0)` on Windows *terminates* the target via `TerminateProcess` instead of acting as an existence probe — replaced with `ctypes` `OpenProcess`/`GetExitCodeProcess`. Complementary broader work in [#976](https://github.com/milla-jovovich/mempalace/pull/976) (@felipetruman, CONFLICTING): adds a process-wide `mine_global_lock()` that also catches direct-CLI fan-out (not just hook-triggered), plus pins `hnsw:num_threads: 1` to fix HNSW SIGSEGVs (#974) and `link_lists.bin` blowup (#965).
 - Unicode checkmark replaced with ASCII `+` for Windows encoding ([#681](https://github.com/milla-jovovich/mempalace/pull/681), closes #535, merged 2026-04-19)
 
 ### Merged upstream (in v3.3.0)
@@ -190,6 +190,8 @@ Add `tags` metadata (3-8 per drawer, extracted during mining via TF-IDF or longe
 
 **Optional LLM enrichment layer (opt-in, additive):** Milla Jovovich's production setup adds a parallel Haiku pass at index time — Haiku reads each session and writes a short synthetic document ("Session topics: yoga, Tuesday routine. Summary: …") stored alongside the verbatim drawer. The verbatim is untouched; the topic doc improves semantic routing without replacing it. This maps directly onto the tag approach: the Haiku-extracted topics become the tag values. Benchmark: heuristic-tagged baseline scores 96.6% R@5 on LongMemEval; Haiku-enriched scoring is competitive before rerank. Implement as an opt-in `--enrich` flag on `mempalace mine` that calls Haiku per session and appends topic metadata. No API key required for the default path.
 
+**Upstream signal:** [#1033](https://github.com/milla-jovovich/mempalace/pull/1033) (`<private>` tag filter + progressive disclosure, @zackchiutw, MERGEABLE) is adjacent — it adds a single-purpose privacy tag, not the full multi-label scheme. P0 would still be additive on top of it.
+
 ### P1 — Derive hierarchy from unambiguous signals *(half day)*
 
 Reframe from "best-effort classification" to "derive from what we actually know." The cwd at write time, the transcript file path, the project directory — these are unambiguous. Entity detection on drawer content is not.
@@ -202,15 +204,19 @@ Changes:
 
 This preserves hierarchy's benefits (scope, browse, delete-as-unit) while eliminating the failure surface that caused most of this fork's bugs. It's principle 1 and principle 2 made concrete.
 
-### P2 — Decay / recency weighting *(1 day, opt-in)*
+### P2 — Decay / recency weighting *(tracked upstream — do not duplicate)*
 
-Search should favor recent and frequently-accessed memories. Add `last_accessed` and `access_count` to drawer metadata; post-process results with a decay curve. Reference: [context-engine](https://github.com/Emmimal/context-engine) has a ~200-line exponential decay implementation that ports directly. Ship as opt-in with conservative defaults — too aggressive loses valuable old memories. Also add `mempalace prune --stale-days 180 --dry-run` CLI.
+**Status 2026-04-19: handled by [#1032](https://github.com/milla-jovovich/mempalace/pull/1032)** (@zackchiutw, MERGEABLE, filed 2026-04-19). Ships a config-driven 4-stage rerank pipeline with **Weibull time-decay** as one stage — exactly this item's intent. All stages off by default; opt-in via `~/.mempalace/config.json`. Watch that PR; no fork work needed unless it stalls.
 
-### P3 — Feedback loops *(1-2 days)*
+Older implementation of the same idea: [#337](https://github.com/milla-jovovich/mempalace/pull/337) (@matrix9neonebuchadnezzar2199-sketch, simpler half-life decay, filed 2026-04-09, no activity since 2026-04-14).
 
-Tier 0 (cheapest signal, no user action): **LLM rerank.** After vector + BM25 returns top-K candidates, a Haiku call re-reads them against the original query and re-orders by answer relevance — a task embeddings fundamentally cannot do, since they measure semantic similarity not usefulness. Milla's production `longmemeval_bench.py` validates this: 96.6% R@5 baseline → **99.4% with Haiku rerank**, ~$0.001 per question. Implement as an opt-in `rerank=True` parameter on `search_memories` and `mempalace_search`. No schema changes needed; purely post-processing on the result set already returned.
+Original design notes kept for reference: add `last_accessed` and `access_count` to drawer metadata; post-process with a decay curve. Reference: [context-engine](https://github.com/Emmimal/context-engine) has a ~200-line exponential decay port. Independent `mempalace prune --stale-days 180 --dry-run` CLI is still a fork opportunity (#1032 doesn't touch pruning).
 
-Tier 1 (ship next): `mempalace_rate_memory(drawer_id, useful: bool)` MCP tool. Useful memories rank higher; flagged-not-useful get demoted. Tier 2 (later): query history table + implicit echo/fizzle signals once there's enough data. Hindsight calls this "reflect" — synthesizing across memories to identify what's useful.
+### P3 — Feedback loops *(rerank tracked upstream; rating/reflection still open)*
+
+**Tier 0 (LLM rerank) status: also covered by [#1032](https://github.com/milla-jovovich/mempalace/pull/1032)** — the pipeline's final stage is an optional Anthropic-API rerank pass. Milla's production `longmemeval_bench.py` already validates the approach: 96.6% R@5 baseline → **99.4% with Haiku rerank**, ~$0.001 per question.
+
+Tier 1+ still open upstream: `mempalace_rate_memory(drawer_id, useful: bool)` MCP tool, implicit echo/fizzle signals, Hindsight-style "reflect" synthesis. These remain viable fork or upstream contributions independent of #1032.
 
 ### P4 — KG auto-population + entity resolution *(1.5 days)*
 
@@ -226,15 +232,21 @@ KG triples get a context slot (SPOC: subject-predicate-object-context) rather th
 
 Strip known injection patterns (role-play instructions, "ignore previous instructions"). Flag with `sanitized: true` metadata rather than blocking. Length cap at 10K chars. Low priority while we're local-only; matters if the MCP server is ever exposed more broadly.
 
-### P7 — Alternative storage modes *(opt-in, non-destructive)*
+### P7 — Alternative storage modes *(tracked upstream — do not duplicate)*
 
-The verbatim path is the default and should stay the default. But there is real value in opt-in alternatives — the key constraint is that they must be additive or switchable, never forced replacements.
+**Status 2026-04-19: dropped as fork work.** Upstream has a formal design artifact and four in-flight backend implementations. Fork tracks this, does not rebuild it:
 
-**Flashcard / concept chunking** — Milla's approach (session_extract → session_chunker → palace_ingest_incremental) breaks sessions into small concept-scoped cards as the conversation progresses, in real time. The appeal: smaller units surface cleanly in search, token overhead drops, and there's no 3,844-drawer mine to kill at shutdown. The tradeoff: cards are LLM-summarized, not verbatim. Viable as an opt-in `--mode flashcard` for users who prefer token economy over completeness. Can coexist with verbatim — run both, search either.
+- [#743 — RFC 001: storage backend plugin specification](https://github.com/milla-jovovich/mempalace/pull/743) (@igorls, filed 2026-04-12, 587-line spec, single file). Defines entry-point group `mempalace.backends`, typed `QueryResult` / `GetResult` dataclasses, `PalaceRef(id, local_path?, namespace?)` for daemon-first multi-palace model, `where_document` contract. Designed to unblock all downstream backend PRs.
+- [#700 — Qdrant backend](https://github.com/milla-jovovich/mempalace/pull/700) (@RobertoGEMartin)
+- [#381 — Qdrant vector search](https://github.com/milla-jovovich/mempalace/pull/381) (@Anush008, earlier competing implementation)
+- [#574 — LanceDB abstraction + migration path](https://github.com/milla-jovovich/mempalace/pull/574) (@dekoza)
+- [#575 — LanceDB multi-device sync](https://github.com/milla-jovovich/mempalace/pull/575) (@dekoza, builds on #574)
 
-**AAAK encoding** — lossy abbreviation at scale (entity codes, pipe-separated Zettel fields, emotion markers). Benchmarks at 84.2% R@5 vs verbatim's 96.6% — 12 points of recall cost at small scale, potentially narrowing at very large scale with many repeated entities. Worth offering as `--mode aaak` alongside verbatim for users who want the compressed representation. Upstream's problem to maintain; this fork would consume it, not own it.
+**Original fork-mode design notes** (kept for reference, no longer planned as fork work):
 
-**Diary enrichment mode** — Haiku reads completed sessions and writes a short topic-summary doc stored alongside the verbatim drawers (not replacing them). Cleaner than flashcard chunking because the verbatim archive is untouched. Feeds directly into P0 tags and P3 rerank. This is the mode to implement first of the three.
+- *Flashcard / concept chunking* — Milla's approach (session_extract → session_chunker → palace_ingest_incremental). LLM-summarized cards instead of verbatim; opt-in `--mode flashcard` would trade completeness for token economy. Can coexist with verbatim.
+- *AAAK encoding* — lossy abbreviation (entity codes, pipe-separated Zettel fields, emotion markers). Benchmarks 84.2% R@5 vs verbatim's 96.6%. Upstream-maintained if it ships.
+- *Diary enrichment mode* — Haiku writes topic-summary docs alongside verbatim. Feeds into P0 tags and P3 rerank. The cleanest of the three if any get picked up.
 
 ### Deprioritized
 
