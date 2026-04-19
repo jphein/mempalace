@@ -230,7 +230,10 @@ def _mine_already_running() -> bool:
         pid = int(_MINE_PID_FILE.read_text().strip())
         os.kill(pid, 0)  # signal 0 = existence check, no actual signal sent
         return True
-    except (FileNotFoundError, ValueError, ProcessLookupError, PermissionError):
+    except (OSError, ValueError):
+        # OSError covers: FileNotFoundError (no pid file), ProcessLookupError
+        # (dead PID on POSIX), PermissionError (not our process), and
+        # WinError 87 / "invalid parameter" (dead or unknown PID on Windows).
         return False
 
 
