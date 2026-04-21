@@ -45,18 +45,22 @@ On a palace where the HNSW index has drifted and vector can't rank everything, t
 
 We surveyed the memory-system landscape in April 2026 and found no verbatim-first local system with MCP. Every alternative transforms content on write — extracted facts, knowledge graphs, tiered summaries — losing the original text.
 
-| System | Verbatim? | Local? | MCP? | Notes |
-|---|---|---|---|---|
-| **MemPalace** | Yes | Yes | Yes | What we have. 165,632 drawers as of 2026-04-21. Verbatim drawers + wings/rooms scope + SQLite KG + BM25/vector hybrid search. |
-| [Longhand](https://glama.ai/mcp/servers/Wynelson94/longhand) | Yes | Yes | Yes (16 tools) | Closest cousin. Claude Code-specific — reads `~/.claude/projects/*.jsonl` sessions directly. SQLite (raw JSON per event) + ChromaDB (embeddings of pre-computed "episodes"). Also does deterministic file-state replay via stored diffs. ~1.3MB/session; 170 tests; v0.5.10 as of writing. ([Author writeup](https://dev.to/wynelson94/why-i-built-a-lossless-alternative-to-ai-memory-summarization-40cl).) |
-| [Celiums](https://celiums.ai/) | Yes | Yes (SQLite, Docker, or DO) | Yes (6 tools) | Fellow verbatim-first. Stores full module text (2–20K words each) with PAD emotional vectors, importance scores, and circadian metadata. Bundles a 500K+ expert-module knowledge base alongside personal memory — a different product shape. |
-| [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) (doobidoo) | Yes by default (opt-in consolidation) | Yes (SQLite) or cloud (Cloudflare Workers) | Yes | "Turn-level storage (one entry per message)" preserves original text; MiniLM embeddings computed locally. Autonomous consolidation is opt-in, not default. Targets LangGraph / CrewAI / AutoGen plus Claude. |
-| [Hindsight](https://github.com/vectorize-io/hindsight) | No — LLM extracts facts | Yes (Docker) | Yes | Three ops: retain / recall / reflect. Original text is lost. |
-| [Mem0](https://github.com/mem0ai/mem0) / [OpenMemory](https://github.com/mem0ai/mem0/tree/main/openmemory) | No — extracts "memories" | Partial | Yes | Cloud-first; OpenMemory is the local-mode sibling. |
-| [Cognee](https://github.com/topoteretes/cognee) | No — knowledge graph | Yes | Yes (added since we wrote this row) | "Knowledge Engine" via ECL pipeline. |
-| [Letta](https://github.com/letta-ai/letta) | No — tiered summarization | Yes | No | Formerly MemGPT. |
-| [engram](https://github.com/NickCirv/engram) | Structured fields, not raw | Yes | Yes | Go + SQLite FTS5. |
-| [CaviraOSS OpenMemory](https://github.com/CaviraOSS/OpenMemory) | No — temporal graph | Yes | Yes | SQL-native. |
+Dates below are the earliest public marker we could find — either the first GitHub release tag or, where no release had been cut, the repository creation date. Treat as "roughly this month" rather than exact launch dates; pre-public development likely predates them.
+
+| System | Verbatim? | Local? | MCP? | First public | Notes |
+|---|---|---|---|---|---|
+| **MemPalace** | Yes | Yes | Yes | 2026-04-06 (v3.0.0) | What we have. 165,632 drawers as of 2026-04-21. Verbatim drawers + wings/rooms scope + SQLite KG + BM25/vector hybrid search. |
+| [Longhand](https://glama.ai/mcp/servers/Wynelson94/longhand) | Yes | Yes | Yes (16 tools) | 2026-04-14 (v0.5.2; repo 2026-04-09) | Closest cousin. Claude Code-specific — reads `~/.claude/projects/*.jsonl` sessions directly. SQLite (raw JSON per event) + ChromaDB (embeddings of pre-computed "episodes"). Also does deterministic file-state replay via stored diffs. ~1.3MB/session; 170 tests; v0.5.13 as of 2026-04-21. ([Author writeup](https://dev.to/wynelson94/why-i-built-a-lossless-alternative-to-ai-memory-summarization-40cl).) |
+| [Celiums](https://celiums.ai/) | Yes | Yes (SQLite, Docker, or DO) | Yes (6 tools) | 2026-04-08 (repo; [MCP server](https://glama.ai/mcp/servers/terrizoaguimor/celiums-memory)) | Fellow verbatim-first. Stores full module text (2–20K words each) with PAD emotional vectors, importance scores, and circadian metadata. Bundles a 500K+ expert-module knowledge base alongside personal memory — a different product shape. |
+| [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) (doobidoo) | Yes by default (opt-in consolidation) | Yes (SQLite) or cloud (Cloudflare Workers) | Yes | 2024-12-26 (repo; v10.28.2 current) | The long-standing verbatim option. "Turn-level storage (one entry per message)" preserves original text; MiniLM embeddings computed locally. Autonomous consolidation is opt-in, not default. Targets LangGraph / CrewAI / AutoGen plus Claude. |
+| [Hindsight](https://github.com/vectorize-io/hindsight) | No — LLM extracts facts | Yes (Docker) | Yes | 2026-01-05 (v0.2.0; repo 2025-10-30) | Three ops: retain / recall / reflect. Original text is lost. |
+| [Mem0](https://github.com/mem0ai/mem0) / [OpenMemory](https://github.com/mem0ai/mem0/tree/main/openmemory) | No — extracts "memories" | Partial | Yes | 2023-06 (repo) | Cloud-first; OpenMemory is the local-mode sibling. |
+| [Cognee](https://github.com/topoteretes/cognee) | No — knowledge graph | Yes | Yes (added since we wrote this row) | 2023-08 (repo) | "Knowledge Engine" via ECL pipeline. |
+| [Letta](https://github.com/letta-ai/letta) | No — tiered summarization | Yes | No | 2023-10 (as MemGPT) | Formerly MemGPT. Rebrand kept the repo. |
+| [engram](https://github.com/NickCirv/engram) | Structured fields, not raw | Yes | Yes | 2026-04-11 (v0.3.0; repo 2026-04-09) | Go + SQLite FTS5. |
+| [CaviraOSS OpenMemory](https://github.com/CaviraOSS/OpenMemory) | No — temporal graph | Yes | Yes | 2025-10-26 (v1.0.0) | SQL-native. |
+
+The April-2026 verbatim cluster (MemPalace, Celiums, Longhand, engram all within ~8 days) is striking — it suggests the "store it raw and retrieve well" pattern reached independent critical mass right around the same time. mcp-memory-service has been doing verbatim-by-default since late 2024; it just wasn't the loudest of the memory projects. Sweeps for `thedotmack/claude-mem`, `ukkit/memcord`, `itsjwill/claude-memory`, `DeusData/codebase-memory-mcp`, and `mkreyman/mcp-memory-keeper` turned up systems that *compress with AI*, explicitly summarize, or build knowledge graphs — not verbatim peers.
 
 **Verbatim storage is the differentiator.** For recovering exact commands, error messages, code snippets, and what someone actually said, you need the original text. Everything else — hierarchy, tags, knowledge graphs, decay — is enrichment *layered on top of* a faithful archive. If any of those layers fails or needs rebuilding, the underlying truth is still there.
 
