@@ -5,7 +5,7 @@
 JP's fork of [milla-jovovich/mempalace](https://github.com/milla-jovovich/mempalace) — a local AI memory system using ChromaDB for verbatim storage and semantic search.
 
 - **Fork**: `jphein/mempalace` (origin) / `milla-jovovich/mempalace` (upstream)
-- **Version**: 3.3.1 (merged upstream v3.3.1 on 2026-04-18)
+- **Version**: 3.3.1 on fork main; upstream shipped v3.3.2 on 2026-04-21 (includes our #681/#1000/#1023). Main merged upstream/develop through 2026-04-21 so fork runs post-v3.3.2 code.
 - **Python**: venv at `./venv/`, editable install with dev deps
 - **Palace data**: `~/.mempalace/palace` (ChromaDB) + `~/.mempalace/config.json`
 
@@ -20,7 +20,7 @@ JP's fork of [milla-jovovich/mempalace](https://github.com/milla-jovovich/mempal
 
 ```bash
 source venv/bin/activate
-python -m pytest tests/ -q              # ~1063 tests (benchmarks deselected)
+python -m pytest tests/ -q              # ~1096 tests (benchmarks deselected)
 mempalace status                         # check palace state
 mempalace search "query"                 # test search
 python -m mempalace.mcp_server           # run MCP server standalone
@@ -28,7 +28,7 @@ python -m mempalace.mcp_server           # run MCP server standalone
 
 Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 
-## Fork Changes (still ahead of upstream after v3.3.1 merge)
+## Fork Changes (still ahead of upstream after v3.3.2 merge)
 
 1. **feat: bulk_check_mined()** — paginated pre-fetch of all source_file/mtime pairs for concurrent mining (fork-only; independent of the mtime comparison fix, which has since been upstreamed)
 2. **feat: similarity threshold** — `max_distance` parameter in search, default 1.5 cosine distance in MCP
@@ -40,19 +40,22 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 8. **fix: MCP stale HNSW index** — `_get_client()` detects external writes via mtime (not just inode), `mempalace_reconnect` MCP tool
 9. **fix: diary wing assignment** — `tool_diary_write()` accepts optional `wing` param, stop hook derives project wing from transcript path
 10. **fix: `.blob_seq_ids_migrated` marker** — skip Python `sqlite3.connect()` against a live ChromaDB 1.5.x DB after first successful migration; opening the sqlite file from Python corrupts the next `PersistentClient` call
-11. **feat: `quarantine_stale_hnsw()`** — rename HNSW segment dirs whose `data_level0.bin` is 1h+ older than `chroma.sqlite3`, sidestepping the read-path SIGSEGV from dangling neighbor pointers (same failure mode as neo-cortex-mcp#2, mempalace#823)
+11. ~~**feat: `quarantine_stale_hnsw()`**~~ — **merged upstream via #1000 in v3.3.2.** No longer fork-ahead.
 12. **feat: search warnings + sqlite BM25 top-up** — `search_memories()` returns `warnings: [...]` and `available_in_scope: N` whenever the vector path underdelivers (sparse HNSW after repair, `#951` filter-planner failure, drift). Fallback promotes BM25-ranked sqlite candidates tagged `matched_via: "sqlite_bm25_fallback"`. Closes the "silent 0-hit when data is in sqlite" failure mode. CLI `search()` delegates to `search_memories()` so both paths share the fallback.
 13. **fix: stop_hook_active guard** — guard only applies in block mode; silent mode skips it so Claude Code 2.1.114's plugin dispatch (which sets `stop_hook_active:true` on every fire after the first) doesn't suppress subsequent auto-saves
 14. **fix: `_output()` stdout routing** — uses `sys.modules.get()` to find an already-loaded `mcp_server` and reuse its `_REAL_STDOUT_FD`; otherwise writes directly to fd 1. Avoids importing `mcp_server` cold (which would trigger its stdout→stderr redirect as a side effect). Write-all loop handles partial `os.write()` returns.
 15. **fix: `_get_client()` get-then-create guard** — `get_or_create_collection` segfaults ChromaDB 1.5.x when existing collection metadata differs; fork tries `get_collection` first, falls back to `create_collection` only on `InvalidCollectionException`.
 16. **perf: `miner.status()` paginated `col.get()`** — upstream's single `col.get(limit=total)` hits SQLite's max-variable limit on palaces with many thousands of drawers; fork paginates in 10 K-drawer batches.
 17. **feat: configurable chunking parameters** — `chunk_size` (800), `chunk_overlap` (100), `min_chunk_size` (50) written to `config.json` and exposed via `MempalaceConfig` properties.
-18. **fix: PID file guard prevents stacking mine processes** — `_mine_already_running()` checks `hook_state/mine.pid` via `os.kill(pid, 0)`; both `_ingest_transcript` and `_maybe_auto_ingest` bail if a mine is already running. Observed without fix: 4 concurrent mines at ~770% CPU.
+18. ~~**fix: PID file guard prevents stacking mine processes**~~ — **merged upstream via #1023 in v3.3.2.** Includes the Windows `os.kill` → `OpenProcess` cross-platform fix. No longer fork-ahead.
 
 ### Merged into upstream (post-v3.3.1)
 
 - epsilon mtime comparison (upstream PR #610, merged 2026-04-12 by Arnold Wender — their threshold is 0.001, ours was 0.01, semantically equivalent)
 - `None`-metadata guards across 8 read-path loops — searcher.py, miner.status, 4 mcp_server handlers (#999, merged 2026-04-18)
+- Unicode checkmark → ASCII for Windows encoding (#681, shipped in v3.3.2)
+- `quarantine_stale_hnsw()` for HNSW/sqlite drift (#1000, shipped in v3.3.2)
+- PID file guard prevents stacking mine processes, with Windows cross-platform `os.kill` fix (#1023, shipped in v3.3.2)
 
 ### Merged into upstream v3.3.0
 
@@ -85,26 +88,28 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 
 ## Upstream PRs
 
-As of 2026-04-19: 6 merged, 8 open, 7 closed. PRs target `develop`. Fork `main` tracks `upstream/develop`.
+As of 2026-04-21: 10 merged, 7 open, 7 closed. PRs target `develop`. Fork `main` tracks `upstream/develop`.
 
 | PR | Status | Description |
 |----|--------|-------------|
 | #659 | open (`MERGEABLE`, waiting review) | Diary wing parameter |
 | #660 | open (`MERGEABLE`, waiting review) | L1 importance pre-filter |
-| #661 | open (feedback addressed, waiting `@bensig` re-review) | Graph cache with write-invalidation |
-| #673 | open (APPROVED externally 2026-04-12, waiting maintainer merge) | Deterministic hook saves (broader than upstream's #966) |
-| #681 | open (clean, waiting review) | Unicode checkmark → ASCII (#535) |
+| #661 | open (`CHANGES_REQUESTED` but feedback addressed, waiting `@bensig` re-review — GitHub holds state until reviewer dismisses) | Graph cache with write-invalidation |
+| #673 | open (externally approved 2026-04-12, rebased + squashed on 2026-04-21, `MERGEABLE`) | Deterministic hook saves (broader than upstream's #966) |
+| #1005 | open (CI green all platforms, waiting maintainer) | Warnings + sqlite BM25 top-up when vector underdelivers (never silent miss) |
+| #1021 | open (CI green all platforms, waiting maintainer) | Hook stdout routing + silent_save guard fixes for Claude Code 2.1.114 |
+| #1024 | open (CI green all platforms, waiting maintainer) | Configurable chunk_size, chunk_overlap, min_chunk_size |
+| #681 | **merged** in v3.3.2 (2026-04-21) | Unicode checkmark → ASCII (#535) |
+| #1000 | **merged** in v3.3.2 (2026-04-21) | `quarantine_stale_hnsw()` for HNSW/sqlite drift |
+| #1023 | **merged** in v3.3.2 (2026-04-21) | PID file guard prevents stacking mine processes + Windows `os.kill` cross-platform fix |
 | #999 | **merged** 2026-04-18 | `None`-metadata guards in `searcher.py`, `miner.status()`, and 4 `mcp_server.py` handlers |
-| #1000 | open (CI green all platforms, Copilot + Dialectician review addressed, waiting maintainer) | `quarantine_stale_hnsw()` for HNSW/sqlite drift |
-| #1005 | open (CI green all platforms, Copilot + Dialectician review addressed, waiting maintainer) | Warnings + sqlite BM25 top-up when vector underdelivers (never silent miss) |
-| #1021 | open (CI green all platforms, Copilot review addressed, waiting maintainer) | Hook stdout routing + silent_save guard fixes for Claude Code 2.1.114 |
-| #629 | **closed** | Superseded — upstream shipped batching + file locking |
-| #632 | **closed** | Superseded — `--version`, `purge`, `repair` all shipped in v3.3.0 |
 | #664 | **merged** | BLOB seq_id migration repair |
 | #682 | **merged** | --yes flag for init (#534) |
 | #683 | **merged** | Unicode sanitize_name (#637) |
 | #684 | **merged** | VAR_KEYWORD kwargs check (#572) |
 | #635 | **merged** via #667 | New MCP tools, export |
+| #629 | **closed** | Superseded — upstream shipped batching + file locking |
+| #632 | **closed** | Superseded — `--version`, `purge`, `repair` all shipped in v3.3.0 |
 | #662 | **closed** | Hybrid search fallback (superseded by upstream BM25) |
 | #738 | **closed** | Docs: MCP tools reference (stale after v3.3.0) |
 | #663 | **closed** | Stale HNSW mtime detection (upstream wrote #757) |
