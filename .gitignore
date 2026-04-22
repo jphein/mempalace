@@ -37,3 +37,6 @@ venv/
 
 # ChromaDB local data
 *.sqlite3-journal
+
+# Private / shared artifacts that should never land in the public fork
+dashboards-bensig-*/
