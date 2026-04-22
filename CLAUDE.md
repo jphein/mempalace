@@ -91,14 +91,17 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 
 ## Upstream PRs
 
-As of 2026-04-22: 13 merged, 4 open, 7 closed. PRs target `develop`. Fork `main` tracks `upstream/develop`.
+As of 2026-04-22: 13 merged, 7 open, 7 closed. PRs target `develop`. Fork `main` tracks `upstream/develop`.
 
 | PR | Status | Description |
 |----|--------|-------------|
-| #659 | open (`MERGEABLE`, waiting review) | Diary wing parameter |
+| #659 | open (`CLEAN`, 6/6 CI green — rebased onto `upstream/develop` 2026-04-22, stale-merge blocker cleared) | Diary wing parameter |
 | #660 | open (`MERGEABLE`, waiting review) | L1 importance pre-filter |
-| #1005 | open (CI green all platforms, waiting maintainer) | Warnings + sqlite BM25 top-up when vector underdelivers (never silent miss) |
-| #1024 | open (CI green all platforms, waiting maintainer) | Configurable chunk_size, chunk_overlap, min_chunk_size |
+| #1005 | open (CI green all platforms, Dialectician-acked, waiting maintainer) | Warnings + sqlite BM25 top-up when vector underdelivers (never silent miss) |
+| #1024 | open (CI green all platforms, qodo-acked, waiting maintainer) | Configurable chunk_size, chunk_overlap, min_chunk_size |
+| #1086 | open (`MERGEABLE`) | `mempalace export` CLI wrapper for `export_palace()` (fork-ahead Row 1) |
+| #1087 | open (`MERGEABLE`, 6/6 CI green) | `mempalace purge --wing/--room` CLI — destructive drawer removal (fork-ahead Row 4) |
+| #1094 | open (`CLEAN`, 6/6 CI green) | Coerce `None` metadatas → `{}` at `ChromaCollection.query/.get` boundary (closes #1020) |
 | #661 | **merged** 2026-04-22 | Graph cache with write-invalidation |
 | #673 | **merged** 2026-04-22 | Deterministic hook saves (broader than upstream's #966) — config-flag-gated, strictly safer save semantics |
 | #1021 | **merged** 2026-04-22 | Hook stdout routing + `silent_save` guard fixes for Claude Code 2.1.114 |
