@@ -93,7 +93,7 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 
 ## Upstream PRs
 
-As of 2026-04-23: 14 merged, 6 open, 8 closed. PRs target `develop`. Fork `main` tracks `upstream/develop`.
+As of 2026-04-23: 14 merged, 7 open, 8 closed. PRs target `develop`. Fork `main` tracks `upstream/develop`.
 
 | PR | Status | Description |
 |----|--------|-------------|
@@ -103,6 +103,7 @@ As of 2026-04-23: 14 merged, 6 open, 8 closed. PRs target `develop`. Fork `main`
 | #1086 | open (`MERGEABLE`) | `mempalace export` CLI wrapper for `export_palace()` (fork-ahead Row 1) |
 | #1087 | open (`MERGEABLE`, 6/6 CI green) | `mempalace purge --wing/--room` CLI — destructive drawer removal (fork-ahead Row 4) |
 | #1094 | open (`CLEAN`, 6/6 CI green) | Coerce `None` metadatas → `{}` at `ChromaCollection.query/.get` boundary (closes #1020) |
+| #1142 | open (filed 2026-04-23) | `docs/RELEASING.md` with `mempalace-mcp` pre-release grep — fulfills #1093's release-checklist proposal, accepted by @bensig 2026-04-23 via email |
 | #659 | **merged** 2026-04-23 | Diary wing parameter (`tool_diary_write` / `tool_diary_read` accept `wing`, hook derives from transcript path) |
 | #661 | **merged** 2026-04-22 | Graph cache with write-invalidation |
 | #673 | **merged** 2026-04-22 | Deterministic hook saves (broader than upstream's #966) — config-flag-gated, strictly safer save semantics |
