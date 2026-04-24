@@ -8,9 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [3.3.4] — 2026-04-24
 
-### Bug Fixes
+### Bug Fixes — ChromaDB 1.5.x segfault trio
 
-- **Multi-process write lock** — Claude Code spawns one `mcp_server.py` per open terminal; stop hooks spawn additional short-lived processes on every fire. All open independent `PersistentClient` instances against the same palace directory. ChromaDB has no inter-process write locking, so concurrent writes corrupt the HNSW segment and cause the next read to SIGSEGV in Rust bindings. Added `_palace_write_lock()` — `fcntl.flock(LOCK_EX)` on `$palace/.write.lock` — wrapping all four write paths (`add_drawer`, `delete_drawer`, `update_drawer`, `diary_write`). Serializes cross-process writes; lock auto-releases on process death.
+Three independent triggers were crashing fresh processes (MCP servers, stop hooks, `mempalace mine` subprocesses) with SIGSEGV in `chromadb_rust_bindings`. Fixed and filed as [#1171](https://github.com/milla-jovovich/mempalace/pull/1171), [#1173](https://github.com/milla-jovovich/mempalace/pull/1173), [#1177](https://github.com/milla-jovovich/mempalace/pull/1177).
+
+- **Backend-seam write lock.** `_palace_write_lock(palace_path)` wraps `ChromaCollection.add/upsert/update/delete` using `fcntl.flock(LOCK_EX)` on `$palace/.write.lock`. Because RFC 001 made the adapter the single boundary for all ChromaDB writes, putting the lock there covers every caller (`mcp_server`, `miner`, `convo_miner`, `palace`) automatically. First version of this fix lived in `mcp_server.py` but missed the `mempalace mine` subprocess; moved to the adapter. `flock` auto-releases on process death so crashes can't deadlock.
+- **Quarantine on every `make_client()`.** Upstream's `quarantine_stale_hnsw()` only ran at MCP server startup (via #1062). Fork now calls it inside `ChromaBackend.make_client()` itself, so every fresh process (hook, CLI, tests) opens a clean palace. Default threshold lowered 3600 → 300s after a 0.96h-drift segfault in production.
+- **`.blob_seq_ids_migrated` marker guard.** Opening `chroma.sqlite3` via Python's `sqlite3.connect()` against a live ChromaDB 1.5.x WAL database leaves state that segfaults the next `PersistentClient`. `_fix_blob_seq_ids()` now writes a sentinel file after first successful migration; subsequent opens short-circuit before touching sqlite. Closes #1090. (Restoration of a guard lost in an earlier upstream merge.)
 
 ---
 
