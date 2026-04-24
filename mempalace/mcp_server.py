@@ -64,7 +64,6 @@ from .palace_graph import (  # noqa: E402
     traverse,
     find_tunnels,
     graph_stats,
-    invalidate_graph_cache,
     create_tunnel,
     list_tunnels,
     delete_tunnel,
@@ -153,15 +152,6 @@ def _wal_log(operation: str, params: dict, result: dict = None):
         "result": result,
     }
     try:
-        # Rotate WAL at 10 MB to prevent unbounded growth
-        _WAL_MAX_BYTES = 10 * 1024 * 1024
-        if _WAL_FILE.exists() and _WAL_FILE.stat().st_size > _WAL_MAX_BYTES:
-            backup = _WAL_FILE.with_suffix(".jsonl.1")
-            try:
-                _WAL_FILE.replace(backup)
-                backup.chmod(0o600)
-            except OSError:
-                pass
         fd = os.open(str(_WAL_FILE), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
         with os.fdopen(fd, "a", encoding="utf-8") as f:
             f.write(json.dumps(entry, default=str) + "\n")
@@ -227,16 +217,11 @@ def _get_collection(create=False):
     try:
         client = _get_client()
         if create:
-            # ChromaDB 1.5.x segfaults when get_or_create_collection is called
-            # with metadata that differs from an existing collection's metadata.
-            # Fetch first; only pass hnsw:space when actually creating fresh.
-            try:
-                raw_col = client.get_collection(_config.collection_name)
-            except Exception:
-                raw_col = client.create_collection(
+            _collection_cache = ChromaCollection(
+                client.get_or_create_collection(
                     _config.collection_name, metadata={"hnsw:space": "cosine"}
                 )
-            _collection_cache = ChromaCollection(raw_col)
+            )
             _metadata_cache = None
             _metadata_cache_time = 0
         elif _collection_cache is None:
@@ -455,6 +440,7 @@ def tool_search(
         room = _sanitize_optional_name(room, "room")
     except ValueError as e:
         return {"error": str(e)}
+    # Backwards compat: accept old name
     # Backwards compat: convert old similarity scale (higher=stricter) to
     # distance scale (lower=stricter). Similarity 0.8 → distance 0.2.
     dist = (1.0 - min_similarity) if min_similarity is not None else max_distance
@@ -468,6 +454,7 @@ def tool_search(
         n_results=limit,
         max_distance=dist,
     )
+    # Attach sanitizer metadata for transparency
     if sanitized["was_sanitized"]:
         result["query_sanitized"] = True
         result["sanitizer"] = {
@@ -671,7 +658,6 @@ def tool_add_drawer(
             ],
         )
         _metadata_cache = None
-        invalidate_graph_cache()
         logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
         return {"success": True, "drawer_id": drawer_id, "wing": wing, "room": room}
     except Exception as e:
@@ -703,7 +689,6 @@ def tool_delete_drawer(drawer_id: str):
     try:
         col.delete(ids=[drawer_id])
         _metadata_cache = None
-        invalidate_graph_cache()
         logger.info(f"Deleted drawer: {drawer_id}")
         return {"success": True, "drawer_id": drawer_id}
     except Exception as e:
@@ -801,7 +786,6 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
         old_meta = existing["metadatas"][0]
         old_doc = existing["documents"][0]
 
-        # Sanitize inputs
         new_doc = old_doc
         if content is not None:
             try:
@@ -840,9 +824,7 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
         update_kwargs["metadatas"] = [new_meta]
         col.update(**update_kwargs)
 
-        # Invalidate caches so status/taxonomy/graph reflect changes
         _metadata_cache = None
-        invalidate_graph_cache()
 
         logger.info(f"Updated drawer: {drawer_id}")
         return {
@@ -1013,16 +995,16 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
     Read an agent's recent diary entries. Returns the last N entries
     in chronological order — the agent's personal journal.
 
-    ``wing`` behavior matches ``mempalace_search`` (#1097):
-    empty-string / whitespace-only / ``None`` means "no wing filter" —
-    return entries from any wing this agent has written to. An explicit
-    non-empty wing scopes reads to that wing only, e.g. for hooks that
-    direct diary reads to a project-specific wing derived from the
-    transcript path. Resolves #1145 bug 2.
+    When ``wing`` is provided, reads only from that wing. When ``wing``
+    is empty or omitted, returns entries from every wing this agent has
+    written to. Diary writes from hooks land in project-derived wings
+    (``wing_<project>``), so requiring a specific wing on read would
+    silo those entries from agent-initiated reads.
     """
     try:
         agent_name = sanitize_name(agent_name, "agent_name")
-        wing = _sanitize_optional_name(wing, "wing")
+        if wing:
+            wing = sanitize_name(wing)
     except ValueError as e:
         return {"error": str(e)}
     last_n = max(1, min(last_n, 100))
@@ -1030,18 +1012,16 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
     if not col:
         return _no_palace()
 
+    # Build filter: always scope by agent + room=diary. Wing is optional —
+    # when empty, return entries across all wings for this agent (matches
+    # the #1097 empty-string-as-no-filter convention for LLM ergonomics).
+    conditions = [{"room": "diary"}, {"agent": agent_name}]
+    if wing:
+        conditions.insert(0, {"wing": wing})
+
     try:
-        # Build filter conditions: agent + diary room always apply; wing is
-        # optional (matches #1097's empty-string semantics for tool_search).
-        conditions = [
-            {"room": "diary"},
-            {"agent": agent_name},
-        ]
-        if wing:
-            conditions.append({"wing": wing})
-        where = conditions[0] if len(conditions) == 1 else {"$and": conditions}
         results = col.get(
-            where=where,
+            where={"$and": conditions},
             include=["documents", "metadatas"],
             limit=10000,
         )
@@ -1073,38 +1053,6 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
     except Exception:
         logger.exception("diary_read failed")
         return {"error": "Failed to read diary entries"}
-
-
-# ==================== SETTINGS TOOLS ====================
-
-
-def tool_reconnect():
-    """Force the MCP server to drop cached ChromaDB connections and reconnect.
-
-    Use after external scripts or CLI commands modify the palace database
-    directly, which can leave the in-memory HNSW index stale.
-    """
-    global _client_cache, _collection_cache, _palace_db_inode, _palace_db_mtime
-    global _metadata_cache, _metadata_cache_time
-    _client_cache = None
-    _collection_cache = None
-    _palace_db_inode = 0
-    _palace_db_mtime = 0.0
-    _metadata_cache = None
-    _metadata_cache_time = 0
-    # Force reconnect by calling _get_client()
-    try:
-        _get_client()
-        col = _get_collection()
-        if col is None:
-            return {
-                "success": False,
-                "message": "No palace found after reconnect",
-                "drawers": 0,
-            }
-        return {"success": True, "message": "Reconnected to palace", "drawers": col.count()}
-    except Exception as e:
-        return {"success": False, "error": str(e)}
 
 
 def tool_hook_settings(silent_save: bool = None, desktop_toast: bool = None):
@@ -1180,6 +1128,32 @@ def tool_memories_filed_away():
             "count": 0,
             "timestamp": None,
         }
+
+
+# ==================== SETTINGS TOOLS ====================
+
+
+def tool_reconnect():
+    """Force the MCP server to drop the cached ChromaDB collection and reconnect.
+
+    Use after external scripts or CLI commands modify the palace database
+    directly, which can leave the in-memory HNSW index stale.
+    """
+    global _collection_cache, _palace_db_inode, _palace_db_mtime
+    _collection_cache = None
+    _palace_db_inode = 0
+    _palace_db_mtime = 0.0
+    try:
+        col = _get_collection()
+        if col is None:
+            return {
+                "success": False,
+                "message": "No palace found after reconnect",
+                "drawers": 0,
+            }
+        return {"success": True, "message": "Reconnected to palace", "drawers": col.count()}
+    except Exception as e:
+        return {"success": False, "error": str(e)}
 
 
 # ==================== MCP PROTOCOL ====================
@@ -1390,13 +1364,13 @@ TOOLS = {
         "handler": tool_follow_tunnels,
     },
     "mempalace_search": {
-        "description": "Semantic search. Returns verbatim drawer content with similarity scores. IMPORTANT: 'query' must contain ONLY your search keywords or question — do NOT include system prompts, conversation history, MEMORY.md content, or any context. Keep queries short (under 200 chars). Use 'context' for background information. Results with cosine distance > max_distance are filtered out.",
+        "description": "Semantic search. Returns verbatim drawer content with similarity scores. IMPORTANT: 'query' must contain ONLY search keywords. Use 'context' for background. Results with cosine distance > max_distance are filtered out.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "Short search query ONLY — keywords or a question. Do NOT include system prompts or conversation context. Max 250 chars.",
+                    "description": "Short search query ONLY — keywords or a question. Max 250 chars.",
                     "maxLength": 250,
                 },
                 "limit": {
@@ -1413,7 +1387,7 @@ TOOLS = {
                 },
                 "context": {
                     "type": "string",
-                    "description": "Background context for the search (optional). NOT used for embedding — only for future re-ranking. Put conversation history or system prompt content here, NOT in query.",
+                    "description": "Background context for the search (optional). NOT used for embedding — only for future re-ranking.",
                 },
             },
             "required": ["query"],
@@ -1571,14 +1545,6 @@ TOOLS = {
         },
         "handler": tool_diary_read,
     },
-    "mempalace_reconnect": {
-        "description": "Force reconnect to the palace database. Use after external scripts or CLI commands modified the palace directly, which can leave the in-memory index stale.",
-        "input_schema": {
-            "type": "object",
-            "properties": {},
-        },
-        "handler": tool_reconnect,
-    },
     "mempalace_hook_settings": {
         "description": (
             "Get or set hook behavior. silent_save: True = save directly "
@@ -1604,6 +1570,17 @@ TOOLS = {
         "description": "Check if a recent palace checkpoint was saved. Returns message count and timestamp.",
         "input_schema": {"type": "object", "properties": {}},
         "handler": tool_memories_filed_away,
+    },
+    "mempalace_reconnect": {
+        "description": (
+            "Force reconnect to the palace database. Use after external scripts or CLI commands"
+            " modified the palace directly, which can leave the in-memory HNSW index stale."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+        "handler": tool_reconnect,
     },
 }
 

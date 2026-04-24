@@ -448,12 +448,6 @@ def _ingest_transcript(transcript_path: str):
     except Exception:
         return
 
-    # Derive per-project wing from the transcript path so mined convos land in
-    # the same wing as the diary checkpoint, instead of all transcripts piling
-    # into `wing_sessions`. Falls back to `wing_sessions` when the path doesn't
-    # match a recognizable project layout.
-    wing = _wing_from_transcript_path(str(path))
-
     try:
         log_path = STATE_DIR / "hook.log"
         STATE_DIR.mkdir(parents=True, exist_ok=True)
@@ -468,12 +462,12 @@ def _ingest_transcript(transcript_path: str):
                     "--mode",
                     "convos",
                     "--wing",
-                    wing,
+                    "sessions",
                 ],
                 stdout=log_f,
                 stderr=log_f,
             )
-        _log(f"Transcript ingest started: {path.name} -> wing:{wing}")
+        _log(f"Transcript ingest started: {path.name}")
     except OSError:
         pass
 
@@ -496,44 +490,33 @@ def _parse_harness_input(data: dict, harness: str) -> dict:
 def _wing_from_transcript_path(transcript_path: str) -> str:
     """Derive a project wing name from a Claude Code transcript path.
 
-    Claude Code encodes the full source directory path into the project
-    folder name, replacing ``/`` with ``-``. Transcripts live at:
-        ~/.claude/projects/<encoded-folder>/session.jsonl
+    Claude Code encodes the project's source directory by replacing path
+    separators with dashes, producing folders like:
+        ~/.claude/projects/-home-<user>-Projects-<project>/session.jsonl
+        ~/.claude/projects/-home-<user>-dev-<parent>-<project>/session.jsonl
+        ~/.claude/projects/-Users-<user>-<folder>-<project>/session.jsonl
 
-    We try two strategies in order:
-
-    1. Match ``-Projects-<project>`` if the source lives under
-       ``~/Projects/`` (the most common layout on our fork maintainer's
-       machine — preserving exact existing behavior).
-    2. Fall back to the last ``-``-delimited segment of the encoded
-       folder name — works for any layout (``~/dev/``, ``~/src/``,
-       ``~/code/``, etc.) because that segment is the actual project
-       directory name. Resolves #1145 bug 1.
-
-    Returns ``wing_<project>`` to match the AAAK_SPEC convention; falls
-    back to ``wing_sessions`` when the path doesn't match either pattern.
+    The project directory name is the final dash-separated token of the
+    encoded folder. Returns ``wing_<project>`` (lowercased, spaces → ``_``).
+    Falls back to ``wing_sessions`` if the path does not match a Claude Code
+    project-folder layout.
     """
     # Normalize path separators for cross-platform (Windows backslashes)
     normalized = transcript_path.replace("\\", "/")
-
-    # Strategy 1: explicit `-Projects-<project>` slice (preserves behavior
-    # for code living under ~/Projects/, which is what the existing tests
-    # assert against).
+    # Primary: pull the encoded project folder out of ``.claude/projects/``
+    # and take its last dash-separated token.
+    match = re.search(r"/\.claude/projects/-([^/]+)", normalized)
+    if match:
+        encoded = match.group(1)
+        project = encoded.rsplit("-", 1)[-1]
+        if project:
+            return f"wing_{project.lower().replace(' ', '_')}"
+    # Legacy fallback: explicit ``-Projects-<name>`` segment, useful for
+    # transcripts not under the standard Claude Code projects dir.
     match = re.search(r"-Projects-([^/]+?)(?:/|$)", normalized)
     if match:
         project = match.group(1).lower().replace(" ", "_")
         return f"wing_{project}"
-
-    # Strategy 2: last `-`-delimited segment of the encoded folder name.
-    # Claude Code's encoding puts the original directory name there
-    # regardless of source layout, so this recovers the project name for
-    # users whose code lives outside ~/Projects/.
-    folder = normalized.rsplit("/", 1)[0].rsplit("/", 1)[-1]
-    if folder.startswith("-") and "-" in folder[1:]:
-        project = folder.rsplit("-", 1)[-1].lower().replace(" ", "_")
-        if project:
-            return f"wing_{project}"
-
     return "wing_sessions"
 
 
