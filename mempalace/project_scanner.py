@@ -627,13 +627,18 @@ def discover_entities(
     root_path = Path(project_dir).expanduser().resolve()
     if is_claude_projects_root(root_path):
         convo_projects = scan_claude_projects(root_path)
-        # Dedup by name against the git-manifest list, preferring entries with
-        # more user_commits as signal strength.
-        by_name: dict[str, ProjectInfo] = {p.name: p for p in projects}
+        # Dedup by name against the git-manifest list, preferring entries
+        # with more user_commits as signal strength. Keyed case-insensitively
+        # so a `pyproject.toml` name like `mempalace` and a Claude Code
+        # `cwd` variant like `MemPalace` collapse into one entry — matches
+        # the case-insensitive dedup used in `_merge_detected` and
+        # `miner.add_to_known_entities`.
+        by_name: dict[str, ProjectInfo] = {p.name.lower(): p for p in projects}
         for cp in convo_projects:
-            existing = by_name.get(cp.name)
+            key = cp.name.lower()
+            existing = by_name.get(key)
             if existing is None or cp.user_commits > existing.user_commits:
-                by_name[cp.name] = cp
+                by_name[key] = cp
         projects = sorted(
             by_name.values(),
             key=lambda p: (not p.is_mine, -p.user_commits, -p.total_commits, p.name),

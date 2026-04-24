@@ -524,6 +524,34 @@ def test_discover_entities_keeps_llm_only_project_uncertain_when_real_signal(tmp
     assert "Terraform" in [e["name"] for e in d["uncertain"]]
 
 
+def test_discover_entities_collapses_case_variants_between_manifest_and_convo(tmp_path):
+    """A project named `myproj` in a manifest and `MyProj` as a Claude Code
+    cwd must collapse into one entry. Matches the case-insensitive dedup
+    used by `_merge_detected` and `miner.add_to_known_entities`."""
+    root = tmp_path / "projects_root"
+    root.mkdir()
+
+    # Entry 1: a git+manifest project named lowercase `myproj`
+    repo = root / "-home-u-src-myproj"
+    repo.mkdir()
+    (repo / "package.json").write_text(json.dumps({"name": "myproj"}))
+    _init_git_repo(repo)
+
+    # Entry 2: same root ALSO looks like a Claude Code `.claude/projects/` dir;
+    # the convo_scanner inside will resolve `cwd` to `/home/u/src/MyProj`
+    # (CamelCase variant of the same project).
+    session = repo / "abc.jsonl"
+    session.write_text(json.dumps({"type": "user", "cwd": "/home/u/src/MyProj"}) + "\n")
+
+    d = discover_entities(str(root))
+
+    project_names = [e["name"] for e in d["projects"]]
+    # One entry, not two. First-seen casing ("myproj" from the manifest scan)
+    # is the winner since it was seeded first.
+    assert len(project_names) == 1
+    assert project_names[0].lower() == "myproj"
+
+
 # ── _UnionFind basics ──────────────────────────────────────────────────
 
 
