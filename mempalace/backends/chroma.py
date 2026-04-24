@@ -167,7 +167,6 @@ def _fix_blob_seq_ids(palace_path: str) -> None:
     marker = os.path.join(palace_path, _BLOB_FIX_MARKER)
     if os.path.isfile(marker):
         return
-    migrated = False
     try:
         with sqlite3.connect(db_path) as conn:
             for table in ("embeddings", "max_seq_id"):
@@ -182,7 +181,6 @@ def _fix_blob_seq_ids(palace_path: str) -> None:
                 updates = [(int.from_bytes(blob, byteorder="big"), rowid) for rowid, blob in rows]
                 conn.executemany(f"UPDATE {table} SET seq_id = ? WHERE rowid = ?", updates)
                 logger.info("Fixed %d BLOB seq_ids in %s", len(updates), table)
-                migrated = True
             conn.commit()
     except Exception:
         logger.exception("Could not fix BLOB seq_ids in %s", db_path)
