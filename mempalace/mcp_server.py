@@ -43,10 +43,12 @@ except (OSError, AttributeError):
 sys.stdout = sys.stderr
 
 import argparse  # noqa: E402  (deferred until after stdio protection above)
+import fcntl  # noqa: E402
 import json  # noqa: E402
 import logging  # noqa: E402
 import hashlib  # noqa: E402
 import time  # noqa: E402
+from contextlib import contextmanager  # noqa: E402
 from datetime import datetime  # noqa: E402
 from pathlib import Path  # noqa: E402
 
@@ -157,6 +159,34 @@ def _wal_log(operation: str, params: dict, result: dict = None):
             f.write(json.dumps(entry, default=str) + "\n")
     except Exception as e:
         logger.error(f"WAL write failed: {e}")
+
+
+@contextmanager
+def _palace_write_lock():
+    """Cross-process exclusive write lock for ChromaDB writes.
+
+    Claude Code spawns one mcp_server process per terminal, and stop hooks spawn
+    additional short-lived processes — all pointing at the same palace directory.
+    ChromaDB's PersistentClient has no inter-process locking, so concurrent writes
+    from N processes corrupt the HNSW segment, causing the next read to SIGSEGV
+    in chromadb_rust_bindings. Serializing all writes with flock(LOCK_EX) on a
+    lock file in the palace directory prevents the corruption.
+
+    flock is safe here: the lock is released automatically if the holding process
+    dies mid-write (no permanent deadlock on crash), and it has no overhead when
+    uncontested (single-process scenario).
+    """
+    lock_path = os.path.join(_config.palace_path, ".write.lock")
+    try:
+        os.makedirs(_config.palace_path, exist_ok=True)
+    except OSError:
+        pass
+    with open(lock_path, "a") as _lf:
+        fcntl.flock(_lf.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(_lf.fileno(), fcntl.LOCK_UN)
 
 
 def _get_client():
@@ -643,20 +673,21 @@ def tool_add_drawer(
         pass
 
     try:
-        col.upsert(
-            ids=[drawer_id],
-            documents=[content],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "source_file": source_file or "",
-                    "chunk_index": 0,
-                    "added_by": added_by,
-                    "filed_at": datetime.now().isoformat(),
-                }
-            ],
-        )
+        with _palace_write_lock():
+            col.upsert(
+                ids=[drawer_id],
+                documents=[content],
+                metadatas=[
+                    {
+                        "wing": wing,
+                        "room": room,
+                        "source_file": source_file or "",
+                        "chunk_index": 0,
+                        "added_by": added_by,
+                        "filed_at": datetime.now().isoformat(),
+                    }
+                ],
+            )
         _metadata_cache = None
         logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
         return {"success": True, "drawer_id": drawer_id, "wing": wing, "room": room}
@@ -687,7 +718,8 @@ def tool_delete_drawer(drawer_id: str):
     )
 
     try:
-        col.delete(ids=[drawer_id])
+        with _palace_write_lock():
+            col.delete(ids=[drawer_id])
         _metadata_cache = None
         logger.info(f"Deleted drawer: {drawer_id}")
         return {"success": True, "drawer_id": drawer_id}
@@ -822,7 +854,8 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
         if content is not None:
             update_kwargs["documents"] = [new_doc]
         update_kwargs["metadatas"] = [new_meta]
-        col.update(**update_kwargs)
+        with _palace_write_lock():
+            col.update(**update_kwargs)
 
         _metadata_cache = None
 
@@ -962,22 +995,23 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", wing: 
         # semantic search quality. For now, store raw AAAK in metadata so it's
         # preserved, and keep the document as-is for embedding (even though
         # compressed AAAK degrades embedding quality).
-        col.add(
-            ids=[entry_id],
-            documents=[entry],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "hall": "hall_diary",
-                    "topic": topic,
-                    "type": "diary_entry",
-                    "agent": agent_name,
-                    "filed_at": now.isoformat(),
-                    "date": now.strftime("%Y-%m-%d"),
-                }
-            ],
-        )
+        with _palace_write_lock():
+            col.add(
+                ids=[entry_id],
+                documents=[entry],
+                metadatas=[
+                    {
+                        "wing": wing,
+                        "room": room,
+                        "hall": "hall_diary",
+                        "topic": topic,
+                        "type": "diary_entry",
+                        "agent": agent_name,
+                        "filed_at": now.isoformat(),
+                        "date": now.strftime("%Y-%m-%d"),
+                    }
+                ],
+            )
         logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
         return {
             "success": True,

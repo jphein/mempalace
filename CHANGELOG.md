@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [3.3.4] — 2026-04-24
+
+### Bug Fixes
+
+- **Multi-process write lock** — Claude Code spawns one `mcp_server.py` per open terminal; stop hooks spawn additional short-lived processes on every fire. All open independent `PersistentClient` instances against the same palace directory. ChromaDB has no inter-process write locking, so concurrent writes corrupt the HNSW segment and cause the next read to SIGSEGV in Rust bindings. Added `_palace_write_lock()` — `fcntl.flock(LOCK_EX)` on `$palace/.write.lock` — wrapping all four write paths (`add_drawer`, `delete_drawer`, `update_drawer`, `diary_write`). Serializes cross-process writes; lock auto-releases on process death.
+
+---
+
 ## [3.3.3] — 2026-04-23
 
 ### Bug Fixes
