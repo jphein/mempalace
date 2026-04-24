@@ -48,8 +48,8 @@ _RECENT_MSG_COUNT = 30  # how many recent user messages to summarize
 
 STOP_BLOCK_REASON = (
     "AUTO-SAVE checkpoint (MemPalace). Save this session's key content:\n"
-    "1. mempalace_diary_write — session summary "
-    "(what was discussed, key decisions, current state of work)\n"
+    "1. mempalace_diary_write — session summary (what was discussed, "
+    "key decisions, current state of work)\n"
     "2. mempalace_add_drawer — verbatim quotes, decisions, code snippets "
     "(place in appropriate wing and room)\n"
     "3. mempalace_kg_add — entity relationships (optional)\n"
@@ -64,7 +64,7 @@ PRECOMPACT_BLOCK_REASON = (
     "(place each in appropriate wing and room)\n"
     "3. mempalace_kg_add — entity relationships (optional)\n"
     "For THIS save, use MemPalace MCP tools only (not auto-memory .md files). "
-    "Be thorough \u2014 after compaction this is all that survives. "
+    "Be thorough — after compaction this is all that survives. "
     "Save everything to MemPalace, then allow compaction to proceed."
 )
 
@@ -197,18 +197,6 @@ def _output(data: dict):
     sys.stdout.buffer.flush()
 
 
-def _desktop_toast(body: str, title: str = "MemPalace"):
-    """Send a desktop notification via notify-send. Fails silently."""
-    try:
-        subprocess.Popen(
-            ["notify-send", "--app-name=MemPalace", "--icon=brain", title, body],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-    except OSError:
-        pass
-
-
 def _get_mine_dir(transcript_path: str = "") -> str:
     """Determine directory to mine from MEMPAL_DIR or transcript path."""
     mempal_dir = os.environ.get("MEMPAL_DIR", "")
@@ -284,7 +272,7 @@ def _maybe_auto_ingest(transcript_path: str = ""):
         _log("Skipping auto-ingest: mine already running")
         return
     try:
-        _spawn_mine([_mempalace_python(), "-m", "mempalace", "mine", mine_dir])
+        _spawn_mine([sys.executable, "-m", "mempalace", "mine", mine_dir])
     except OSError:
         pass
 
@@ -299,12 +287,24 @@ def _mine_sync(transcript_path: str = ""):
         log_path = STATE_DIR / "hook.log"
         with open(log_path, "a") as log_f:
             subprocess.run(
-                [_mempalace_python(), "-m", "mempalace", "mine", mine_dir],
+                [sys.executable, "-m", "mempalace", "mine", mine_dir],
                 stdout=log_f,
                 stderr=log_f,
                 timeout=60,
             )
     except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _desktop_toast(body: str, title: str = "MemPalace"):
+    """Send a desktop notification via notify-send. Fails silently."""
+    try:
+        subprocess.Popen(
+            ["notify-send", "--app-name=MemPalace", "--icon=brain", title, body],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError:
         pass
 
 
@@ -319,21 +319,27 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
             for line in f:
                 try:
                     entry = json.loads(line)
-                    msg = entry.get("message", {})
-                    if not isinstance(msg, dict) or msg.get("role") != "user":
-                        continue
-                    content = msg.get("content", "")
-                    if isinstance(content, list):
-                        content = " ".join(
-                            b.get("text", "") for b in content if isinstance(b, dict)
-                        )
-                    if not isinstance(content, str) or not content.strip():
-                        continue
-                    if "<command-message>" in content or "<system-reminder>" in content:
-                        continue
-                    # Truncate long messages
-                    text = content.strip()[:200]
-                    messages.append(text)
+                    # Claude Code format
+                    msg = entry.get("message") or entry.get("event_message") or {}
+                    if isinstance(msg, dict) and msg.get("role") == "user":
+                        content = msg.get("content", "")
+                        if isinstance(content, list):
+                            content = " ".join(
+                                b.get("text", "") for b in content if isinstance(b, dict)
+                            )
+                        if not isinstance(content, str) or not content.strip():
+                            continue
+                        if "<command-message>" in content or "<system-reminder>" in content:
+                            continue
+                        messages.append(content.strip()[:200])
+                    # Codex CLI format
+                    elif entry.get("type") == "event_msg":
+                        payload = entry.get("payload", {})
+                        if isinstance(payload, dict) and payload.get("type") == "user_message":
+                            text = payload.get("message", "")
+                            if isinstance(text, str) and text.strip():
+                                if "<command-message>" not in text:
+                                    messages.append(text.strip()[:200])
                 except (json.JSONDecodeError, AttributeError):
                     pass
     except OSError:
@@ -343,8 +349,8 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
 
 _THEME_STOPWORDS = frozenset(
     "the a an and or but in on at to for of is it i me my you your we our "
-    "this that with from by was were be been are not no yes can do did don't "
-    "will would should could have has had let's let just also like so if then "
+    "this that with from by was were be been are not no yes can do did dont "
+    "will would should could have has had lets let just also like so if then "
     "ok okay sure yeah hey hi here there what when where how why which some "
     "all any each every about into out up down over after before between "
     "get got make made need want use used using check look see run try "
@@ -373,9 +379,14 @@ def _extract_themes(messages: list[str], max_themes: int = 3) -> list[str]:
 def _save_diary_direct(
     transcript_path: str,
     session_id: str,
+    wing: str = "",
     toast: bool = False,
 ) -> dict:
-    """Write a diary checkpoint directly via Python API (no MCP calls).
+    """Write a diary checkpoint by calling the tool function directly (no MCP roundtrip).
+
+    If `wing` is set, the entry lands in that wing (typically the project wing
+    derived from the transcript path). Otherwise falls back to `tool_diary_write`'s
+    default of `wing_session-hook`.
 
     Returns {"count": N, "themes": [...]} on success, {"count": 0} on failure.
     """
@@ -397,12 +408,11 @@ def _save_diary_direct(
     try:
         from .mcp_server import tool_diary_write
 
-        project_wing = _wing_from_transcript_path(transcript_path)
         result = tool_diary_write(
             agent_name="session-hook",
             entry=entry,
             topic="checkpoint",
-            wing=project_wing,
+            wing=wing,
         )
         if result.get("success"):
             _log(f"Diary checkpoint saved: {result.get('entry_id', '?')}")
@@ -425,22 +435,6 @@ def _save_diary_direct(
     return {"count": 0}
 
 
-def _wing_from_transcript_path(transcript_path: str) -> str:
-    """Derive a project wing name from a Claude Code transcript path.
-
-    Claude Code stores transcripts at:
-        ~/.claude/projects/-home-<user>-Projects-<project>/session.jsonl
-    We extract <project> and return ``wing_<project>`` to match the
-    AAAK_SPEC convention (``wing_user``, ``wing_agent``, ``wing_code``,
-    ``wing_<project>``…). Falls back to ``wing_sessions``.
-    """
-    match = re.search(r"-Projects-([^/]+?)(?:/|$)", transcript_path)
-    if match:
-        project = match.group(1).lower().replace(" ", "_")
-        return f"wing_{project}"
-    return "wing_sessions"
-
-
 def _ingest_transcript(transcript_path: str):
     """Mine a Claude Code session transcript into the palace as a conversation."""
     path = Path(transcript_path).expanduser()
@@ -454,25 +448,31 @@ def _ingest_transcript(transcript_path: str):
     except Exception:
         return
 
+    # Derive per-project wing from the transcript path so mined convos land in
+    # the same wing as the diary checkpoint, instead of all transcripts piling
+    # into `wing_sessions`. Falls back to `wing_sessions` when the path doesn't
+    # match a recognizable project layout.
     wing = _wing_from_transcript_path(str(path))
 
-    if _mine_already_running():
-        _log(f"Skipping transcript ingest ({path.name}): mine already running")
-        return
     try:
-        _spawn_mine(
-            [
-                _mempalace_python(),
-                "-m",
-                "mempalace",
-                "mine",
-                str(path.parent),
-                "--mode",
-                "convos",
-                "--wing",
-                wing,
-            ]
-        )
+        log_path = STATE_DIR / "hook.log"
+        STATE_DIR.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a") as log_f:
+            subprocess.Popen(
+                [
+                    _mempalace_python(),
+                    "-m",
+                    "mempalace",
+                    "mine",
+                    str(path.parent),
+                    "--mode",
+                    "convos",
+                    "--wing",
+                    wing,
+                ],
+                stdout=log_f,
+                stderr=log_f,
+            )
         _log(f"Transcript ingest started: {path.name} -> wing:{wing}")
     except OSError:
         pass
@@ -491,6 +491,24 @@ def _parse_harness_input(data: dict, harness: str) -> dict:
         "stop_hook_active": data.get("stop_hook_active", False),
         "transcript_path": str(data.get("transcript_path", "")),
     }
+
+
+def _wing_from_transcript_path(transcript_path: str) -> str:
+    """Derive a project wing name from a Claude Code transcript path.
+
+    Claude Code stores transcripts at:
+        ~/.claude/projects/-home-<user>-Projects-<project>/session.jsonl
+    We extract <project> and return ``wing_<project>`` to match the
+    AAAK_SPEC convention (``wing_user``, ``wing_agent``, ``wing_code``,
+    ``wing_<project>``…). Falls back to ``wing_sessions``.
+    """
+    # Normalize path separators for cross-platform (Windows backslashes)
+    normalized = transcript_path.replace("\\", "/")
+    match = re.search(r"-Projects-([^/]+?)(?:/|$)", normalized)
+    if match:
+        project = match.group(1).lower().replace(" ", "_")
+        return f"wing_{project}"
+    return "wing_sessions"
 
 
 def hook_stop(data: dict, harness: str):
@@ -555,11 +573,15 @@ def hook_stop(data: dict, harness: str):
             silent = True
             toast = False
 
+        project_wing = _wing_from_transcript_path(transcript_path)
+
         if silent:
             # Save directly via Python API — systemMessage renders in terminal
             result = {"count": 0}
             if transcript_path:
-                result = _save_diary_direct(transcript_path, session_id, toast=toast)
+                result = _save_diary_direct(
+                    transcript_path, session_id, wing=project_wing, toast=toast
+                )
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest(transcript_path)
             # Only advance save marker after successful save
@@ -576,8 +598,6 @@ def hook_stop(data: dict, harness: str):
                     tag = ""
                 _output(
                     {
-                        "continue": True,
-                        "suppressOutput": False,
                         "systemMessage": f"\u2726 {count} memories woven into the palace{tag}",
                     }
                 )
@@ -594,7 +614,8 @@ def hook_stop(data: dict, harness: str):
             if transcript_path:
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest(transcript_path)
-            _output({"decision": "block", "reason": STOP_BLOCK_REASON})
+            reason = STOP_BLOCK_REASON + f" Write diary entry to wing={project_wing}."
+            _output({"decision": "block", "reason": reason})
     else:
         _output({})
 
@@ -620,13 +641,12 @@ def hook_precompact(data: dict, harness: str):
     transcript_path = parsed["transcript_path"]
 
     _log(f"PRE-COMPACT triggered for session {session_id}")
-    transcript_path = parsed["transcript_path"]
 
-    # Ingest the session transcript (fork-specific: captures raw JSONL)
+    # Capture tool output via our normalize path before compaction loses it
     if transcript_path:
         _ingest_transcript(transcript_path)
 
-    # Mine broader dir synchronously so data lands before compaction proceeds
+    # Mine synchronously so data lands before compaction proceeds
     _mine_sync(transcript_path)
 
     _output({})

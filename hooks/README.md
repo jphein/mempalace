@@ -156,7 +156,7 @@ Context window getting full → Claude Code fires PreCompact
                                 Compaction proceeds
 ```
 
-No counting needed — compaction always warrants a save.
+No counting needed — compaction always warrants a save. The auto-mine captures raw tool output before the AI gets a chance to summarize it away.
 
 ## Debugging
 
@@ -206,6 +206,23 @@ export MEMPAL_PYTHON="$HOME/.venvs/mempalace/bin/python"  # or your venv
 Resolution priority: `$MEMPAL_PYTHON` (if set and executable) → `$(command -v python3)` → bare `python3`. The interpreter only needs `json` and `sys` from the standard library — `mempalace` itself does not need to be installed in it.
 
 Note: the `mempalace mine` auto-ingest runs via the `mempalace` CLI, so that command also needs to be on the hook's `PATH`. Installing with `pipx install mempalace` or `uv tool install mempalace` puts it on a stable global location; otherwise extend the hook environment's `PATH` to include your venv's `bin/`.
+
+## Backfill Past Conversations
+
+The hooks only capture conversations going forward. To mine **past** Claude Code sessions into your palace, run a one-time backfill:
+
+```bash
+mempalace mine ~/.claude/projects/ --mode convos
+```
+
+This scans all JSONL transcripts from previous sessions and files them into the `conversations` wing. On a typical developer machine with months of history, this can yield 50K–200K drawers.
+
+For Codex CLI sessions:
+```bash
+mempalace mine ~/.codex/sessions/ --mode convos
+```
+
+This only needs to be done once — after that, the hooks auto-mine each session as you go.
 
 ## Cost
 

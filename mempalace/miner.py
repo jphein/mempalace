@@ -986,19 +986,21 @@ def status(palace_path: str):
         print("  Run: mempalace init <dir> then mempalace mine <dir>")
         return
 
+    # Count by wing and room — paginate to avoid SQLite "too many SQL
+    # variables" error on large palaces (see #802, #850, #1015).
     total = col.count()
-
-    # Paginate all metadata to get accurate wing/room counts
-    wing_rooms = defaultdict(lambda: defaultdict(int))
+    wing_rooms: dict = defaultdict(lambda: defaultdict(int))
+    batch_size = 10000
     offset = 0
     while offset < total:
-        r = col.get(limit=10000, offset=offset, include=["metadatas"])
-        if not r["metadatas"]:
+        r = col.get(limit=batch_size, offset=offset, include=["metadatas"])
+        batch = r["metadatas"]
+        if not batch:
             break
-        for m in r["metadatas"]:
+        for m in batch:
             m = m or {}
             wing_rooms[m.get("wing", "?")][m.get("room", "?")] += 1
-        offset += len(r["metadatas"])
+        offset += len(batch)
 
     print(f"\n{'=' * 55}")
     print(f"  MemPalace Status — {total:,} drawers")

@@ -300,7 +300,7 @@ def _get_cached_metadata(col, where=None):
 
 def _sanitize_optional_name(value: str = None, field_name: str = "name") -> str:
     """Validate optional wing/room-style filters."""
-    if value is None:
+    if value is None or not value.strip():
         return None
     return sanitize_name(value, field_name)
 
@@ -951,7 +951,7 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", wing: 
         return {"success": False, "error": str(e)}
 
     if wing:
-        wing = wing.lower().replace(" ", "_")
+        wing = sanitize_name(wing)
     else:
         wing = f"wing_{agent_name.lower().replace(' ', '_')}"
     room = "diary"
@@ -1012,6 +1012,11 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
     """
     Read an agent's recent diary entries. Returns the last N entries
     in chronological order — the agent's personal journal.
+
+    When ``wing`` is provided, reads from that wing instead of the
+    agent's default ``wing_<agent_name>`` wing.  This lets hooks
+    direct diary reads to a project-specific wing derived from
+    the transcript path.
     """
     try:
         agent_name = sanitize_name(agent_name, "agent_name")
