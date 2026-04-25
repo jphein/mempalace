@@ -245,6 +245,42 @@ def _expand_with_neighbors(drawers_col, matched_doc: str, matched_meta: dict, ra
     }
 
 
+def _warn_if_legacy_metric(col) -> None:
+    """Print a one-line notice if the palace was created without
+    ``hnsw:space=cosine``.
+
+    ChromaDB's default is L2 (Euclidean), under which cosine-based
+    similarity interpretation falls apart — distances routinely exceed
+    1.0 and the display ``max(0, 1 - dist)`` floors every result to 0.
+    Legacy palaces (mined before this metadata was consistently set)
+    need ``mempalace repair`` to rebuild with the correct metric.
+
+    The warning fires only for palaces that clearly have the wrong
+    metric; palaces with no metadata table at all (empty dict) also
+    fall under this check since that is the signal of a pre-metadata
+    palace.
+    """
+    try:
+        meta = getattr(col, "metadata", None)
+    except Exception:
+        return
+    if not isinstance(meta, dict):
+        return
+    space = meta.get("hnsw:space")
+    if space == "cosine":
+        return
+    # Either missing or set to something else — both are suspect.
+    import sys as _sys
+
+    detail = f"hnsw:space={space!r}" if space else "no hnsw:space metadata"
+    print(
+        f"\n  NOTICE: this palace was created without cosine distance ({detail}).\n"
+        "          Semantic similarity scores will not be meaningful.\n"
+        "          Run `mempalace repair` to rebuild the index with the correct metric.",
+        file=_sys.stderr,
+    )
+
+
 def search(query: str, palace_path: str, wing: str = None, room: str = None, n_results: int = 5):
     """
     Search the palace. Returns verbatim drawer content.
@@ -276,6 +312,13 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
             print(f"  ! {w}")
         return
 
+    # Hits are already built and hybrid-reranked by search_memories(); the
+    # delegate path centralizes retrieval, BM25-sqlite fallback, and
+    # legacy-metric warning so CLI and MCP callers share a single source
+    # of truth. (Upstream's #1179 added an inline rebuild + _warn_if_legacy_metric
+    # call here; the fork keeps the warning live by calling it from
+    # search_memories instead — see the wired call below.)
+
     print(f"\n{'=' * 60}")
     print(f'  Results for: "{query}"')
     if wing:
@@ -299,7 +342,9 @@ def search(query: str, palace_path: str, wing: str = None, room: str = None, n_r
 
         print(f"  [{i}] {wing_name} / {room_name}")
         print(f"      Source: {source}")
-        if similarity is not None:
+        if similarity is not None and bm25 is not None:
+            print(f"      Match:  cosine={similarity}  bm25={bm25}")
+        elif similarity is not None:
             print(f"      Match:  {similarity}")
         elif bm25 is not None:
             print(f"      BM25:   {bm25}  (matched_via: {matched_via})")

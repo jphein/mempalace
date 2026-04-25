@@ -8,13 +8,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [3.3.4] — 2026-04-24
 
-### Bug Fixes — ChromaDB 1.5.x segfault trio
+### Added (from upstream develop, merged 2026-04-25)
 
-Three independent triggers were crashing fresh processes (MCP servers, stop hooks, `mempalace mine` subprocesses) with SIGSEGV in `chromadb_rust_bindings`. Fixed and filed as [#1171](https://github.com/milla-jovovich/mempalace/pull/1171), [#1173](https://github.com/milla-jovovich/mempalace/pull/1173), [#1177](https://github.com/milla-jovovich/mempalace/pull/1177).
+- **`mempalace init` now prompts to mine the same directory.** After entity confirmation, room detection, and gitignore guard, `init` shows a one-line scope estimate (e.g. `~423 files (~12 MB) would be mined into this palace.`) computed from its existing corpus walk, then asks `Mine this directory now? [Y/n]` (default yes) and runs `mine()` in-process if accepted. The estimate fires before the prompt so users on a real corpus aren't surprised by a minutes-long ChromaDB write. Declining prints the exact `mempalace mine <dir>` command for later. (#1181)
+- **New `--auto-mine` flag on `mempalace init`** for the non-interactive path (`mempalace init --auto-mine <dir>` skips the mine prompt and runs mine directly). `--yes` retains its existing scope of entity auto-accept only and still prompts for the mine step. (#1181)
+- **Cross-wing topic tunnels.** When two wings have confirmed `TOPIC` labels in common, the miner drops a symmetric tunnel between them at mine time. Topic tunnels are stored under a synthetic `topic:<name>` room and tagged with `kind: "topic"`. Threshold is configurable via `MEMPALACE_TOPIC_TUNNEL_MIN_COUNT` env var or `topic_tunnel_min_count` in `~/.mempalace/config.json` (default `1`). (#1180)
+- **HNSW graph corruption + PreCompact deadlock + mine fan-out fixes** (#976, Felipe Truman): pins `hnsw:num_threads=1` on collection creation (matches our fork's earlier cherry-pick `552d0d5`), adds `mine_global_lock()` to collapse concurrent `mempalace mine` runs, and caps `MAX_PRECOMPACT_BLOCK_ATTEMPTS=2` so `/compact` can proceed after repeated blocks. Closes #974, #965, #955. Likely also resolves #1172 (PreCompact unconditionally blocking compact).
 
-- **Backend-seam write lock.** `_palace_write_lock(palace_path)` wraps `ChromaCollection.add/upsert/update/delete` using `fcntl.flock(LOCK_EX)` on `$palace/.write.lock`. Because RFC 001 made the adapter the single boundary for all ChromaDB writes, putting the lock there covers every caller (`mcp_server`, `miner`, `convo_miner`, `palace`) automatically. First version of this fix lived in `mcp_server.py` but missed the `mempalace mine` subprocess; moved to the adapter. `flock` auto-releases on process death so crashes can't deadlock.
-- **Quarantine on every `make_client()`.** Upstream's `quarantine_stale_hnsw()` only ran at MCP server startup (via #1062). Fork now calls it inside `ChromaBackend.make_client()` itself, so every fresh process (hook, CLI, tests) opens a clean palace. Default threshold lowered 3600 → 300s after a 0.96h-drift segfault in production.
-- **`.blob_seq_ids_migrated` marker guard.** Opening `chroma.sqlite3` via Python's `sqlite3.connect()` against a live ChromaDB 1.5.x WAL database leaves state that segfaults the next `PersistentClient`. `_fix_blob_seq_ids()` now writes a sentinel file after first successful migration; subsequent opens short-circuit before touching sqlite. Closes #1090. (Restoration of a guard lost in an earlier upstream merge.)
+### Bug Fixes (from upstream develop)
+
+- **CLI `mempalace search` retrieval quality.** Wired the CLI through the same `_hybrid_rank` the `mempalace_search` MCP tool used, and surfaced both `cosine=` and `bm25=` scores in the output. MCP search was unaffected; this fixes the human-facing CLI parity gap.
+- **Legacy-palace distance-metric warning.** CLI search now detects palaces created before `hnsw:space=cosine` was consistently set and prints a one-line notice pointing at `mempalace repair`. (#1179)
+- **Graceful Ctrl-C during `mempalace mine`.** Interrupting a long mine no longer dumps a multi-frame traceback. (#1182)
+
+### Bug Fixes — fork-ahead ChromaDB 1.5.x segfault work
+
+Three independent SIGSEGV triggers in `chromadb_rust_bindings` filed as [#1171](https://github.com/MemPalace/mempalace/pull/1171), [#1173](https://github.com/MemPalace/mempalace/pull/1173), [#1177](https://github.com/MemPalace/mempalace/pull/1177). After 2026-04-25 upstream merge: #1171 is structurally redundant given Felipe's `mine_global_lock` (#976) plus the fork's daemon serialization, slated for close.
+
+- **Backend-seam write lock.** `_palace_write_lock(palace_path)` wraps `ChromaCollection.add/upsert/update/delete` using `fcntl.flock(LOCK_EX)` on `$palace/.write.lock`. (Slated for close after #976 / daemon-strict obsoletes it.)
+- **Quarantine on every `make_client()`.** Fork calls `quarantine_stale_hnsw()` inside `ChromaBackend.make_client()` itself, default threshold 300s. (#1173)
+- **`.blob_seq_ids_migrated` marker guard.** `_fix_blob_seq_ids()` now writes a sentinel file after first successful migration; subsequent opens short-circuit before touching sqlite. Closes #1090. (#1177)
+
+### Bug Fixes — fork-ahead BM25 search
+
+- **`_tokenize` None-document guard** (commit `a3a7132`, PR [#1198](https://github.com/MemPalace/mempalace/pull/1198)). `searcher._tokenize` short-circuits to `[]` when document text is `None`, preventing `AttributeError` during `_hybrid_rank → _bm25_scores → _tokenize`. Observed in production daemon log on 2026-04-24. Closes the gap left by upstream's #999 None-metadata audit, which covered metadata read loops but not BM25 helpers.
 
 ---
 

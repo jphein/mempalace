@@ -217,18 +217,25 @@ def _get_collection(create=False):
     try:
         client = _get_client()
         if create:
-            raw_col = client.get_or_create_collection(
+            # hnsw:num_threads=1 disables ChromaDB's multi-threaded ParallelFor
+            # HNSW insert path, which has a race in repairConnectionsForUpdate /
+            # addPoint (see issues #974, #965). Set via metadata on fresh
+            # collections and re-applied via _pin_hnsw_threads() for legacy
+            # palaces whose collections were created before this fix (the
+            # runtime config does not persist cross-process in chromadb 1.5.x,
+            # so the retrofit runs every time _get_collection opens a cache).
+            raw = client.get_or_create_collection(
                 _config.collection_name,
                 metadata={"hnsw:space": "cosine", "hnsw:num_threads": 1},
             )
-            _pin_hnsw_threads(raw_col)
-            _collection_cache = ChromaCollection(raw_col, palace_path=_config.palace_path)
+            _pin_hnsw_threads(raw)
+            _collection_cache = ChromaCollection(raw, palace_path=_config.palace_path)
             _metadata_cache = None
             _metadata_cache_time = 0
         elif _collection_cache is None:
-            raw_col = client.get_collection(_config.collection_name)
-            _pin_hnsw_threads(raw_col)
-            _collection_cache = ChromaCollection(raw_col, palace_path=_config.palace_path)
+            raw = client.get_collection(_config.collection_name)
+            _pin_hnsw_threads(raw)
+            _collection_cache = ChromaCollection(raw, palace_path=_config.palace_path)
             _metadata_cache = None
             _metadata_cache_time = 0
         return _collection_cache

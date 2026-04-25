@@ -488,6 +488,18 @@ class ChromaCollection(BaseCollection):
     def count(self):
         return self._collection.count()
 
+    @property
+    def metadata(self) -> dict:
+        """Pass-through to the underlying ChromaDB collection's metadata.
+
+        Used by the searcher to detect legacy palaces that were created
+        without ``hnsw:space=cosine`` and therefore silently use L2
+        distance, which breaks cosine-based similarity interpretation.
+        Returns ``{}`` when metadata is absent so callers can do a plain
+        ``.get("hnsw:space")`` without None-checks.
+        """
+        return self._collection.metadata or {}
+
 
 # ---------------------------------------------------------------------------
 # Backend
@@ -524,6 +536,23 @@ class ChromaBackend(BaseBackend):
         # palace_path -> (inode, mtime) of chroma.sqlite3 at cache time.
         self._freshness: dict[str, tuple[int, float]] = {}
         self._closed = False
+
+    @staticmethod
+    def _resolve_embedding_function():
+        """Return the EF for the user's ``embedding_device`` setting.
+
+        Both ``get_collection`` and ``get_or_create_collection`` must receive
+        the EF explicitly — ChromaDB 1.x does not persist it with the
+        collection, so a reader that omits the argument silently gets the
+        library default and its queries won't match the writer's vectors.
+        """
+        try:
+            from ..embedding import get_embedding_function
+
+            return get_embedding_function()
+        except Exception:
+            logger.exception("Failed to build embedding function; using chromadb default")
+            return None
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -653,13 +682,17 @@ class ChromaBackend(BaseBackend):
         if options and isinstance(options, dict):
             hnsw_space = options.get("hnsw_space", hnsw_space)
 
+        ef = self._resolve_embedding_function()
+        ef_kwargs = {"embedding_function": ef} if ef is not None else {}
+
         if create:
             collection = client.get_or_create_collection(
                 collection_name,
                 metadata={"hnsw:space": hnsw_space, "hnsw:num_threads": 1},
+                **ef_kwargs,
             )
         else:
-            collection = client.get_collection(collection_name)
+            collection = client.get_collection(collection_name, **ef_kwargs)
         _pin_hnsw_threads(collection)
         return ChromaCollection(collection, palace_path=palace_path)
 
@@ -701,9 +734,12 @@ class ChromaBackend(BaseBackend):
         self, palace_path: str, collection_name: str, hnsw_space: str = "cosine"
     ) -> ChromaCollection:
         """Create (not get-or-create) ``collection_name`` with the given HNSW space."""
+        ef = self._resolve_embedding_function()
+        ef_kwargs = {"embedding_function": ef} if ef is not None else {}
         collection = self._client(palace_path).create_collection(
             collection_name,
             metadata={"hnsw:space": hnsw_space, "hnsw:num_threads": 1},
+            **ef_kwargs,
         )
         return ChromaCollection(collection, palace_path=palace_path)
 
