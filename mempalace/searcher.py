@@ -528,6 +528,14 @@ def search_memories(
             "hint": "Run: mempalace init <dir> && mempalace mine <dir>",
         }
 
+    # Alert if this palace predates hnsw:space=cosine being set on creation —
+    # similarity scores will be junk until `mempalace repair` rebuilds the
+    # index. Centralized here so both CLI search() and MCP mempalace_search
+    # benefit from the warning via the delegate path. (Upstream #1179 added
+    # the warning inline in CLI search(); the fork's delegation pattern needs
+    # it one layer up so the same warning surface stays live.)
+    _warn_if_legacy_metric(drawers_col)
+
     where = build_where_filter(wing, room)
 
     # Hybrid retrieval: always query drawers directly (the floor), then use

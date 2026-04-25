@@ -202,17 +202,22 @@ class TestBM25NoneSafety:
 
     def test_tokenize_handles_none(self):
         from mempalace.searcher import _tokenize
+
         assert _tokenize(None) == []
 
     def test_tokenize_handles_empty_string(self):
         from mempalace.searcher import _tokenize
+
         assert _tokenize("") == []
 
     def test_bm25_scores_does_not_crash_on_none_documents(self):
         """A ``None`` mixed into the corpus must yield score 0.0 for that doc
         and finite scores for the rest, not raise AttributeError."""
         from mempalace.searcher import _bm25_scores
-        scores = _bm25_scores("postgres migration", ["postgres migration done", None, "kafka rebalance"])
+
+        scores = _bm25_scores(
+            "postgres migration", ["postgres migration done", None, "kafka rebalance"]
+        )
         assert len(scores) == 3
         assert scores[1] == 0.0
         assert scores[0] > 0.0
@@ -277,13 +282,6 @@ class TestSearchCLI:
         # Should have output with at least one result block
         assert "[1]" in captured.out
 
-    @pytest.mark.skip(reason=(
-        "Upstream test #1179 — assumes inline col.query in CLI search(). "
-        "Fork's search() delegates to search_memories which exercises sqlite "
-        "BM25 fallback + scope-counting; the simpler MagicMock here trips on "
-        "MagicMock vs int comparisons in _sqlite_fallback_and_scope. "
-        "TODO: rewrite mocks to satisfy fork's expanded search_memories path."
-    ))
     def test_search_applies_bm25_hybrid_rerank(self, capsys):
         """CLI search must call the same hybrid rerank that the MCP path uses.
 
@@ -301,6 +299,7 @@ class TestSearchCLI:
         """
         mock_col = MagicMock()
         mock_col.metadata = {"hnsw:space": "cosine"}
+        mock_col.count.return_value = 3
         mock_col.query.return_value = {
             "documents": [
                 [
@@ -332,13 +331,6 @@ class TestSearchCLI:
         # Cosine still reported for transparency
         assert "cosine=" in first_block
 
-    @pytest.mark.skip(reason=(
-        "Upstream test #1179 — needs _warn_if_legacy_metric wired into the "
-        "fork's search_memories path (fork CLI delegates; warning currently "
-        "only fires from upstream's inline retrieval which fork removed). "
-        "TODO: call _warn_if_legacy_metric inside search_memories after "
-        "get_collection so warning still fires on the delegated path."
-    ))
     def test_search_warns_when_palace_uses_wrong_distance_metric(self, capsys):
         """Legacy palaces created without `hnsw:space=cosine` silently
         use L2, which breaks similarity interpretation. CLI must warn
@@ -346,6 +338,7 @@ class TestSearchCLI:
         pretending the `Match` scores are meaningful."""
         mock_col = MagicMock()
         mock_col.metadata = {}  # legacy: no hnsw:space set
+        mock_col.count.return_value = 1
         mock_col.query.return_value = {
             "documents": [["some drawer content"]],
             "metadatas": [[{"source_file": "a.md", "wing": "w", "room": "r"}]],
@@ -357,13 +350,10 @@ class TestSearchCLI:
         assert "mempalace repair" in captured.err
         assert "cosine" in captured.err.lower()
 
-    @pytest.mark.skip(reason=(
-        "Upstream test #1179 — paired with the legacy-metric test above, "
-        "needs the same fork-side wiring of _warn_if_legacy_metric."
-    ))
     def test_search_does_not_warn_when_palace_is_correctly_configured(self, capsys):
         mock_col = MagicMock()
         mock_col.metadata = {"hnsw:space": "cosine"}
+        mock_col.count.return_value = 1
         mock_col.query.return_value = {
             "documents": [["some drawer content"]],
             "metadatas": [[{"source_file": "a.md", "wing": "w", "room": "r"}]],
