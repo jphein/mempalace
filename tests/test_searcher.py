@@ -223,6 +223,129 @@ class TestBM25NoneSafety:
         assert scores[0] > 0.0
 
 
+# ── checkpoint filter (kind= parameter) ─────────────────────────────────────
+
+
+class TestCheckpointFilter:
+    """Stop-hook auto-save checkpoints (topic='checkpoint' or 'auto-save',
+    text starting with 'CHECKPOINT:') are session-summary noise that drown
+    out actual user/agent content under vector similarity. Default search
+    excludes them; opt-in via kind='checkpoint' or kind='all'.
+
+    Defense in depth: both metadata-topic *and* text-prefix exclusion run,
+    so legacy data with metadata=None or a missing topic field is still
+    filtered out.
+    """
+
+    # ── unit: build_where_filter ──────────────────────────────────────
+
+    def test_build_where_excludes_checkpoint_topics_by_default(self):
+        from mempalace.searcher import build_where_filter
+
+        w = build_where_filter()
+        assert w == {"topic": {"$nin": ["checkpoint", "auto-save"]}}
+
+    def test_build_where_kind_checkpoint_returns_only_checkpoint_topics(self):
+        from mempalace.searcher import build_where_filter
+
+        w = build_where_filter(kind="checkpoint")
+        assert w == {"topic": {"$in": ["checkpoint", "auto-save"]}}
+
+    def test_build_where_kind_all_returns_no_topic_filter(self):
+        from mempalace.searcher import build_where_filter
+
+        w = build_where_filter(kind="all")
+        assert w == {}
+
+    def test_build_where_kind_combines_with_wing_via_and(self):
+        from mempalace.searcher import build_where_filter
+
+        w = build_where_filter(wing="wing_x", kind="content")
+        assert w == {"$and": [{"wing": "wing_x"}, {"topic": {"$nin": ["checkpoint", "auto-save"]}}]}
+
+    def test_build_where_kind_invalid_raises(self):
+        from mempalace.searcher import build_where_filter
+
+        with pytest.raises(ValueError, match="kind must be"):
+            build_where_filter(kind="bogus")
+
+    # ── integration: search_memories text-prefix defense in depth ─────
+
+    def test_search_memories_default_drops_checkpoint_text_even_with_unknown_topic(self):
+        """Legacy palace data may have ``CHECKPOINT:``-prefixed text but
+        metadata={} or topic=None (pre-fix data, or callers that bypassed
+        tool_diary_write). The where-clause excludes by topic; the
+        post-filter belt-and-suspenders also drops by text prefix so
+        legacy data doesn't slip through."""
+        mock_col = MagicMock()
+        mock_col.metadata = {"hnsw:space": "cosine"}
+        mock_col.count.return_value = 2
+        # Vector returns: one CHECKPOINT-shaped doc with no topic metadata,
+        # one regular content doc.
+        mock_col.query.return_value = {
+            "documents": [["CHECKPOINT:2026-04-25|recent: noise here", "real content drawer"]],
+            "metadatas": [
+                [
+                    {"source_file": "a.md", "wing": "w", "room": "r"},  # no topic field
+                    {"source_file": "b.md", "wing": "w", "room": "r", "topic": "general"},
+                ]
+            ],
+            "distances": [[0.3, 0.4]],
+            "ids": [["d1", "d2"]],
+        }
+        with patch("mempalace.searcher.get_collection", return_value=mock_col):
+            result = search_memories("query", "/fake/path")
+        assert "results" in result
+        texts = [h["text"] for h in result["results"]]
+        # CHECKPOINT-prefixed drawer is dropped even though its metadata
+        # didn't have topic=checkpoint to filter on at the where layer.
+        assert all(not t.startswith("CHECKPOINT:") for t in texts)
+        assert "real content drawer" in texts
+
+    def test_search_memories_kind_checkpoint_includes_text_prefix_legacy(self):
+        """Symmetric: kind='checkpoint' also picks up CHECKPOINT-shaped
+        legacy data without topic metadata so audit/recovery callers get
+        every checkpoint we can identify."""
+        mock_col = MagicMock()
+        mock_col.metadata = {"hnsw:space": "cosine"}
+        mock_col.count.return_value = 2
+        mock_col.query.return_value = {
+            "documents": [["CHECKPOINT:2026-04-25|recent: legacy", "regular content"]],
+            "metadatas": [
+                [
+                    {"source_file": "a.md", "wing": "w", "room": "r"},  # no topic
+                    {"source_file": "b.md", "wing": "w", "room": "r", "topic": "general"},
+                ]
+            ],
+            "distances": [[0.3, 0.4]],
+            "ids": [["d1", "d2"]],
+        }
+        with patch("mempalace.searcher.get_collection", return_value=mock_col):
+            result = search_memories("query", "/fake/path", kind="checkpoint")
+        # The text-prefix legacy entry is included even though its
+        # metadata had no topic field.
+        assert any(h["text"].startswith("CHECKPOINT:") for h in result["results"])
+
+    def test_search_memories_surfaces_topic_field_in_results(self):
+        """Callers need to see ``topic`` in result dicts — both for
+        debugging and so consumers (familiar.realm.watch's deterministic
+        pipeline, RLM tools) can apply their own routing logic on it."""
+        mock_col = MagicMock()
+        mock_col.metadata = {"hnsw:space": "cosine"}
+        mock_col.count.return_value = 1
+        mock_col.query.return_value = {
+            "documents": [["a thoughtful reflection"]],
+            "metadatas": [
+                [{"source_file": "a.md", "wing": "w", "room": "diary", "topic": "musings"}]
+            ],
+            "distances": [[0.2]],
+            "ids": [["d1"]],
+        }
+        with patch("mempalace.searcher.get_collection", return_value=mock_col):
+            result = search_memories("query", "/fake/path")
+        assert result["results"][0]["topic"] == "musings"
+
+
 # ── search() (CLI print function) ─────────────────────────────────────
 
 

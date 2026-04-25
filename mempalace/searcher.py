@@ -156,15 +156,57 @@ def _hybrid_rank(
     return results
 
 
-def build_where_filter(wing: str = None, room: str = None) -> dict:
-    """Build ChromaDB where filter for wing/room filtering."""
-    if wing and room:
-        return {"$and": [{"wing": wing}, {"room": room}]}
-    elif wing:
-        return {"wing": wing}
-    elif room:
-        return {"room": room}
-    return {}
+_CHECKPOINT_TOPICS = ("checkpoint", "auto-save")
+"""Topic values that mark a drawer as an auto-saved Stop-hook checkpoint
+rather than user/agent content. ``checkpoint`` is canonical;
+``auto-save`` is a legacy synonym from older palace-daemon hook clients
+that wrote with the alternate name. Both are excluded from default
+content search and included by ``kind='checkpoint'`` lookups."""
+
+
+def build_where_filter(
+    wing: str = None,
+    room: str = None,
+    kind: str = "content",
+) -> dict:
+    """Build ChromaDB where filter for wing/room/kind filtering.
+
+    ``kind`` selects what *kind* of drawer to return:
+
+    - ``"content"`` (default) — actual user/agent content. Excludes
+      Stop-hook checkpoint drawers (``topic`` in ``_CHECKPOINT_TOPICS``).
+      This is the right default for retrieval-then-grounding because
+      checkpoints are session-summary noise that drown out content
+      under vector similarity.
+    - ``"checkpoint"`` — only Stop-hook checkpoint drawers. Useful for
+      session recovery, hook debugging, audit.
+    - ``"all"`` — no topic filter. Preserves pre-2026-04-25 behavior;
+      pass when you genuinely want everything including checkpoints.
+
+    The metadata filter handles drawers written with explicit ``topic=``;
+    a parallel text-prefix post-filter in ``search_memories`` catches
+    drawers with missing/None metadata (legacy or partial-write data)
+    so the exclusion is defense-in-depth.
+    """
+    parts: list[dict] = []
+    if wing:
+        parts.append({"wing": wing})
+    if room:
+        parts.append({"room": room})
+    if kind == "content":
+        parts.append({"topic": {"$nin": list(_CHECKPOINT_TOPICS)}})
+    elif kind == "checkpoint":
+        parts.append({"topic": {"$in": list(_CHECKPOINT_TOPICS)}})
+    elif kind != "all":
+        raise ValueError(
+            f"kind must be one of 'content' (default), 'checkpoint', or 'all'; got {kind!r}"
+        )
+
+    if not parts:
+        return {}
+    if len(parts) == 1:
+        return parts[0]
+    return {"$and": parts}
 
 
 def _extract_drawer_ids_from_closet(closet_doc: str) -> list:
@@ -281,15 +323,25 @@ def _warn_if_legacy_metric(col) -> None:
     )
 
 
-def search(query: str, palace_path: str, wing: str = None, room: str = None, n_results: int = 5):
+def search(
+    query: str,
+    palace_path: str,
+    wing: str = None,
+    room: str = None,
+    n_results: int = 5,
+    kind: str = "content",
+):
     """
     Search the palace. Returns verbatim drawer content.
-    Optionally filter by wing (project) or room (aspect).
+    Optionally filter by wing (project), room (aspect), or kind
+    (``"content"``, ``"checkpoint"``, ``"all"`` — see ``search_memories``).
 
     Delegates to ``search_memories`` so CLI and MCP callers share the same
     hybrid ranking, sqlite-BM25 fallback, and scope-aware warnings.
     """
-    result = search_memories(query, palace_path, wing=wing, room=room, n_results=n_results)
+    result = search_memories(
+        query, palace_path, wing=wing, room=room, n_results=n_results, kind=kind
+    )
     if "error" in result and not result.get("results"):
         # Preserve the palace path in the printed error so the user sees
         # which palace the search tried to open (a common source of
@@ -474,6 +526,7 @@ def _sqlite_fallback_and_scope(
                 "text": doc,
                 "wing": meta.get("wing", "unknown"),
                 "room": meta.get("room", "unknown"),
+                "topic": meta.get("topic"),
                 "source_file": Path(src).name if src else "?",
                 "created_at": meta.get("filed_at", "unknown"),
                 "similarity": None,
@@ -492,6 +545,33 @@ def _sqlite_fallback_and_scope(
     return available_in_scope, warnings
 
 
+def _apply_kind_text_filter(scored: list, kind: str) -> list:
+    """Defense-in-depth post-filter for the checkpoint-text exclusion.
+
+    The where-clause already filters by ``topic`` metadata, but legacy
+    palace data may have ``CHECKPOINT:``-prefixed text with
+    ``metadata=None`` or a missing topic field — that slips past the
+    where filter. This belt-and-suspenders pass uses the text prefix to
+    catch the rest.
+
+    For ``kind="checkpoint"``, the symmetric direction: also *include*
+    any drawer whose text starts with ``CHECKPOINT:`` even if its
+    metadata didn't tag it, so audit/recovery callers see every
+    checkpoint we can identify.
+    """
+    if kind == "content":
+        return [h for h in scored if not (h.get("text") or "").startswith("CHECKPOINT:")]
+    if kind == "checkpoint":
+        included = [
+            h
+            for h in scored
+            if (h.get("text") or "").startswith("CHECKPOINT:")
+            or h.get("topic") in _CHECKPOINT_TOPICS
+        ]
+        return included or scored  # fall back to unfiltered if filter empties everything
+    return scored  # kind == "all" — no filter
+
+
 def search_memories(
     query: str,
     palace_path: str,
@@ -499,6 +579,7 @@ def search_memories(
     room: str = None,
     n_results: int = 5,
     max_distance: float = 0.0,
+    kind: str = "content",
 ) -> dict:
     """Programmatic search — returns a dict instead of printing.
 
@@ -518,6 +599,11 @@ def search_memories(
             cosine distance (hnsw:space=cosine) — 0 = identical, 2 = opposite.
             Results with distance > this value are filtered out. A value of
             0.0 disables filtering. Typical useful range: 0.3–1.0.
+        kind: What kind of drawers to return. ``"content"`` (default) excludes
+            Stop-hook auto-save checkpoint drawers — these are session-summary
+            noise that drown out actual content under vector similarity.
+            ``"checkpoint"`` returns only checkpoints (recovery/audit).
+            ``"all"`` disables the filter entirely.
     """
     try:
         drawers_col = get_collection(palace_path, create=False)
@@ -536,7 +622,7 @@ def search_memories(
     # it one layer up so the same warning surface stays live.)
     _warn_if_legacy_metric(drawers_col)
 
-    where = build_where_filter(wing, room)
+    where = build_where_filter(wing, room, kind=kind)
 
     # Hybrid retrieval: always query drawers directly (the floor), then use
     # closet hits to boost rankings. Closets are a ranking SIGNAL, never a
@@ -623,6 +709,7 @@ def search_memories(
             "text": doc,
             "wing": meta.get("wing", "unknown"),
             "room": meta.get("room", "unknown"),
+            "topic": meta.get("topic"),
             "source_file": Path(source).name if source else "?",
             "created_at": meta.get("filed_at", "unknown"),
             "similarity": round(max(0.0, 1 - effective_dist), 3),
@@ -643,6 +730,7 @@ def search_memories(
         scored.append(entry)
 
     scored.sort(key=lambda h: h["_sort_key"])
+    scored = _apply_kind_text_filter(scored, kind)
     hits = scored[:n_results]
 
     # Drawer-grep enrichment: for closet-boosted hits whose source has
