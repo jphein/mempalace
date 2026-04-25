@@ -41,7 +41,6 @@ with patch.dict("sys.modules", {"chromadb": MagicMock()}):
         build_graph,
         find_tunnels,
         graph_stats,
-        invalidate_graph_cache,
         traverse,
     )
 

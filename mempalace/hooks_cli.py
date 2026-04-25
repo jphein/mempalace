@@ -428,17 +428,20 @@ def _save_diary_direct(
     if daemon_url:
         try:
             import urllib.request
+
             req = urllib.request.Request(
                 f"{daemon_url}/silent-save",
-                data=json.dumps({
-                    "session_id": session_id,
-                    "wing": wing,
-                    "entry": entry,
-                    "topic": "checkpoint",
-                    "agent_name": "session-hook",
-                    "themes": themes,
-                    "message_count": len(messages),
-                }).encode("utf-8"),
+                data=json.dumps(
+                    {
+                        "session_id": session_id,
+                        "wing": wing,
+                        "entry": entry,
+                        "topic": "checkpoint",
+                        "agent_name": "session-hook",
+                        "themes": themes,
+                        "message_count": len(messages),
+                    }
+                ).encode("utf-8"),
                 headers={"content-type": "application/json"},
                 method="POST",
             )

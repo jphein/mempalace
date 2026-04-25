@@ -88,9 +88,7 @@ def _pin_hnsw_threads(collection) -> None:
         return
     try:
         collection.modify(
-            configuration=UpdateCollectionConfiguration(
-                hnsw=UpdateHNSWConfiguration(num_threads=1)
-            )
+            configuration=UpdateCollectionConfiguration(hnsw=UpdateHNSWConfiguration(num_threads=1))
         )
     except Exception:
         logger.debug("_pin_hnsw_threads modify failed", exc_info=True)
