@@ -57,7 +57,7 @@ Semantic search. Returns verbatim drawer content with similarity scores.
 | `wing` | string | No | Filter by wing |
 | `room` | string | No | Filter by room |
 
-**Returns:** `{ query, filters, results: [{ text, wing, room, source_file, similarity }] }`
+**Returns:** `{ query, filters, results: [{ drawer_id, text, wing, room, topic, source_file, created_at, similarity, distance, matched_via }] }` — `drawer_id` lets callers feed the hit into `mempalace_get_drawer` (citation popovers, link-out with real target).
 
 ---
 
@@ -343,7 +343,7 @@ Read recent diary entries.
 | `agent_name` | string | **Yes** | Your name |
 | `last_n` | integer | No | Number of recent entries (default: 10) |
 
-**Returns:** `{ agent, entries: [{ date, timestamp, topic, content }], total, showing }`
+**Returns:** `{ agent, entries: [{ drawer_id, date, timestamp, topic, content }], total, showing }`
 
 ---
 
@@ -360,7 +360,7 @@ Read Stop-hook auto-save checkpoint entries from the dedicated session-recovery 
 | `wing` | string | No | Filter by project wing. |
 | `limit` | integer | No | Max entries to return (default 50, max 500). |
 
-**Returns:** `{ entries: [{ date, timestamp, topic, agent, wing, session_id, content }], total }` — newest-first.
+**Returns:** `{ entries: [{ drawer_id, date, timestamp, topic, agent, wing, session_id, content }], total }` — newest-first.
 
 ---
 
