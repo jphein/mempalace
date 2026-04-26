@@ -173,3 +173,46 @@ Two save modes, controlled by `hook_silent_save` in `~/.mempalace/config.json`:
 ## Testing
 
 Always run `python -m pytest tests/ -x -q` after changes. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).
+
+## Documentation maintenance
+
+The fork-ahead narrative was previously hand-maintained in four places
+(README's fork-change-queue table, this file's row inventory,
+`FORK_CHANGELOG.md`, and `~/.claude/projects/-home-jp-Projects-memorypalace/scratch/promises.md`).
+Drift was inevitable. As of 2026-04-26 the **canonical source** is
+`docs/fork-changes.yaml`; render targets are generated.
+
+### Workflow for new fork-ahead changes
+
+1. Land the code change with a focused commit on `main`.
+2. Add an entry to `docs/fork-changes.yaml` (top of the `entries:`
+   list, newest first). Schema is documented at the top of the YAML.
+3. Run `scripts/render-docs.py` to regenerate `FORK_CHANGELOG.md`.
+4. Run `scripts/check-docs.sh` to verify nothing has drifted (test
+   count, commit hashes, render parity, upstream PR states).
+5. Commit the YAML + the regenerated `FORK_CHANGELOG.md` together.
+
+### Targets
+
+| Target | Status |
+|--------|--------|
+| `FORK_CHANGELOG.md` | rendered from YAML (today) |
+| README fork-change-queue table | hand-maintained for now |
+| CLAUDE.md row inventory (rows 1–27 above) | hand-maintained for now |
+| `scratch/promises.md` tracker entries | hand-maintained for now |
+
+The renderer's `--target` flag is wired to take `changelog` or `all`;
+`all` is the same as `changelog` until the README/CLAUDE/promises
+renderers land.
+
+### Lint
+
+`scripts/check-docs.sh` runs four checks:
+
+1. README test count vs `pytest --collect-only`
+2. every fork commit hash referenced in docs resolves via `git cat-file -e`
+3. `FORK_CHANGELOG.md` matches the YAML (re-render idempotent)
+4. every `#NNNN` reference has an upstream state matching the doc's claim
+
+Run before committing any doc change. Exit code 1 on drift.
+

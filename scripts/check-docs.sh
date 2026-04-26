@@ -39,23 +39,38 @@ fail()  { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; ((failures++)); }
 failures=0
 
 # ── 1. test count ────────────────────────────────────────────────────────
-step "1/3  test count in README"
+step "1/4  test count in README"
 readme_count=$(grep -oE '^[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
 if [ -z "$readme_count" ]; then
     warn "README has no '<N> tests pass on \`main\`' line — skipping"
 else
-    actual_count=$(python -m pytest --collect-only -q 2>/dev/null | grep -E "^[0-9]+ tests collected" | head -1 | awk '{print $1}' || echo "")
-    if [ -z "$actual_count" ]; then
-        warn "could not run pytest --collect-only (venv inactive?) — skipping"
-    elif [ "$readme_count" != "$actual_count" ]; then
-        fail "README says $readme_count, pytest collects $actual_count"
+    # Prefer the repo venv's pytest so the check works without an
+    # activated environment. Falls back to whatever pytest is on PATH.
+    pytest_bin="$REPO_ROOT/venv/bin/pytest"
+    [ -x "$pytest_bin" ] || pytest_bin="$(command -v pytest 2>/dev/null || true)"
+    if [ -z "$pytest_bin" ]; then
+        warn "no pytest available — skipping"
     else
-        ok "README $readme_count == pytest $actual_count"
+        actual_count=$("$pytest_bin" --collect-only -q 2>/dev/null \
+            | grep -E "[0-9]+/[0-9]+ tests collected" \
+            | head -1 | awk -F'/' '{print $1}' || echo "")
+        if [ -z "$actual_count" ]; then
+            actual_count=$("$pytest_bin" --collect-only -q 2>/dev/null \
+                | grep -E "^[0-9]+ tests collected" \
+                | head -1 | awk '{print $1}' || echo "")
+        fi
+        if [ -z "$actual_count" ]; then
+            warn "pytest --collect-only produced no count — skipping"
+        elif [ "$readme_count" != "$actual_count" ]; then
+            fail "README says $readme_count, pytest collects $actual_count"
+        else
+            ok "README $readme_count == pytest $actual_count"
+        fi
     fi
 fi
 
 # ── 2. commit hash references ────────────────────────────────────────────
-step "2/3  commit hashes referenced in docs resolve"
+step "2/4  commit hashes referenced in docs resolve"
 docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # Strip cross-repo URLs first so we only check hashes that should resolve
 # in *this* fork. Pattern: anything inside (https://github.com/<other>/<repo>/commit/HASH)
@@ -82,8 +97,25 @@ if (( unresolved == 0 )) && (( ${#hashes[@]} > 0 )); then
     ok "all ${#hashes[@]} fork hash references resolve"
 fi
 
-# ── 3. upstream PR states ────────────────────────────────────────────────
-step "3/3  upstream PR states match doc claims"
+# ── 3. FORK_CHANGELOG.md is up-to-date with the canonical YAML ───────────
+step "3/4  FORK_CHANGELOG.md regenerates clean"
+render_bin="$REPO_ROOT/scripts/render-docs.py"
+if [ -x "$render_bin" ]; then
+    py="$REPO_ROOT/venv/bin/python"
+    [ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
+    if [ -z "$py" ]; then
+        warn "no python interpreter — skipping render check"
+    elif "$py" "$render_bin" --check >/dev/null 2>&1; then
+        ok "FORK_CHANGELOG.md matches docs/fork-changes.yaml"
+    else
+        fail "FORK_CHANGELOG.md is stale — run scripts/render-docs.py to regenerate"
+    fi
+else
+    warn "scripts/render-docs.py not present — skipping render check"
+fi
+
+# ── 4. upstream PR states ────────────────────────────────────────────────
+step "4/4  upstream PR states match doc claims"
 if ! command -v gh >/dev/null 2>&1; then
     warn "gh not on PATH — skipping PR state check"
 elif ! gh auth status >/dev/null 2>&1; then
