@@ -1030,6 +1030,10 @@ class TestSessionRecoveryRead:
         result = tool_session_recovery_read(session_id="beta")
         assert result["total"] == 1
         assert result["entries"][0]["content"] == "B"
+        # drawer_id is plumbed through so callers can build links back to
+        # the underlying drawer (mempalace_get_drawer, citation popovers).
+        assert result["entries"][0]["drawer_id"]
+        assert result["entries"][0]["drawer_id"].startswith("diary_")
 
     def test_filters_by_agent(self, monkeypatch, config, palace_path, kg):
         _patch_mcp_server(monkeypatch, config, kg)

@@ -22,6 +22,20 @@ class TestSearchMemories:
         assert len(result["results"]) > 0
         assert result["query"] == "JWT authentication"
 
+    def test_results_include_drawer_id(self, palace_path, seeded_collection):
+        """Each hit carries the chromadb drawer id so callers can build
+        citation-style links back to the actual drawer (e.g. via
+        ``mempalace_get_drawer``). Regression for the field-not-plumbed
+        gap that blocked end-to-end citation popovers in palace consumers."""
+        result = search_memories("JWT authentication", palace_path)
+        hits = result["results"]
+        assert hits, "expected at least one hit on the seeded collection"
+        for h in hits:
+            assert "drawer_id" in h, f"hit missing drawer_id: {h}"
+            assert h["drawer_id"], "drawer_id must be a non-empty string"
+        # Seeded ids from conftest.seeded_collection start with "drawer_"
+        assert any(h["drawer_id"].startswith("drawer_") for h in hits)
+
     def test_wing_filter(self, palace_path, seeded_collection):
         result = search_memories("planning", palace_path, wing="notes")
         assert all(r["wing"] == "notes" for r in result["results"])

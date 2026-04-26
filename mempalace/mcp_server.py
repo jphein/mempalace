@@ -1099,9 +1099,13 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
 
         # Combine and sort by timestamp
         entries = []
-        for doc, meta in zip(results["documents"], results["metadatas"]):
+        for drawer_id, doc, meta in zip(
+            results["ids"], results["documents"], results["metadatas"]
+        ):
+            meta = meta or {}
             entries.append(
                 {
+                    "drawer_id": drawer_id,
                     "date": meta.get("date", ""),
                     "timestamp": meta.get("filed_at", ""),
                     "topic": meta.get("topic", ""),
@@ -1192,7 +1196,9 @@ def tool_session_recovery_read(
         return {"entries": [], "total": 0}
 
     entries = []
-    for doc, meta in zip(results["documents"], results["metadatas"]):
+    for drawer_id, doc, meta in zip(
+        results["ids"], results["documents"], results["metadatas"]
+    ):
         # Defensive: ChromaDB may return None metadata for legacy /
         # partial-write drawers (cf. #999, #1094, #1201). Coerce to {}.
         meta = meta or {}
@@ -1203,6 +1209,7 @@ def tool_session_recovery_read(
             continue
         entries.append(
             {
+                "drawer_id": drawer_id,
                 "date": meta.get("date", ""),
                 "timestamp": filed_at,
                 "topic": meta.get("topic", ""),

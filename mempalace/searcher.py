@@ -498,17 +498,23 @@ def _sqlite_fallback_and_scope(
         warnings.append(f"sqlite fallback unavailable: {e}")
         return available_in_scope, warnings
 
+    pool_ids = pool.get("ids") or []
     pool_docs = pool.get("documents") or []
     pool_metas = pool.get("metadatas") or []
     if not pool_docs:
         return available_in_scope, warnings
+    # Pad ids when fixtures omit them (see vector path above).
+    if not pool_ids:
+        pool_ids = [None] * len(pool_docs)
 
     seen_texts = {h.get("text") for h in hits if h.get("text")}
+    candidate_ids: list = []
     candidate_docs: list = []
     candidate_metas: list = []
-    for d, m in zip(pool_docs, pool_metas):
+    for i, d, m in zip(pool_ids, pool_docs, pool_metas):
         if d in seen_texts:
             continue
+        candidate_ids.append(i)
         candidate_docs.append(d)
         candidate_metas.append(m or {})
 
@@ -517,12 +523,12 @@ def _sqlite_fallback_and_scope(
 
     bm25 = _bm25_scores(query, candidate_docs)
     ranked = sorted(
-        zip(candidate_docs, candidate_metas, bm25),
-        key=lambda t: t[2],
+        zip(candidate_ids, candidate_docs, candidate_metas, bm25),
+        key=lambda t: t[3],
         reverse=True,
     )
     added = 0
-    for doc, meta, score in ranked:
+    for drawer_id, doc, meta, score in ranked:
         if added >= shortfall:
             break
         if score <= 0.0:
@@ -532,6 +538,7 @@ def _sqlite_fallback_and_scope(
         src = meta.get("source_file", "") or ""
         hits.append(
             {
+                "drawer_id": drawer_id,
                 "text": doc,
                 "wing": meta.get("wing", "unknown"),
                 "room": meta.get("room", "unknown"),
@@ -722,10 +729,16 @@ def search_memories(
     CLOSET_DISTANCE_CAP = 1.5  # cosine dist > 1.5 = too weak to use as signal
 
     scored: list = []
-    for doc, meta, dist in zip(
-        _first_or_empty(drawer_results, "documents"),
-        _first_or_empty(drawer_results, "metadatas"),
-        _first_or_empty(drawer_results, "distances"),
+    drawer_ids = _first_or_empty(drawer_results, "ids")
+    drawer_docs = _first_or_empty(drawer_results, "documents")
+    drawer_metas = _first_or_empty(drawer_results, "metadatas")
+    drawer_dists = _first_or_empty(drawer_results, "distances")
+    # Production chromadb always returns ids alongside docs; some test
+    # mocks omit them. Pad with None so zip doesn't truncate to zero.
+    if drawer_docs and not drawer_ids:
+        drawer_ids = [None] * len(drawer_docs)
+    for drawer_id, doc, meta, dist in zip(
+        drawer_ids, drawer_docs, drawer_metas, drawer_dists
     ):
         # Filter on raw distance before rounding to avoid precision loss.
         if max_distance > 0.0 and dist > max_distance:
@@ -745,6 +758,7 @@ def search_memories(
 
         effective_dist = dist - boost
         entry = {
+            "drawer_id": drawer_id,
             "text": doc,
             "wing": meta.get("wing", "unknown"),
             "room": meta.get("room", "unknown"),
