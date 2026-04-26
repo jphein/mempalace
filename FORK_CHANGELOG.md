@@ -24,6 +24,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Canonical YAML manifest + renderer for fork-ahead docs** ([`5a01aec`](https://github.com/jphein/mempalace/commit/5a01aec))
+  The fork-ahead narrative previously lived (and drifted) across four
+  hand-edited files: README's fork-change-queue table, CLAUDE.md's row
+  inventory, FORK_CHANGELOG.md, and the promises tracker. New
+  ``docs/fork-changes.yaml`` is now the canonical source; running
+  ``scripts/render-docs.py`` regenerates FORK_CHANGELOG.md.
+  ``scripts/check-docs.sh`` extended with a render-parity check that
+  detects YAML→FORK_CHANGELOG drift, plus the existing test-count /
+  commit-hash / upstream-PR-state checks. Researched towncrier, scriv,
+  git-cliff, antsibull-changelog — none do single-source →
+  multi-target render in this shape. README/CLAUDE/promises
+  rendering planned for follow-on commits with marker-based
+  insertion.
+
+  *Files:* `docs/fork-changes.yaml`, `scripts/render-docs.py`, `scripts/check-docs.sh`, `FORK_CHANGELOG.md`, `CLAUDE.md`
+
+
 - **Phase D migration + PreCompact recovery write** ([`42817d7`](https://github.com/jphein/mempalace/commit/42817d7))
   ``migrate_checkpoints_to_recovery(palace_path, batch_size=1000)`` walks
   the main collection in pages, filters drawers with topic in
