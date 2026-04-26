@@ -381,6 +381,75 @@ def test_fix_blob_seq_ids_noop_without_database(tmp_path):
     _fix_blob_seq_ids(str(tmp_path))  # should not raise
 
 
+def test_fix_blob_seq_ids_writes_marker_after_blob_path(tmp_path):
+    """The .blob_seq_ids_migrated marker is written after a successful BLOB → INTEGER conversion."""
+    from pathlib import Path
+    from mempalace.backends.chroma import _BLOB_FIX_MARKER
+
+    db_path = tmp_path / "chroma.sqlite3"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE embeddings (rowid INTEGER PRIMARY KEY, seq_id)")
+    conn.execute("INSERT INTO embeddings (seq_id) VALUES (?)", ((42).to_bytes(8, "big"),))
+    conn.commit()
+    conn.close()
+
+    marker = tmp_path / _BLOB_FIX_MARKER
+    assert not marker.exists()
+
+    _fix_blob_seq_ids(str(tmp_path))
+
+    assert marker.is_file(), "marker must be written after a successful migration"
+
+
+def test_fix_blob_seq_ids_writes_marker_when_already_integer(tmp_path):
+    """The marker is written even when the migration is a no-op (already INTEGER).
+
+    The point of the marker is to skip the sqlite3 open on subsequent calls,
+    not to record that a conversion happened. So a clean palace gets the
+    marker on first run too — next ``_fix_blob_seq_ids`` call short-circuits
+    before touching the sqlite3 file.
+    """
+    from pathlib import Path
+    from mempalace.backends.chroma import _BLOB_FIX_MARKER
+
+    db_path = tmp_path / "chroma.sqlite3"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE embeddings (rowid INTEGER PRIMARY KEY, seq_id INTEGER)")
+    conn.execute("INSERT INTO embeddings (seq_id) VALUES (42)")
+    conn.commit()
+    conn.close()
+
+    marker = tmp_path / _BLOB_FIX_MARKER
+    assert not marker.exists()
+
+    _fix_blob_seq_ids(str(tmp_path))
+
+    assert marker.is_file(), "marker must be written even when no BLOBs found"
+
+
+def test_fix_blob_seq_ids_skips_sqlite_when_marker_present(tmp_path):
+    """When the marker exists, ``_fix_blob_seq_ids`` does not open sqlite3.
+
+    This is the load-bearing property of the marker — opening Python's
+    sqlite3 against a live ChromaDB 1.5.x WAL DB corrupts the next
+    PersistentClient call (#1090). Once a palace has been migrated, we
+    never want to open it again, even read-only.
+    """
+    from pathlib import Path
+    from unittest.mock import patch
+    from mempalace.backends.chroma import _BLOB_FIX_MARKER
+
+    # Pre-create the marker so the function should short-circuit.
+    db_path = tmp_path / "chroma.sqlite3"
+    db_path.write_bytes(b"sentinel")  # presence required for the function to proceed
+    (tmp_path / _BLOB_FIX_MARKER).touch()
+
+    with patch("mempalace.backends.chroma.sqlite3.connect") as mock_connect:
+        _fix_blob_seq_ids(str(tmp_path))
+
+    mock_connect.assert_not_called()
+
+
 # ── quarantine_stale_hnsw ─────────────────────────────────────────────────
 
 

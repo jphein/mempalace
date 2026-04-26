@@ -4,6 +4,7 @@ import datetime as _dt
 import logging
 import os
 import sqlite3
+from pathlib import Path
 from typing import Any, Optional
 
 import chromadb
@@ -206,7 +207,7 @@ def _fix_blob_seq_ids(palace_path: str) -> None:
     # confirmed to be in the INTEGER-seq_id state and future opens can skip the
     # sqlite3.connect() entirely.
     try:
-        open(marker, "a").close()
+        Path(marker).touch()
     except OSError:
         logger.exception("Could not write migration marker %s", marker)
 
