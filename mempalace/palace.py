@@ -71,6 +71,23 @@ def get_closets_collection(palace_path: str, create: bool = True):
     return get_collection(palace_path, collection_name="mempalace_closets", create=create)
 
 
+# Stop-hook auto-save checkpoint diary entries are routed to this
+# dedicated collection so they don't dominate ``mempalace_search``
+# results in the main ``mempalace_drawers`` collection. Read via the
+# ``mempalace_session_recovery_read`` MCP tool. See
+# ``docs/superpowers/specs/2026-04-25-checkpoint-collection-split.md``.
+_SESSION_RECOVERY_COLLECTION = "mempalace_session_recovery"
+
+
+def get_session_recovery_collection(palace_path: str, create: bool = True):
+    """Get the session-recovery collection — Stop-hook checkpoint storage."""
+    return get_collection(
+        palace_path,
+        collection_name=_SESSION_RECOVERY_COLLECTION,
+        create=create,
+    )
+
+
 CLOSET_CHAR_LIMIT = 1500  # fill closet until ~1500 chars, then start a new one
 CLOSET_EXTRACT_WINDOW = 5000  # how many chars of source content to scan for entities/topics
 

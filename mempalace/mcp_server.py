@@ -59,7 +59,8 @@ from .config import (  # noqa: E402
 from .version import __version__  # noqa: E402
 from .backends.chroma import ChromaBackend, ChromaCollection, _pin_hnsw_threads  # noqa: E402
 from .query_sanitizer import sanitize_query  # noqa: E402
-from .searcher import search_memories  # noqa: E402
+from .searcher import _CHECKPOINT_TOPICS, search_memories  # noqa: E402
+from .palace import _SESSION_RECOVERY_COLLECTION  # noqa: E402
 from .palace_graph import (  # noqa: E402
     traverse,
     find_tunnels,
@@ -105,6 +106,7 @@ else:
 
 _client_cache = None
 _collection_cache = None
+_recovery_collection_cache = None
 _palace_db_inode = 0  # inode of chroma.sqlite3 at cache time
 _palace_db_mtime = 0.0  # mtime of chroma.sqlite3 at cache time
 
@@ -174,6 +176,7 @@ def _get_client():
     global \
         _client_cache, \
         _collection_cache, \
+        _recovery_collection_cache, \
         _palace_db_inode, \
         _palace_db_mtime, \
         _metadata_cache, \
@@ -204,6 +207,7 @@ def _get_client():
     if _client_cache is None or inode_changed or mtime_changed:
         _client_cache = ChromaBackend.make_client(_config.palace_path)
         _collection_cache = None
+        _recovery_collection_cache = None
         _metadata_cache = None
         _metadata_cache_time = 0
         _palace_db_inode = current_inode
@@ -239,6 +243,37 @@ def _get_collection(create=False):
             _metadata_cache = None
             _metadata_cache_time = 0
         return _collection_cache
+    except Exception:
+        return None
+
+
+def _get_session_recovery_collection(create=False):
+    """Return the session-recovery collection, caching between calls.
+
+    Stop-hook checkpoint diary entries route here instead of the main
+    ``mempalace_drawers`` collection so they don't dominate
+    ``mempalace_search`` results. Mirrors :func:`_get_collection`'s
+    shape (same client cache, same ``_pin_hnsw_threads`` retrofit).
+    """
+    global _recovery_collection_cache
+    try:
+        client = _get_client()
+        if create:
+            raw = client.get_or_create_collection(
+                _SESSION_RECOVERY_COLLECTION,
+                metadata={"hnsw:space": "cosine", "hnsw:num_threads": 1},
+            )
+            _pin_hnsw_threads(raw)
+            _recovery_collection_cache = ChromaCollection(
+                raw, palace_path=_config.palace_path
+            )
+        elif _recovery_collection_cache is None:
+            raw = client.get_collection(_SESSION_RECOVERY_COLLECTION)
+            _pin_hnsw_threads(raw)
+            _recovery_collection_cache = ChromaCollection(
+                raw, palace_path=_config.palace_path
+            )
+        return _recovery_collection_cache
     except Exception:
         return None
 
@@ -932,13 +967,25 @@ def tool_kg_stats():
 # ==================== AGENT DIARY ====================
 
 
-def tool_diary_write(agent_name: str, entry: str, topic: str = "general", wing: str = ""):
+def tool_diary_write(
+    agent_name: str,
+    entry: str,
+    topic: str = "general",
+    wing: str = "",
+    session_id: str = "",
+):
     """
     Write a diary entry for this agent. Entries are timestamped and
     accumulate over time in a diary room.
 
     This is the agent's personal journal — observations, thoughts,
     what it worked on, what it noticed, what it thinks matters.
+
+    When ``topic`` is a checkpoint topic (``checkpoint`` / ``auto-save``)
+    the entry is routed to the dedicated ``mempalace_session_recovery``
+    collection so it doesn't dominate ``mempalace_search`` results.
+    Pass ``session_id`` to enable filtering checkpoints by session via
+    ``mempalace_session_recovery_read``.
     """
     try:
         agent_name = sanitize_name(agent_name, "agent_name")
@@ -951,7 +998,13 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", wing: 
     else:
         wing = f"wing_{agent_name.lower().replace(' ', '_')}"
     room = "diary"
-    col = _get_collection(create=True)
+    # Stop-hook auto-save checkpoint entries land in the dedicated
+    # session-recovery collection so they don't dominate vector ranking
+    # in mempalace_search. Read via mempalace_session_recovery_read.
+    if topic in _CHECKPOINT_TOPICS:
+        col = _get_session_recovery_collection(create=True)
+    else:
+        col = _get_collection(create=True)
     if not col:
         return _no_palace()
 
@@ -976,21 +1029,22 @@ def tool_diary_write(agent_name: str, entry: str, topic: str = "general", wing: 
         # semantic search quality. For now, store raw AAAK in metadata so it's
         # preserved, and keep the document as-is for embedding (even though
         # compressed AAAK degrades embedding quality).
+        meta = {
+            "wing": wing,
+            "room": room,
+            "hall": "hall_diary",
+            "topic": topic,
+            "type": "diary_entry",
+            "agent": agent_name,
+            "filed_at": now.isoformat(),
+            "date": now.strftime("%Y-%m-%d"),
+        }
+        if session_id:
+            meta["session_id"] = session_id
         col.add(
             ids=[entry_id],
             documents=[entry],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "hall": "hall_diary",
-                    "topic": topic,
-                    "type": "diary_entry",
-                    "agent": agent_name,
-                    "filed_at": now.isoformat(),
-                    "date": now.strftime("%Y-%m-%d"),
-                }
-            ],
+            metadatas=[meta],
         )
         logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
         return {
@@ -1067,6 +1121,102 @@ def tool_diary_read(agent_name: str, last_n: int = 10, wing: str = ""):
     except Exception:
         logger.exception("diary_read failed")
         return {"error": "Failed to read diary entries"}
+
+
+def tool_session_recovery_read(
+    session_id: str = "",
+    agent: str = "",
+    since: str = "",
+    until: str = "",
+    wing: str = "",
+    limit: int = 50,
+):
+    """
+    Read Stop-hook auto-save checkpoint entries from the dedicated
+    ``mempalace_session_recovery`` collection. Used for session
+    recovery, hook auditing, and "what was I doing 2 hours ago" lookup.
+
+    All filters are optional — empty string / zero means "no filter":
+
+    - ``session_id``: only entries written under this Claude Code session
+    - ``agent``: only entries from this agent (typically ``session-hook``)
+    - ``since`` / ``until``: ISO date strings, inclusive bounds on filed_at
+    - ``wing``: only entries from this project wing
+    - ``limit``: maximum number of entries to return (default 50, max 500)
+
+    Entries are returned sorted by ``filed_at`` descending (newest first).
+    """
+    try:
+        if agent:
+            agent = sanitize_name(agent, "agent")
+        if wing:
+            wing = sanitize_name(wing)
+    except ValueError as e:
+        return {"error": str(e), "entries": [], "total": 0}
+
+    limit = max(1, min(int(limit), 500))
+    col = _get_session_recovery_collection()
+    if not col:
+        # Recovery collection has never been created — no checkpoints
+        # have been written yet via the new routing. Return empty rather
+        # than erroring; caller's most likely interpretation is "no
+        # session-recovery data exists yet".
+        return {"entries": [], "total": 0}
+
+    # Build metadata where-clause from non-empty filters. ChromaDB needs
+    # a single condition or an explicit $and — we assemble accordingly.
+    conditions = []
+    if session_id:
+        conditions.append({"session_id": session_id})
+    if agent:
+        conditions.append({"agent": agent})
+    if wing:
+        conditions.append({"wing": wing})
+
+    where = None
+    if len(conditions) == 1:
+        where = conditions[0]
+    elif len(conditions) > 1:
+        where = {"$and": conditions}
+
+    try:
+        kwargs = {"include": ["documents", "metadatas"], "limit": 10000}
+        if where is not None:
+            kwargs["where"] = where
+        results = col.get(**kwargs)
+    except Exception:
+        logger.exception("session_recovery_read failed")
+        return {"error": "Failed to read recovery entries", "entries": [], "total": 0}
+
+    if not results.get("ids"):
+        return {"entries": [], "total": 0}
+
+    entries = []
+    for doc, meta in zip(results["documents"], results["metadatas"]):
+        # Defensive: ChromaDB may return None metadata for legacy /
+        # partial-write drawers (cf. #999, #1094, #1201). Coerce to {}.
+        meta = meta or {}
+        filed_at = meta.get("filed_at", "") or ""
+        if since and filed_at and filed_at < since:
+            continue
+        if until and filed_at and filed_at > until:
+            continue
+        entries.append(
+            {
+                "date": meta.get("date", ""),
+                "timestamp": filed_at,
+                "topic": meta.get("topic", ""),
+                "agent": meta.get("agent", ""),
+                "wing": meta.get("wing", ""),
+                "session_id": meta.get("session_id", ""),
+                "content": doc,
+            }
+        )
+
+    entries.sort(key=lambda x: x["timestamp"], reverse=True)
+    entries = entries[:limit]
+
+    return {"entries": entries, "total": len(entries)}
 
 
 def tool_hook_settings(silent_save: bool = None, desktop_toast: bool = None):
@@ -1563,6 +1713,46 @@ TOOLS = {
             "required": ["agent_name"],
         },
         "handler": tool_diary_read,
+    },
+    "mempalace_session_recovery_read": {
+        "description": (
+            "Read Stop-hook auto-save checkpoint entries from the dedicated "
+            "session-recovery collection. Use for session recovery, hook "
+            "auditing, or 'what was I doing 2 hours ago' lookup. Filters are "
+            "all optional; empty string / 0 means 'no filter'. Returns "
+            "entries newest-first."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "session_id": {
+                    "type": "string",
+                    "description": "Filter by Claude Code session id.",
+                },
+                "agent": {
+                    "type": "string",
+                    "description": "Filter by agent name (typically 'session-hook').",
+                },
+                "since": {
+                    "type": "string",
+                    "description": "ISO datetime string — entries strictly newer than this.",
+                },
+                "until": {
+                    "type": "string",
+                    "description": "ISO datetime string — entries strictly older than this.",
+                },
+                "wing": {
+                    "type": "string",
+                    "description": "Filter by project wing.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Max entries to return (default 50, max 500).",
+                },
+            },
+            "required": [],
+        },
+        "handler": tool_session_recovery_read,
     },
     "mempalace_hook_settings": {
         "description": (
