@@ -4,18 +4,10 @@ import datetime as _dt
 import logging
 import os
 import sqlite3
-from contextlib import contextmanager
+from pathlib import Path
 from typing import Any, Optional
 
 import chromadb
-
-try:
-    import fcntl as _fcntl
-
-    _HAS_FLOCK = True
-except ImportError:
-    _fcntl = None  # type: ignore[assignment]
-    _HAS_FLOCK = False  # Windows — no cross-process flock available
 
 from .base import (
     BaseBackend,
@@ -58,42 +50,6 @@ def _validate_where(where: Optional[dict]) -> None:
                 stack.extend(x for x in v if isinstance(x, dict))
 
 
-def _pin_hnsw_threads(collection) -> None:
-    """Best-effort retrofit: pin ``hnsw:num_threads=1`` on an existing collection.
-
-    Fresh collections set this via ``metadata=`` at creation. Legacy palaces
-    built before that change keep the default (parallel insert) and can hit
-    the HNSW race described in #974/#965 — `ParallelFor` races in
-    `repairConnectionsForUpdate` / `addPoint` corrupt the graph and can
-    produce runaway writes to ``link_lists.bin`` (437 GB observed on one of
-    our palaces; #976 reports ~1.5 TB). ChromaDB's
-    ``collection.modify(configuration=...)`` lets us re-apply
-    ``num_threads=1`` in memory at load time so every new process is protected.
-
-    In chromadb 1.5.x the modified ``configuration_json["hnsw"]`` does not
-    persist to disk across ``PersistentClient`` reopens, so this must run on
-    every ``get_collection`` call, not just once.
-
-    Adopted from @felipetruman's upstream fix in
-    https://github.com/milla-jovovich/mempalace/pull/976.
-    """
-    try:
-        from chromadb.api.collection_configuration import (
-            UpdateCollectionConfiguration,
-            UpdateHNSWConfiguration,
-        )
-    except ImportError:
-        # Older chromadb (pre-1.5) doesn't expose UpdateCollectionConfiguration.
-        logger.debug("_pin_hnsw_threads skipped: chromadb too old", exc_info=True)
-        return
-    try:
-        collection.modify(
-            configuration=UpdateCollectionConfiguration(hnsw=UpdateHNSWConfiguration(num_threads=1))
-        )
-    except Exception:
-        logger.debug("_pin_hnsw_threads modify failed", exc_info=True)
-
-
 def _segment_appears_healthy(seg_dir: str) -> bool:
     """Return True if a chromadb HNSW segment dir looks intact.
 
@@ -117,6 +73,12 @@ def _segment_appears_healthy(seg_dir: str) -> bool:
     can execute arbitrary code, and the byte-sniff is sufficient to
     distinguish a complete write from truncation, zero-fill, or
     partial-flush corruption.
+
+    Assumes pickle protocol >= 2 (``0x80`` PROTO marker). Matches what
+    chromadb writes today; if a future chromadb version emits protocol
+    0/1 segments, this check would start returning False on healthy
+    files and quarantine_stale_hnsw would conservatively rename them
+    out of the way (lazy rebuild on next open recovers).
     """
     meta_path = os.path.join(seg_dir, "index_metadata.pickle")
     if not os.path.isfile(meta_path):
@@ -249,6 +211,35 @@ def quarantine_stale_hnsw(palace_path: str, stale_seconds: float = 300.0) -> lis
     return moved
 
 
+def _pin_hnsw_threads(collection) -> None:
+    """Best-effort retrofit: pin ``hnsw:num_threads=1`` on an existing collection.
+
+    Fresh collections set this via ``metadata=`` at creation. Legacy palaces
+    built before that change keep the default (parallel insert) and can hit
+    the HNSW race described in #974/#965. ChromaDB's
+    ``collection.modify(configuration=...)`` lets us re-apply ``num_threads=1``
+    in memory at load time so every new process is protected.
+
+    Note: in chromadb 1.5.x the modified ``configuration_json["hnsw"]`` does
+    not persist to disk across ``PersistentClient`` reopens, so this must
+    run on every ``get_collection`` call, not just once.
+    """
+    try:
+        from chromadb.api.collection_configuration import (
+            UpdateCollectionConfiguration,
+            UpdateHNSWConfiguration,
+        )
+    except ImportError:
+        logger.debug("_pin_hnsw_threads skipped: chromadb too old", exc_info=True)
+        return
+    try:
+        collection.modify(
+            configuration=UpdateCollectionConfiguration(hnsw=UpdateHNSWConfiguration(num_threads=1))
+        )
+    except Exception:
+        logger.debug("_pin_hnsw_threads modify failed", exc_info=True)
+
+
 _BLOB_FIX_MARKER = ".blob_seq_ids_migrated"
 
 
@@ -296,7 +287,7 @@ def _fix_blob_seq_ids(palace_path: str) -> None:
     # confirmed to be in the INTEGER-seq_id state and future opens can skip the
     # sqlite3.connect() entirely.
     try:
-        open(marker, "a").close()
+        Path(marker).touch()
     except OSError:
         logger.exception("Could not write migration marker %s", marker)
 
@@ -315,61 +306,14 @@ def _as_list(v: Any) -> list:
     return [v]
 
 
-@contextmanager
-def _palace_write_lock(palace_path: Optional[str]):
-    """Cross-process exclusive write lock for ChromaDB writes.
-
-    Claude Code spawns one mcp_server.py per open terminal; stop hooks spawn
-    additional short-lived writers (diary writes, mine subprocesses). All open
-    independent PersistentClient instances against the same palace directory.
-    ChromaDB has no inter-process write locking — concurrent col.add/upsert/
-    update/delete from N processes corrupts the HNSW segment, causing the next
-    read to SIGSEGV in chromadb_rust_bindings.
-
-    Serializing all writes with flock(LOCK_EX) on a lock file in the palace
-    directory prevents the corruption. flock auto-releases on process death —
-    a mid-write crash cannot deadlock future writers.
-
-    On Windows, fcntl is unavailable — yields without locking. Windows users
-    running multiple MCP server processes remain exposed to the underlying
-    ChromaDB concurrency issue. palace-daemon, which provides proper asyncio
-    semaphores, is the recommended path for multi-client setups on any
-    platform.
-
-    palace_path may be None when the adapter is wrapping a collection whose
-    owning palace path isn't known (e.g. tests); in that case locking is
-    skipped.
-    """
-    if not _HAS_FLOCK or not palace_path:
-        yield
-        return
-    try:
-        os.makedirs(palace_path, exist_ok=True)
-    except OSError:
-        pass
-    lock_path = os.path.join(palace_path, ".write.lock")
-    with open(lock_path, "a") as _lf:
-        _fcntl.flock(_lf.fileno(), _fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            _fcntl.flock(_lf.fileno(), _fcntl.LOCK_UN)
-
-
 class ChromaCollection(BaseCollection):
-    """Thin adapter translating ChromaDB dict returns into typed results.
+    """Thin adapter translating ChromaDB dict returns into typed results."""
 
-    Wraps all write methods (add/upsert/update/delete) in a cross-process
-    flock so concurrent MCP servers + mine subprocesses cannot corrupt the
-    HNSW segment by racing their writes.
-    """
-
-    def __init__(self, collection, palace_path: Optional[str] = None):
+    def __init__(self, collection):
         self._collection = collection
-        self._palace_path = palace_path
 
     # ------------------------------------------------------------------
-    # Writes (serialized via cross-process flock on palace dir)
+    # Writes
     # ------------------------------------------------------------------
 
     def add(self, *, documents, ids, metadatas=None, embeddings=None):
@@ -378,8 +322,7 @@ class ChromaCollection(BaseCollection):
             kwargs["metadatas"] = metadatas
         if embeddings is not None:
             kwargs["embeddings"] = embeddings
-        with _palace_write_lock(self._palace_path):
-            self._collection.add(**kwargs)
+        self._collection.add(**kwargs)
 
     def upsert(self, *, documents, ids, metadatas=None, embeddings=None):
         kwargs: dict[str, Any] = {"documents": documents, "ids": ids}
@@ -387,8 +330,7 @@ class ChromaCollection(BaseCollection):
             kwargs["metadatas"] = metadatas
         if embeddings is not None:
             kwargs["embeddings"] = embeddings
-        with _palace_write_lock(self._palace_path):
-            self._collection.upsert(**kwargs)
+        self._collection.upsert(**kwargs)
 
     def update(
         self,
@@ -407,8 +349,7 @@ class ChromaCollection(BaseCollection):
             kwargs["metadatas"] = metadatas
         if embeddings is not None:
             kwargs["embeddings"] = embeddings
-        with _palace_write_lock(self._palace_path):
-            self._collection.update(**kwargs)
+        self._collection.update(**kwargs)
 
     # ------------------------------------------------------------------
     # Reads
@@ -573,8 +514,7 @@ class ChromaCollection(BaseCollection):
             kwargs["ids"] = ids
         if where is not None:
             kwargs["where"] = where
-        with _palace_write_lock(self._palace_path):
-            self._collection.delete(**kwargs)
+        self._collection.delete(**kwargs)
 
     def count(self):
         return self._collection.count()
@@ -729,6 +669,14 @@ class ChromaBackend(BaseBackend):
     # Real runtime drift is still handled — palace-daemon's ``_auto_repair``
     # calls :func:`quarantine_stale_hnsw` directly on observed HNSW errors,
     # which bypasses this gate.
+    #
+    # Thread-safety: this set is mutated without a lock. Two concurrent
+    # ``make_client()`` calls for the same palace can both pass the
+    # membership check and both invoke ``quarantine_stale_hnsw``. That's
+    # safe because the function is idempotent (mtime check + timestamped
+    # rename of distinct directories), so the worst-case race produces
+    # one redundant rename attempt that no-ops. Idempotency is the
+    # safety property; locking would add cost without correctness gain.
     _quarantined_paths: set[str] = set()
 
     @staticmethod
@@ -805,7 +753,7 @@ class ChromaBackend(BaseBackend):
         else:
             collection = client.get_collection(collection_name, **ef_kwargs)
         _pin_hnsw_threads(collection)
-        return ChromaCollection(collection, palace_path=palace_path)
+        return ChromaCollection(collection)
 
     def close_palace(self, palace) -> None:
         """Drop cached handles for ``palace``. Accepts ``PalaceRef`` or legacy path str."""
@@ -852,7 +800,7 @@ class ChromaBackend(BaseBackend):
             metadata={"hnsw:space": hnsw_space, "hnsw:num_threads": 1},
             **ef_kwargs,
         )
-        return ChromaCollection(collection, palace_path=palace_path)
+        return ChromaCollection(collection)
 
 
 def _normalize_get_collection_args(args, kwargs):

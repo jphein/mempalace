@@ -239,6 +239,11 @@ def test_cmd_init_with_entities(mock_config_cls, tmp_path):
         patch("mempalace.entity_detector.detect_entities", return_value=detected),
         patch("mempalace.entity_detector.confirm_entities", return_value=confirmed),
         patch("mempalace.room_detector_local.detect_rooms_local"),
+        # Pass 0 (corpus_origin) needs real file IO; this test mocks
+        # builtins.open globally for the entities.json write, which would
+        # break Pass 0's file-reading path. Patch Pass 0 out — a separate
+        # suite (tests/test_corpus_origin_integration.py) covers it directly.
+        patch("mempalace.cli._run_pass_zero", return_value=None),
         patch("builtins.open", MagicMock()),
         patch("mempalace.cli._maybe_run_mine_after_init"),
     ):
@@ -504,7 +509,6 @@ def test_cmd_mine_projects_mode(mock_config_cls):
         no_gitignore=False,
         include_ignored=[],
         extract="exchange",
-        workers=0,
     )
     with patch("mempalace.miner.mine") as mock_mine:
         cmd_mine(args)
@@ -517,7 +521,6 @@ def test_cmd_mine_projects_mode(mock_config_cls):
             dry_run=False,
             respect_gitignore=True,
             include_ignored=[],
-            workers=0,
         )
 
 
@@ -563,7 +566,6 @@ def test_cmd_mine_include_ignored_comma_split(mock_config_cls):
         no_gitignore=False,
         include_ignored=["a.txt,b.txt", "c.txt"],
         extract="exchange",
-        workers=0,
     )
     with patch("mempalace.miner.mine") as mock_mine:
         cmd_mine(args)

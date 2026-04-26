@@ -146,7 +146,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   quarantine.
 
   *Tests:* 4 in test_backends.py (renames-corrupt, leaves-healthy-with-drift, leaves-no-metadata, renames-truncated)
-  *Upstream:* [PR #1173](https://github.com/MemPalace/mempalace/pull/1173) (OPEN)
+  *Upstream:* [PR #1173](https://github.com/MemPalace/mempalace/pull/1173) (MERGED)
   *Files:* `mempalace/backends/chroma.py`, `tests/test_backends.py`
 
 
@@ -204,7 +204,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   directly and bypasses this gate.
 
   *Tests:* 2 in test_backends.py (single-fire-per-palace, per-palace independence)
-  *Upstream:* [PR #1173](https://github.com/MemPalace/mempalace/pull/1173) (OPEN)
+  *Upstream:* [PR #1173](https://github.com/MemPalace/mempalace/pull/1173) (MERGED)
   *Files:* `mempalace/backends/chroma.py`, `tests/test_backends.py`, `tests/conftest.py`
 
 
@@ -216,7 +216,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   smoke test. Same family as upstream's #999 None-metadata audit, in a
   read path the audit didn't reach.
 
-  *Upstream:* [PR #1201](https://github.com/MemPalace/mempalace/pull/1201) (OPEN)
+  *Upstream:* [PR #1201](https://github.com/MemPalace/mempalace/pull/1201) (MERGED)
   *Files:* `mempalace/palace_graph.py`
 
 
@@ -248,6 +248,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 *See CHANGELOG.md (upstream) for the full released history.*
 
 
+- [PR #1173](https://github.com/MemPalace/mempalace/pull/1173) — quarantine_stale_hnsw on make_client + cold-start gate + integrity sniff — 2026-04-26
+- [PR #1177](https://github.com/MemPalace/mempalace/pull/1177) — `.blob_seq_ids_migrated` marker guard (closes #1090) — 2026-04-26
+- [PR #1198](https://github.com/MemPalace/mempalace/pull/1198) — _tokenize None-document guard in BM25 reranker — 2026-04-26
+- [PR #1201](https://github.com/MemPalace/mempalace/pull/1201) — palace_graph.build_graph skips None metadata — 2026-04-26
 - [PR #659](https://github.com/MemPalace/mempalace/pull/659) — diary `wing` parameter — 2026-04-23
 - [PR #661](https://github.com/MemPalace/mempalace/pull/661) — graph cache with write-invalidation — 2026-04-22
 - [PR #673](https://github.com/MemPalace/mempalace/pull/673) — deterministic hook saves — 2026-04-22

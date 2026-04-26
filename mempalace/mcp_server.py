@@ -233,13 +233,13 @@ def _get_collection(create=False):
                 metadata={"hnsw:space": "cosine", "hnsw:num_threads": 1},
             )
             _pin_hnsw_threads(raw)
-            _collection_cache = ChromaCollection(raw, palace_path=_config.palace_path)
+            _collection_cache = ChromaCollection(raw)
             _metadata_cache = None
             _metadata_cache_time = 0
         elif _collection_cache is None:
             raw = client.get_collection(_config.collection_name)
             _pin_hnsw_threads(raw)
-            _collection_cache = ChromaCollection(raw, palace_path=_config.palace_path)
+            _collection_cache = ChromaCollection(raw)
             _metadata_cache = None
             _metadata_cache_time = 0
         return _collection_cache
@@ -264,15 +264,11 @@ def _get_session_recovery_collection(create=False):
                 metadata={"hnsw:space": "cosine", "hnsw:num_threads": 1},
             )
             _pin_hnsw_threads(raw)
-            _recovery_collection_cache = ChromaCollection(
-                raw, palace_path=_config.palace_path
-            )
+            _recovery_collection_cache = ChromaCollection(raw)
         elif _recovery_collection_cache is None:
             raw = client.get_collection(_SESSION_RECOVERY_COLLECTION)
             _pin_hnsw_threads(raw)
-            _recovery_collection_cache = ChromaCollection(
-                raw, palace_path=_config.palace_path
-            )
+            _recovery_collection_cache = ChromaCollection(raw)
         return _recovery_collection_cache
     except Exception:
         return None
@@ -990,11 +986,6 @@ def tool_diary_write(
     try:
         agent_name = sanitize_name(agent_name, "agent_name")
         entry = sanitize_content(entry)
-        # Topic is stored raw into ChromaDB metadata — sanitize for the same
-        # null-byte / path-traversal / size guards as agent_name (upstream
-        # PR #936 / commit 5bf8260, fork-side merge restored 2026-04-26).
-        # Sanitization is non-mangling for `_CHECKPOINT_TOPICS` values, so
-        # the checkpoint-routing check below is unaffected.
         topic = sanitize_name(topic, "topic")
     except ValueError as e:
         return {"success": False, "error": str(e)}

@@ -483,6 +483,72 @@ def test_fix_blob_seq_ids_noop_without_database(tmp_path):
     _fix_blob_seq_ids(str(tmp_path))  # should not raise
 
 
+def test_fix_blob_seq_ids_writes_marker_after_blob_path(tmp_path):
+    """The .blob_seq_ids_migrated marker is written after a successful BLOB → INTEGER conversion."""
+    from mempalace.backends.chroma import _BLOB_FIX_MARKER
+
+    db_path = tmp_path / "chroma.sqlite3"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE embeddings (rowid INTEGER PRIMARY KEY, seq_id)")
+    conn.execute("INSERT INTO embeddings (seq_id) VALUES (?)", ((42).to_bytes(8, "big"),))
+    conn.commit()
+    conn.close()
+
+    marker = tmp_path / _BLOB_FIX_MARKER
+    assert not marker.exists()
+
+    _fix_blob_seq_ids(str(tmp_path))
+
+    assert marker.is_file(), "marker must be written after a successful migration"
+
+
+def test_fix_blob_seq_ids_writes_marker_when_already_integer(tmp_path):
+    """The marker is written even when the migration is a no-op (already INTEGER).
+
+    The point of the marker is to skip the sqlite3 open on subsequent calls,
+    not to record that a conversion happened. So a clean palace gets the
+    marker on first run too — next ``_fix_blob_seq_ids`` call short-circuits
+    before touching the sqlite3 file.
+    """
+    from mempalace.backends.chroma import _BLOB_FIX_MARKER
+
+    db_path = tmp_path / "chroma.sqlite3"
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE embeddings (rowid INTEGER PRIMARY KEY, seq_id INTEGER)")
+    conn.execute("INSERT INTO embeddings (seq_id) VALUES (42)")
+    conn.commit()
+    conn.close()
+
+    marker = tmp_path / _BLOB_FIX_MARKER
+    assert not marker.exists()
+
+    _fix_blob_seq_ids(str(tmp_path))
+
+    assert marker.is_file(), "marker must be written even when no BLOBs found"
+
+
+def test_fix_blob_seq_ids_skips_sqlite_when_marker_present(tmp_path):
+    """When the marker exists, ``_fix_blob_seq_ids`` does not open sqlite3.
+
+    This is the load-bearing property of the marker — opening Python's
+    sqlite3 against a live ChromaDB 1.5.x WAL DB corrupts the next
+    PersistentClient call (#1090). Once a palace has been migrated, we
+    never want to open it again, even read-only.
+    """
+    from unittest.mock import patch
+    from mempalace.backends.chroma import _BLOB_FIX_MARKER
+
+    # Pre-create the marker so the function should short-circuit.
+    db_path = tmp_path / "chroma.sqlite3"
+    db_path.write_bytes(b"sentinel")  # presence required for the function to proceed
+    (tmp_path / _BLOB_FIX_MARKER).touch()
+
+    with patch("mempalace.backends.chroma.sqlite3.connect") as mock_connect:
+        _fix_blob_seq_ids(str(tmp_path))
+
+    mock_connect.assert_not_called()
+
+
 # ── quarantine_stale_hnsw ─────────────────────────────────────────────────
 
 
@@ -494,9 +560,7 @@ _HEALTHY_META = b"\x80\x04" + b"\x00" * 32 + b"\x2e"
 _CORRUPT_META = b"\x00" * 64
 
 
-def _make_palace_with_segment(
-    tmp_path, hnsw_mtime, sqlite_mtime, meta_bytes=_HEALTHY_META
-):
+def _make_palace_with_segment(tmp_path, hnsw_mtime, sqlite_mtime, meta_bytes=_HEALTHY_META):
     """Helper: build a palace dir with one HNSW segment + sqlite at given
     mtimes. ``meta_bytes`` controls whether the segment looks healthy
     (default), corrupt (``_CORRUPT_META``), or has no metadata file at
@@ -645,9 +709,9 @@ def test_make_client_quarantines_only_on_first_call_per_palace(tmp_path, monkeyp
     ChromaBackend.make_client(palace_path)
     ChromaBackend.make_client(palace_path)
 
-    assert calls == [palace_path], (
-        "quarantine_stale_hnsw should fire once per palace per process, not on every reconnect"
-    )
+    assert calls == [
+        palace_path
+    ], "quarantine_stale_hnsw should fire once per palace per process, not on every reconnect"
 
 
 def test_make_client_quarantines_each_palace_independently(tmp_path, monkeypatch):
@@ -679,7 +743,7 @@ def test_make_client_quarantines_each_palace_independently(tmp_path, monkeypatch
     assert calls == [palace_a, palace_b]
 
 
-# ── _pin_hnsw_threads ─────────────────────────────────────────────────────
+# ── _pin_hnsw_threads (per-process retrofit, separate from this PR's gate) ──
 
 
 def test_pin_hnsw_threads_retrofits_legacy_collection(tmp_path):
