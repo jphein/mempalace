@@ -18,6 +18,85 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-04-27]
+
+
+### Changed
+
+
+- **Retire the `kind=` filter — structural split made it inert** ([`7ba28dc`](https://github.com/jphein/mempalace/commit/7ba28dc))
+  Phases A–E of the checkpoint collection split (2026-04-25 → 2026-04-26)
+  moved every Stop-hook auto-save checkpoint drawer to the dedicated
+  ``mempalace_session_recovery`` collection. Empirical check on the
+  canonical 151K palace: ``mempalace_drawers`` has zero
+  ``topic=checkpoint`` and zero ``topic=auto-save`` drawers; recovery
+  collection holds 763. The ``kind=`` post-filter was filtering nothing.
+
+  Deleted: ``_CHECKPOINT_TOPICS`` (moved to ``palace.py`` for write-side
+  routing), ``_is_checkpoint_drawer``, ``_apply_kind_text_filter``, the
+  ``max(n*20, 100)`` over-fetch hack (back to standard ``n_results * 3``),
+  the ``kind=`` parameter on ``search_memories`` / ``build_where_filter`` /
+  CLI ``search`` / ``mempalace_search`` MCP tool input_schema, and
+  ``TestCheckpointFilter`` (9 tests). Companion fix in
+  [palace-daemon](https://github.com/jphein/palace-daemon/commit/4a318d3)
+  (v1.7.1) drops ``kind=`` from ``/search`` and ``/context`` HTTP routes.
+
+  *Tests:* −9 (TestCheckpointFilter deleted; suite at 1500)
+  *Files:* `mempalace/searcher.py`, `mempalace/mcp_server.py`, `mempalace/palace.py`, `mempalace/migrate.py`, `mempalace/layers.py`, `tests/test_searcher.py`
+
+
+- **Hoist CLOSET_RANK_BOOSTS to module level + record VecRecall ablation finding** ([`3cb03f3`](https://github.com/jphein/mempalace/commit/3cb03f3))
+  Two-step refactor + measurement. First (commit ``f558d3c``):
+  hoist ``CLOSET_RANK_BOOSTS = [0.40, 0.25, 0.15, 0.08, 0.04]`` and
+  ``CLOSET_DISTANCE_CAP`` from inside ``search_memories`` to module
+  scope so they can be tuned from the outside (env var, config flag,
+  or in-process patch for A/B benchmarking) without touching the
+  function. No behavior change; pure ablation enablement.
+
+  Then (commit ``3cb03f3``): A/B ablation against the 151K canonical
+  palace (12-probe set covering recent fork-side decisions + mined-file
+  content). Closet boost fires on ~20% of result rows, concentrated
+  in queries whose answer lives in mined files; closets are sparse on
+  chat-transcript queries (most fork-side decisions). When the boost
+  fired, it re-ordered chunks within a single source file rather than
+  displacing right answers with wrong ones — i.e. VecRecall's critique
+  ([discussions/1129](https://github.com/MemPalace/mempalace/discussions/1129),
+  "org-layer in retrieval path drops R@5") did not reproduce here.
+  Hybrid degrades to effectively pure-vector for transcript queries
+  and re-ranks within-file chunks for mined-file queries; neither
+  shape matches the failure mode VecRecall is fixing. Findings noted
+  in the comment block above the constants so future-us doesn't have
+  to re-run the experiment.
+
+  *Files:* `mempalace/searcher.py`
+
+
+### Fixed
+
+
+- **Strip embedded API key from .claude-plugin/ manifests; rely on env inheritance** ([`9f91e18`](https://github.com/jphein/mempalace/commit/9f91e18))
+  ``.claude-plugin/.mcp.json`` and ``.claude-plugin/hooks/hooks.json``
+  shipped with a real (rotated) API key embedded as a literal in the
+  manifest's ``env`` block, plus my homelab daemon URL. Both are
+  committed plugin templates that get pulled into every plugin install.
+
+  Fix in two commits: ``8119149`` reverted both manifests to the
+  upstream-shape (no env block, in-process MCP), then ``9f91e18``
+  restored daemon-routing on ``.mcp.json`` (URL + path) but **without**
+  the embedded credential — ``PALACE_API_KEY`` now inherits at runtime
+  from ``~/.claude/settings.local.json``'s ``env`` block (which
+  Claude Code passes to spawned MCP servers and hooks).
+
+  Net: my fork-main carries the daemon-routed config matching production
+  deployment; the literal credential lives one place only (gitignored
+  ``settings.local.json``); future plugin installs inherit env rather
+  than carrying a stale embedded key. Companion to palace-daemon
+  [PR #12](https://github.com/rboarescu/palace-daemon/pull/12) which
+  fixes the same class of embedded-default in ``clients/palace-mode``.
+
+  *Files:* `.claude-plugin/.mcp.json`, `.claude-plugin/hooks/hooks.json`
+
+
 ## [2026-04-26]
 
 
