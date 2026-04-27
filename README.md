@@ -8,7 +8,7 @@
 
 ---
 
-This fork tracks `upstream/develop` through the 2026-04-26 sync and runs in production on a 151,478-drawer palace behind [palace-daemon](https://github.com/jphein/palace-daemon) at `disks.jphe.in:8085`. It carries 22 fork-ahead changes that compose with — not replace — bensig's release direction; four were approved 2026-04-26 (#1173, #1177, #1198, #1201). 1,395 tests pass on `main`. The new things here are *what we've learned*, not just what we've fixed.
+This fork tracks `upstream/develop` through the 2026-04-27 sync and runs in production on a 151,478-drawer palace behind [palace-daemon](https://github.com/jphein/palace-daemon) at `disks.jphe.in:8085`. It carries 17 fork-ahead changes that compose with — not replace — bensig's release direction; four landed upstream on 2026-04-26 (#1173, #1177, #1198, #1201). 1,510 tests pass on `main`. The new things here are *what we've learned*, not just what we've fixed.
 
 ## What just shipped
 
@@ -274,7 +274,7 @@ Built *on top of* or *alongside* MemPalace, by community contributors who use th
 
 ## Open upstream PRs
 
-11 open as of 2026-04-26. Four bensig-approved 2026-04-26.
+7 open as of 2026-04-27.
 
 | PR | Status | Description |
 |---|---|---|
@@ -285,10 +285,6 @@ Built *on top of* or *alongside* MemPalace, by community contributors who use th
 | [#1087](https://github.com/MemPalace/mempalace/pull/1087) | CI green, **rewritten 2026-04-26** per @igorls's review | `mempalace purge --wing/--room` via `delete(where=)` (no nuke-and-rebuild) |
 | [#1094](https://github.com/MemPalace/mempalace/pull/1094) | CI green, awaiting review | Coerce `None` metadatas to `{}` at `ChromaCollection` boundary |
 | [#1142](https://github.com/MemPalace/mempalace/pull/1142) | CI green, @bensig accepted 2026-04-23 | `docs/RELEASING.md` |
-| [#1173](https://github.com/MemPalace/mempalace/pull/1173) | **bensig-approved 2026-04-26**, three-commit safety stack | Wire `quarantine_stale_hnsw()` into `make_client()` + cold-start gate + integrity sniff-test |
-| [#1177](https://github.com/MemPalace/mempalace/pull/1177) | **bensig-approved 2026-04-26** | `.blob_seq_ids_migrated` marker guard |
-| [#1198](https://github.com/MemPalace/mempalace/pull/1198) | **bensig-approved 2026-04-26** | `searcher._tokenize` None-document guard |
-| [#1201](https://github.com/MemPalace/mempalace/pull/1201) | **bensig-approved 2026-04-26** | `palace_graph.build_graph` skips None metadata |
 
 ## Setup / Development
 
@@ -300,7 +296,7 @@ python -m venv venv && source venv/bin/activate
 pip install -e ".[dev]"
 
 # Develop
-python -m pytest tests/ -q              # 1395 tests (benchmarks deselected)
+python -m pytest tests/ -q              # 1510 tests (benchmarks deselected)
 mempalace status                         # palace health
 ruff check . && ruff format --check .    # lint + format
 
@@ -324,12 +320,7 @@ The canonical source is [`docs/fork-changes.yaml`](docs/fork-changes.yaml); [`FO
 |---|---|---|---|
 | **Search** | Move Stop-hook auto-save checkpoints to dedicated `mempalace_session_recovery` ChromaDB collection (Principle 1+2). **Phases A–E shipped 2026-04-25 → 2026-04-26**: collection adapter, write routing, new `mempalace_session_recovery_read` MCP tool, migration (idempotent, ID/metadata-preserving), PreCompact incorporation, palace-daemon `lifespan` auto-migrate. Canonical 151K palace migrated 667 checkpoints on 2026-04-26 10:24:09 PDT. Cat 9 A/B re-run shows **632/3 → 974/1267 token convergence**. | PR pending — fork commits [`e266365`](https://github.com/jphein/mempalace/commit/e266365) (A–C) → [`42817d7`](https://github.com/jphein/mempalace/commit/42817d7) (D + PreCompact); palace-daemon [`034023c`](https://github.com/jphein/palace-daemon/commit/034023c) (E); 18 new tests | `palace.py`, `mcp_server.py`, `migrate.py`, `cli.py`, `hooks_cli.py` |
 | **Search** | Surface `drawer_id` in `mempalace_search` results, `mempalace_diary_read` entries, and `mempalace_session_recovery_read` payload. ChromaDB primary key was returned but never plumbed into the result-building loop. Defensive zip-with-id-pad for test mocks. | PR pending — fork commit [`9a8bb77`](https://github.com/jphein/mempalace/commit/9a8bb77); upstream [#1219](https://github.com/MemPalace/mempalace/pull/1219) (@pepo72) is the narrower searcher-only equivalent. | `searcher.py`, `mcp_server.py`, `tests/...`, `website/reference/mcp-tools.md` |
-| **Reliability** | `quarantine_stale_hnsw` non-destructive integrity gate. Stage 1 mtime gate + stage 2 sniff-test of segment metadata file (PROTO/STOP byte presence + size floor, no deserialization) before renaming. Production case 2026-04-26 06:56:45 had three healthy 253MB segments with 538-557s gaps that the old logic would have destroyed. | [#1173](https://github.com/MemPalace/mempalace/pull/1173), bensig-approved 2026-04-26 | `backends/chroma.py`, `tests/test_backends.py` |
-| **Reliability** | Cold-start gate on `quarantine_stale_hnsw` in `make_client()` — once per palace per process via `ChromaBackend._quarantined_paths`. Prevents runtime thrash where steady-write load makes mtime drift the steady state. | Bundled in [#1173](https://github.com/MemPalace/mempalace/pull/1173) | `backends/chroma.py`, `tests/test_backends.py`, `tests/conftest.py` |
 | **Reliability** | `hook_precompact` writes a session-recovery checkpoint marker before mining + compaction. Mirrors `hook_stop`'s `_save_diary_direct` call; same routing path (recovery collection, queryable by `session_id`). | Bundled with phase D in [`42817d7`](https://github.com/jphein/mempalace/commit/42817d7) | `mempalace/hooks_cli.py` |
-| **Reliability** | Skip `_fix_blob_seq_ids` sqlite open after first successful migration via `.blob_seq_ids_migrated` marker. | [#1177](https://github.com/MemPalace/mempalace/pull/1177), bensig-approved 2026-04-26, closes [#1090](https://github.com/MemPalace/mempalace/issues/1090) | `backends/chroma.py` |
-| **Search** | `_tokenize` None-document guard — closes the gap upstream's [#999](https://github.com/MemPalace/mempalace/pull/999) None-metadata audit left in BM25 helpers. | [#1198](https://github.com/MemPalace/mempalace/pull/1198), bensig-approved 2026-04-26 | `searcher.py`, `tests/test_searcher.py` |
-| **Reliability** | `palace_graph.build_graph` skips None metadata — daemon `/stats` was 500-ing on a single legacy drawer. Same gap class as [#999](https://github.com/MemPalace/mempalace/pull/999) / [#1094](https://github.com/MemPalace/mempalace/pull/1094) in a read path the audit didn't reach. | [#1201](https://github.com/MemPalace/mempalace/pull/1201), bensig-approved 2026-04-26 | `palace_graph.py` |
 | **Search** | `kind=` filter on `search_memories` excludes Stop-hook checkpoints by default. Three values: `"content"` (default), `"checkpoint"`, `"all"`. Post-filter only (chromadb 1.5.x `$nin`/`$in` filter-planner bug); over-fetch `max(n*20, 100)` for non-`"all"`. **Transitional** — becomes deletable next release after the structural split (above) ships. | PR pending — fork commits `8d02835` → `f9f5cc4` | `searcher.py`, `mcp_server.py` |
 | **Performance** | Cherry-picked upstream [#1085](https://github.com/MemPalace/mempalace/pull/1085) (@midweste) — batch ChromaDB inserts in miner. New `_build_drawer()` + `add_drawers()`. Reported 10–30× mining speedup. | Cherry-pick of open #1085 — fork commit [`6be6fff`](https://github.com/jphein/mempalace/commit/6be6fff). Becomes a no-op when #1085 merges. | `mempalace/miner.py` |
 | **Reliability** | Cherry-picked upstream [#1094](https://github.com/MemPalace/mempalace/pull/1094) — coerce None metadatas at chromadb boundary. Closes the per-site-guard family of None-metadata bugs (#999, #1198, #1201) at one site instead of N. | Cherry-pick of open #1094 — fork commit [`43d728d`](https://github.com/jphein/mempalace/commit/43d728d) | `backends/chroma.py`, `tests/test_backends.py` |
@@ -344,6 +335,7 @@ The canonical source is [`docs/fork-changes.yaml`](docs/fork-changes.yaml); [`FO
 
 ### Recently merged into upstream
 
+- **2026-04-26:** [#1173](https://github.com/MemPalace/mempalace/pull/1173) (`quarantine_stale_hnsw` cold-start gate + integrity sniff), [#1177](https://github.com/MemPalace/mempalace/pull/1177) (`.blob_seq_ids_migrated` marker), [#1198](https://github.com/MemPalace/mempalace/pull/1198) (`_tokenize` None guard), [#1201](https://github.com/MemPalace/mempalace/pull/1201) (`palace_graph` None metadata)
 - **2026-04-23:** [#659](https://github.com/MemPalace/mempalace/pull/659) — diary `wing` parameter, hook derives from transcript path
 - **2026-04-22:** [#661](https://github.com/MemPalace/mempalace/pull/661) (graph cache), [#673](https://github.com/MemPalace/mempalace/pull/673) (deterministic hook saves), [#1021](https://github.com/MemPalace/mempalace/pull/1021) (Claude Code 2.1.114 stdout fixes)
 - **2026-04-21 (in v3.3.2):** [#1000](https://github.com/MemPalace/mempalace/pull/1000) (`quarantine_stale_hnsw`), [#1023](https://github.com/MemPalace/mempalace/pull/1023) (PID file guard), [#681](https://github.com/MemPalace/mempalace/pull/681) (Unicode checkmark)
