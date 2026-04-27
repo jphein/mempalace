@@ -2,6 +2,12 @@
 
 Companion to [`docs/superpowers/specs/2026-04-25-checkpoint-collection-split.md`](../specs/2026-04-25-checkpoint-collection-split.md).
 
+**Status: COMPLETED 2026-04-27.** All 12 tasks shipped. Phases A–E landed
+2026-04-25 → 2026-04-26; the closing cleanup task (#12 — delete `kind=`,
+`_apply_kind_text_filter`, over-fetch hack) shipped 2026-04-27 in
+mempalace `7ba28dc` + palace-daemon `4a318d3`. Document retained as
+historical record of the migration shape.
+
 12 tasks, TDD-shaped, scoped for ~2-3 days focused work.
 
 ## Phase A: Scaffolding (no behavior change)

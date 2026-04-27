@@ -2,7 +2,7 @@
 
 - **Project:** `mempalace` (jphein fork)
 - **Date:** 2026-04-25
-- **Status:** Draft — spec for implementation, no code yet
+- **Status:** **COMPLETED 2026-04-27.** Phases A–E shipped 2026-04-25 → 2026-04-26; cleanup phase (`kind=` retirement) shipped 2026-04-27 in mempalace `7ba28dc` + palace-daemon `4a318d3`. Production verified: 0 checkpoints in `mempalace_drawers`, 763 in `mempalace_session_recovery`. The `kind=` parameter described below as "transitional" no longer exists — sections referencing it are retained as historical record of the migration.
 - **Promoted by:** [Cat 9 A/B report](file:///tmp/cat9-ab/REPORT.md), 2026-04-25 — kind=content delivers ~3 tokens vs 632 for kind=all on the canonical 151K palace. Over-fetch + post-filter is structurally inadequate; checkpoints must be removed from the searchable corpus, not filtered out of it.
 
 ## One-line summary
