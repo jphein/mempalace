@@ -49,7 +49,6 @@ def test_migrate_aborts_without_confirmation(tmp_path, capsys):
     mock_rmtree.assert_not_called()
 
 
-
 class TestMigrateCheckpointsToRecovery:
     """Phase D — move existing topic=checkpoint drawers from the main
     collection to the dedicated session-recovery collection. Idempotent;

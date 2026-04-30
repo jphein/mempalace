@@ -16,7 +16,6 @@ import fnmatch
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
-from typing import Optional
 
 from .palace import (
     NORMALIZE_VERSION,
@@ -746,7 +745,9 @@ def _extract_entities_for_metadata(content: str) -> str:
     return ";".join(capped)
 
 
-def _build_drawer(wing, room, source_file, chunk_index, agent, content, now=None, source_mtime=None):
+def _build_drawer(
+    wing, room, source_file, chunk_index, agent, content, now=None, source_mtime=None
+):
     """Build the ID, document, and metadata for a single drawer.
 
     Shared by ``add_drawer`` (single insert) and ``add_drawers`` (batch insert)
@@ -812,8 +813,14 @@ def add_drawers(collection, wing, room, chunks, source_file, agent):
 
     for chunk in chunks:
         drawer_id, doc, metadata = _build_drawer(
-            wing, room, source_file, chunk["chunk_index"], agent,
-            chunk["content"], now=now, source_mtime=source_mtime,
+            wing,
+            room,
+            source_file,
+            chunk["chunk_index"],
+            agent,
+            chunk["content"],
+            now=now,
+            source_mtime=source_mtime,
         )
         batch_docs.append(doc)
         batch_ids.append(drawer_id)
@@ -901,7 +908,12 @@ def process_file(
         # its sub-batch; that is the deliberate trade-off for amortizing
         # embedding overhead. (Upstream PR #1085, cherry-picked.)
         drawers_added, batch_ids = add_drawers(
-            collection, wing, room, chunks, source_file, agent,
+            collection,
+            wing,
+            room,
+            chunks,
+            source_file,
+            agent,
         )
 
         # Build closet — the searchable index pointing to these drawers.

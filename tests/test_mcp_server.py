@@ -883,9 +883,7 @@ class TestCheckpointRouting:
     ``docs/superpowers/specs/2026-04-25-checkpoint-collection-split.md``.
     """
 
-    def test_diary_write_routes_checkpoint_to_recovery(
-        self, monkeypatch, config, palace_path, kg
-    ):
+    def test_diary_write_routes_checkpoint_to_recovery(self, monkeypatch, config, palace_path, kg):
         _patch_mcp_server(monkeypatch, config, kg)
         _client, _col = _get_collection(palace_path, create=True)
         del _client
@@ -907,9 +905,7 @@ class TestCheckpointRouting:
         assert main.count() == 0
         assert recovery.count() == 1
 
-    def test_diary_write_routes_auto_save_to_recovery(
-        self, monkeypatch, config, palace_path, kg
-    ):
+    def test_diary_write_routes_auto_save_to_recovery(self, monkeypatch, config, palace_path, kg):
         """The legacy ``auto-save`` topic synonym also routes to recovery."""
         _patch_mcp_server(monkeypatch, config, kg)
         _client, _col = _get_collection(palace_path, create=True)
@@ -931,9 +927,7 @@ class TestCheckpointRouting:
         assert main.count() == 0
         assert recovery.count() == 1
 
-    def test_diary_write_routes_general_to_main(
-        self, monkeypatch, config, palace_path, kg
-    ):
+    def test_diary_write_routes_general_to_main(self, monkeypatch, config, palace_path, kg):
         """Non-checkpoint topics keep the existing behavior — main collection."""
         _patch_mcp_server(monkeypatch, config, kg)
         _client, _col = _get_collection(palace_path, create=True)
@@ -955,9 +949,7 @@ class TestCheckpointRouting:
         assert main.count() == 1
         assert recovery.count() == 0
 
-    def test_search_does_not_see_new_checkpoints(
-        self, monkeypatch, config, palace_path, kg
-    ):
+    def test_search_does_not_see_new_checkpoints(self, monkeypatch, config, palace_path, kg):
         """Regression: a checkpoint written via ``tool_diary_write`` cannot
         surface in ``search_memories`` because it lives in a separate
         collection — not merely post-filtered out."""
@@ -990,9 +982,7 @@ class TestSessionRecoveryRead:
     ``docs/superpowers/specs/2026-04-25-checkpoint-collection-split.md``.
     """
 
-    def test_returns_empty_when_no_recovery_data(
-        self, monkeypatch, config, palace_path, kg
-    ):
+    def test_returns_empty_when_no_recovery_data(self, monkeypatch, config, palace_path, kg):
         """Empty recovery collection (no checkpoints written) returns empty
         results without errors."""
         _patch_mcp_server(monkeypatch, config, kg)
@@ -1004,9 +994,7 @@ class TestSessionRecoveryRead:
         assert result["entries"] == []
         assert result["total"] == 0
 
-    def test_filters_by_session_id(
-        self, monkeypatch, config, palace_path, kg
-    ):
+    def test_filters_by_session_id(self, monkeypatch, config, palace_path, kg):
         """Three checkpoints under different session_ids; query for one
         returns only that one."""
         _patch_mcp_server(monkeypatch, config, kg)
@@ -1015,15 +1003,21 @@ class TestSessionRecoveryRead:
         from mempalace.mcp_server import tool_diary_write, tool_session_recovery_read
 
         tool_diary_write(
-            agent_name="hooks", entry="A", topic="checkpoint",
+            agent_name="hooks",
+            entry="A",
+            topic="checkpoint",
             session_id="alpha",
         )
         tool_diary_write(
-            agent_name="hooks", entry="B", topic="checkpoint",
+            agent_name="hooks",
+            entry="B",
+            topic="checkpoint",
             session_id="beta",
         )
         tool_diary_write(
-            agent_name="hooks", entry="C", topic="checkpoint",
+            agent_name="hooks",
+            entry="C",
+            topic="checkpoint",
             session_id="gamma",
         )
 
@@ -1055,9 +1049,7 @@ class TestSessionRecoveryRead:
         from mempalace.mcp_server import tool_diary_write, tool_session_recovery_read
 
         for i in range(5):
-            tool_diary_write(
-                agent_name="hooks", entry=f"checkpoint {i}", topic="checkpoint"
-            )
+            tool_diary_write(agent_name="hooks", entry=f"checkpoint {i}", topic="checkpoint")
 
         result = tool_session_recovery_read(limit=3)
         assert result["total"] == 3

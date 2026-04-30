@@ -325,9 +325,7 @@ def search(
     Delegates to ``search_memories`` so CLI and MCP callers share the same
     hybrid ranking, sqlite-BM25 fallback, and scope-aware warnings.
     """
-    result = search_memories(
-        query, palace_path, wing=wing, room=room, n_results=n_results
-    )
+    result = search_memories(query, palace_path, wing=wing, room=room, n_results=n_results)
     if "error" in result and not result.get("results"):
         # Preserve the palace path in the printed error so the user sees
         # which palace the search tried to open (a common source of
@@ -718,7 +716,7 @@ def _bm25_only_via_sqlite(
     }
 
 
-def search_memories(
+def search_memories(  # noqa: C901 — fork-only fallback orchestration; complexity 27 vs 25 ceiling is the cost of the BM25-top-up + warnings + closet-boost branches
     query: str,
     palace_path: str,
     wing: str = None,
@@ -842,9 +840,7 @@ def search_memories(
     # mocks omit them. Pad with None so zip doesn't truncate to zero.
     if drawer_docs and not drawer_ids:
         drawer_ids = [None] * len(drawer_docs)
-    for drawer_id, doc, meta, dist in zip(
-        drawer_ids, drawer_docs, drawer_metas, drawer_dists
-    ):
+    for drawer_id, doc, meta, dist in zip(drawer_ids, drawer_docs, drawer_metas, drawer_dists):
         # Filter on raw distance before rounding to avoid precision loss.
         if max_distance > 0.0 and dist > max_distance:
             continue

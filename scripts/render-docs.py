@@ -18,6 +18,7 @@ Usage::
     scripts/render-docs.py --check      # exit 1 if any target would change
     scripts/render-docs.py --target changelog   # only render the changelog
 """
+
 from __future__ import annotations
 
 import argparse
@@ -112,9 +113,7 @@ def render_changelog(manifest: dict) -> str:
     for entry in manifest["entries"]:
         date = str(entry["date"])
         bucket = entry.get("bucket", "Changed")
-        by_date.setdefault(date, {b: [] for b in BUCKET_ORDER}).setdefault(
-            bucket, []
-        ).append(entry)
+        by_date.setdefault(date, {b: [] for b in BUCKET_ORDER}).setdefault(bucket, []).append(entry)
 
     # Sort dates descending — manifest is presentation order but a date
     # may straddle entries; sorting keeps headings stable.
