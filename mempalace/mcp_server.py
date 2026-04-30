@@ -311,12 +311,11 @@ def _get_collection(create=False):
                 _metadata_cache = None
                 _metadata_cache_time = 0
             return _collection_cache
-        except Exception as e:
-            logger.error(
-                "_get_collection attempt %d failed (palace=%s): %s",
+        except Exception:
+            logger.exception(
+                "_get_collection attempt %d failed (palace=%s)",
                 attempt + 1,
                 _config.palace_path,
-                e,
             )
             if attempt == 0:
                 _client_cache = None

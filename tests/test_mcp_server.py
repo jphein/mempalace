@@ -874,3 +874,106 @@ class TestCacheInvalidation:
         assert result["success"] is True
         assert "Reconnected" in result["message"]
         assert isinstance(result["drawers"], int)
+
+
+class TestGetCollectionRetry:
+    """Lock in the log-then-retry-once self-healing behaviour of _get_collection."""
+
+    def test_retry_succeeds_on_second_attempt(self, monkeypatch, config, kg):
+        """First _get_client call raises; the second one succeeds; caches are
+        cleared between attempts so the second open uses fresh state."""
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+
+        # Plant a sentinel in the caches so we can prove they got cleared.
+        mcp_server._client_cache = "stale-client-sentinel"
+        mcp_server._collection_cache = "stale-collection-sentinel"
+        mcp_server._metadata_cache = {"stale": True}
+        mcp_server._metadata_cache_time = 9999
+
+        # Track call count + caches-at-each-call for the assertions below.
+        calls = {"count": 0, "caches_when_called": []}
+        good_collection = object()
+
+        # Short-circuit the second attempt's chromadb interactions: ChromaCollection
+        # wraps a raw collection — we replace it with a constant sentinel — and
+        # _pin_hnsw_threads becomes a no-op so we don't need a real index.
+        monkeypatch.setattr(mcp_server, "ChromaCollection", lambda raw: good_collection)
+        monkeypatch.setattr(mcp_server, "_pin_hnsw_threads", lambda raw: None)
+
+        class FakeClient:
+            def get_collection(self, name):
+                return object()
+
+        def flaky_get_client():
+            calls["count"] += 1
+            calls["caches_when_called"].append(
+                (mcp_server._client_cache, mcp_server._collection_cache)
+            )
+            if calls["count"] == 1:
+                raise RuntimeError("simulated transient ChromaDB failure")
+            return FakeClient()
+
+        monkeypatch.setattr(mcp_server, "_get_client", flaky_get_client)
+
+        result = mcp_server._get_collection()
+
+        assert result is good_collection, "second attempt should return the sentinel"
+        assert calls["count"] == 2, "exactly two attempts (one fail, one success)"
+        # First attempt saw the planted stale caches; second attempt saw
+        # the cleared (None/None) caches — proving the clear happened
+        # between attempts.
+        assert calls["caches_when_called"][0] == (
+            "stale-client-sentinel",
+            "stale-collection-sentinel",
+        )
+        assert calls["caches_when_called"][1] == (None, None)
+
+    def test_returns_none_when_both_attempts_fail(self, monkeypatch, config, kg):
+        """If both the first and the retry attempt raise, return None and
+        keep caches cleared so the next call gets a fresh shot too."""
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        mcp_server._client_cache = "anything"
+        mcp_server._collection_cache = "anything"
+
+        calls = {"count": 0}
+
+        def always_fails():
+            calls["count"] += 1
+            raise RuntimeError(f"failure attempt {calls['count']}")
+
+        monkeypatch.setattr(mcp_server, "_get_client", always_fails)
+
+        result = mcp_server._get_collection()
+
+        assert result is None
+        assert calls["count"] == 2, "should retry exactly once before giving up"
+
+    def test_happy_path_does_not_retry(self, monkeypatch, config, palace_path, kg):
+        """A successful first attempt should not call _get_client again
+        and should not log the retry path."""
+        from mempalace import mcp_server
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        _client, _col = _get_collection(palace_path, create=True)
+        del _client
+
+        # Wrap the real _get_client so we can count invocations without
+        # disrupting normal behaviour.
+        real_get_client = mcp_server._get_client
+        calls = {"count": 0}
+
+        def counting_get_client():
+            calls["count"] += 1
+            return real_get_client()
+
+        monkeypatch.setattr(mcp_server, "_get_client", counting_get_client)
+
+        mcp_server._collection_cache = None  # force the elif branch
+        result = mcp_server._get_collection()
+
+        assert result is not None, "happy path should return a collection"
+        assert calls["count"] == 1, "no retry on success"
