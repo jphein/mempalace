@@ -122,7 +122,7 @@ Ruff for linting (`ruff check`), line length 100, target Python 3.9.
 
 ## Upstream PRs
 
-As of 2026-04-27: 18 merged (added #1173, #1177, #1198, #1201), 7 open, 10 closed. PRs target `develop`. Fork `main` tracks `upstream/develop` (synced 2026-04-27 to commit `de7801e`; brought in HNSW capacity divergence #1227, hooks additive convos mining #1230/#1231, wing-name normalization #1194, max-seq-id repair #1135, HNSW index bloat fix #1191).
+As of 2026-04-30: 18 merged, 7 open ours + 1 open shepherded (#1262), 10 closed. PRs target `develop`. Fork `main` tracks `upstream/develop` (synced 2026-04-27 to commit `de7801e`; brought in HNSW capacity divergence #1227, hooks additive convos mining #1230/#1231, wing-name normalization #1194, max-seq-id repair #1135, HNSW index bloat fix #1191). Develop has since moved to `fdfaf01` (Gemini CLI normalize #1234, privacy consent #1233, both 2026-04-27); next sync will clear those plus row 15 once #1262 merges.
 
 | PR | Status | Description |
 |----|--------|-------------|
@@ -133,6 +133,8 @@ As of 2026-04-27: 18 merged (added #1173, #1177, #1198, #1201), 7 open, 10 close
 | #1087 | open, **rewritten 2026-04-26** per @igorls's review | `mempalace purge --wing/--room` CLI. Rewrite (commit `e9a59de`) replaces nuke-and-rebuild with `collection.delete(where=...)` after tracing #521's stack — the race is on the upsert path, not delete-by-where. Preserves embedding fn, no rmtree window, routes through `ChromaBackend`, reuses `confirm_destructive_action`. End-to-end test added. |
 | #1094 | open (`CLEAN`, 6/6 CI green) | Coerce `None` metadatas → `{}` at `ChromaCollection.query/.get` boundary (closes #1020) |
 | #1142 | open (filed 2026-04-23) | `docs/RELEASING.md` with `mempalace-mcp` pre-release grep — fulfills #1093's release-checklist proposal, accepted by @bensig 2026-04-23 via email |
+| #1262 | open (Legion345, our 2026-04-30 review comment posted) | Get-then-create guard at chromadb backend boundary — path 1 of #1089. Diff matches our 2026-04-18 `d3a2d22` approach with one improvement (catches `chromadb.errors.NotFoundError`, the 1.5.x renamed exception). When this merges, fork-ahead Row 15 clears via develop sync. |
+| #1286 | open (our PR, filed 2026-04-30) | `mcp_server._get_collection` retry-once + log-on-failure. Self-healing for transient ChromaDB errors that poison the client/collection cache; one log line per attempt with palace path; happy path unchanged. Adjacent to Row 15 — when both #1262 and #1286 land, the `_get_collection` path is both crash-resilient and self-healing. |
 | #1173 | **merged** 2026-04-26 | `quarantine_stale_hnsw()` in `make_client()` + cold-start gate + integrity sniff-test; threshold 3600→300s. Saved healthy 253MB segments from being quarantined under async-flush drift. |
 | #1177 | **merged** 2026-04-26 | `.blob_seq_ids_migrated` marker guard — skip `sqlite3.connect()` on already-migrated palaces. Closes #1090. |
 | #1198 | **merged** 2026-04-26 | `_tokenize` None-document guard — closes the gap upstream's #999 None-metadata audit left in BM25 helpers. Three regression tests in `TestBM25NoneSafety`. |
