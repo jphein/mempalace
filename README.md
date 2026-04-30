@@ -81,7 +81,7 @@ We surveyed the memory-system landscape in April 2026 and found no verbatim-firs
 | [engram](https://github.com/NickCirv/engram) | Structured fields, not raw | Yes | Yes | 2026-04-11 | Go + SQLite FTS5. |
 | [CaviraOSS OpenMemory](https://github.com/CaviraOSS/OpenMemory) | No — temporal graph | Yes | Yes | 2025-10-26 | SQL-native. |
 
-The April-2026 verbatim cluster (MemPalace, Celiums, Longhand, engram all within ~8 days) is striking — it suggests the "store it raw and retrieve well" pattern reached independent critical mass right around the same time. The differentiator: **verbatim storage is the foundation; everything else (tags, KG, decay, summaries) is enrichment layered on top.** If any layer fails or needs rebuilding, the underlying truth is still there.
+The April-2026 verbatim cluster (MemPalace, Celiums, Longhand, engram all within ~8 days) is striking — it suggests the "store it raw and retrieve well" pattern reached independent critical mass right around the same time. The differentiator: **verbatim storage is the foundation; everything else (tags, KG, decay, summaries) is enrichment layered on top.** If any layer fails or needs rebuilding, the underlying truth is still there. The same architectural call has been winning in observability for a decade — Grafana Loki's verbatim-event store, with the recent [Kafka rearchitect](https://www.infoq.com/news/2026/04/grafana-loki-ai-agents/) (10× faster aggregated queries, 20× less data scanned), is what mature verbatim-first systems eventually do under scale pressure — useful precedent for the [substrate exploration](#substrate-exploration-postgres--pgvector--apache-age) above.
 
 ## Substrate exploration: Postgres + pgvector + Apache AGE
 
@@ -228,7 +228,7 @@ BM25 + vector with reciprocal rank fusion vs current hybrid-rerank pipeline. Don
 
 ### Cat 9 / The Handshake as a generalizable measurement
 
-The SME framework's Cat 9 is an underappreciated piece of the memory-systems landscape — every deployment runs into the integration gap; the field's benchmarks deliberately don't measure it. Worth scaling up: what does Cat 9 look like on Longhand, Celiums, mcp-memory-service? An apples-to-apples comparison would surface whether "verbatim-first cohort" share an integration shape or whether each has its own gap. Adapter work tracked at [`jphein/multipass-structural-memory-eval`](https://github.com/jphein/multipass-structural-memory-eval).
+The SME framework's Cat 9 is an underappreciated piece of the memory-systems landscape — every deployment runs into the integration gap; the field's benchmarks deliberately don't measure it. Worth scaling up: what does Cat 9 look like on Longhand, Celiums, mcp-memory-service? An apples-to-apples comparison would surface whether "verbatim-first cohort" share an integration shape or whether each has its own gap. Adapter work tracked at [`jphein/multipass-structural-memory-eval`](https://github.com/jphein/multipass-structural-memory-eval). Grafana's [o11y-bench](https://grafana.com/blog/o11y-bench-open-benchmark-for-observability-agents/) (April 2026) is the same instinct applied to observability — bench what agents actually *do* with the data, not just retrieval-side metrics — and worth tracking as the pattern matures across domains.
 
 ### Multi-palace separation — curated "authority" vs auto-mined memory
 
@@ -326,6 +326,7 @@ Forward-looking, in rough priority order. The substrate exploration is the bigge
 - **Land P0 (multi-label tags) and P2 (decay/recency)** — P2 tracked upstream via [#1032](https://github.com/MemPalace/mempalace/pull/1032); P0 is fork-side until upstream wants it.
 - **Publish the verbatim-vs-derivative axis as a standalone essay**, distinct from the README. The axis is doing more work than the README has space to spell out.
 - **Coordinate with upstream on the multi-collection-by-purpose pattern** — implicit in RFC 001 today, worth naming explicitly so future backends plan for it.
+- **Agent-shaped CLI surface.** MCP brings palace data into Claude Code via tool calls; the peer surface is a pipe-friendly CLI with structured-output flags so agents, hooks, or scripts can call `mempalace search ... --json` and route results into context without the MCP roundtrip. Grafana's [GCX CLI](https://www.infoq.com/news/2026/04/grafana-loki-ai-agents/) is the prior art for this pattern in observability — bring the data to where the agent lives, don't force the agent into a separate UI. Today's `mempalace` CLI is operator-shaped (status / mine / repair / search); the next-generation surface should be agent-callable, with first-class JSON output and conventions that compose with shell pipelines and slash commands.
 
 ## Setup / Development
 
