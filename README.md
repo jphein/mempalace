@@ -64,6 +64,8 @@ Four claims that fall out of the thesis when you take it seriously and run it in
 
 **The integration gap (Cat 9 / Handshake) is real, reproducible, and measurable.** Engram-2's "17% E2E QA" claim landed on a real failure surface — checkpoint domination of vector top-N — and the structural fix demonstrably closes it on this corpus. The 632/3 → 974/1267 token convergence above is the structural-fix proxy; the end-to-end LongMemEval run on the post-migration palace is in flight, with results to publish at `notebook/data/cat9-postmigrate-e2e/` (TODO: link when committed).
 
+Underneath all four, the operational work that doesn't make headlines is still mostly the two hard things — **naming** (wing/room/topic taxonomies, the verbatim-vs-derivative split was itself a naming clarification, multi-label tags, embedding-model identity across collections, what `kind` should mean) and **cache invalidation** (HNSW staleness detection, graph-cache write-invalidation, the `kind=` filter that went inert post-split, decay/recency weighting, stale auto-loaded docs, the `.blob_seq_ids_migrated` marker). Karlton's joke is durable for a reason: every retrieval system eventually has to engineer good answers to both, and this one is no exception. The thesis above is the part of the work that generalizes; the two-hard-things are the part that keeps showing up on every PR.
+
 ## Why this fork exists
 
 We surveyed the memory-system landscape in April 2026 and found no verbatim-first local system with MCP. Every alternative transforms content on write — extracted facts, knowledge graphs, tiered summaries — losing the original text.
@@ -397,6 +399,10 @@ Articles and surveys that shaped the fork's direction.
 - [**lhl/agentic-memory**](https://github.com/lhl/agentic-memory) — multi-system analysis. The MemPalace review at [`ANALYSIS-mempalace.md`](https://github.com/lhl/agentic-memory/blob/main/ANALYSIS-mempalace.md) seeded the original 7-item roadmap.
 - [**codingwithcody.com — "MemPalace: digital castles on sand"**](https://codingwithcody.com/2026/04/13/mempalace-digital-castles-on-sand/) — TagMem-promotion critique whose hierarchy-causes-bugs argument produced architectural principles 1 and 2.
 - [**OSS Insight — Agent Memory Race 2026**](https://ossinsight.io/blog/agent-memory-race-2026) — competitive landscape survey.
+- [**InfoQ — Grafana rearchitects Loki with Kafka and ships a CLI to bring observability into coding agents**](https://www.infoq.com/news/2026/04/grafana-loki-ai-agents/) — verbatim-first observability precedent at scale; GCX CLI as agent-bridge prior art; o11y-bench as parallel to multipass-structural-memory-eval. Cited in the verbatim-cluster paragraph, the Cat 9 investigation, and the agent-shaped-CLI roadmap item.
+- [**Microsoft Tech Community — Combining pgvector and Apache AGE: knowledge graph & semantic intelligence in a single engine**](https://techcommunity.microsoft.com/blog/adforpostgresql/combining-pgvector-and-apache-age---knowledge-graph--semantic-intelligence-in-a-/4508781) (Raunak, 2026-04-15) — bridge-pattern reference for the substrate exploration: pgvector cosine scores written as `SIMILAR_TO` edges in the AGE property graph.
+- [**Dave's Garage — "My Custom AI Went Superhuman Yesterday..."**](https://www.youtube.com/watch?v=TdbpoDjIvPk) (Dave Plummer, 2026-02-28) — conceptual reference for why graph structure matters in retrieval: vectors get you "topically nearby"; the graph gets you "actually related."
+- [**Phil Karlton's two hard things**](https://martinfowler.com/bliki/TwoHardThings.html) — naming and cache invalidation. Cited in "What this fork has learned" because, even at 151K drawers and post-thesis, the day-to-day operational work is still mostly these two.
 
 ### Systems inspiring roadmap items
 
