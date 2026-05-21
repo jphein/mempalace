@@ -34,7 +34,7 @@ def test_no_palace_default_when_no_recent_error():
 def test_no_palace_maps_operational_error_to_backend_unreachable():
     mcp_server._last_backend_error = {
         "type": "OperationalError",
-        "message": "connection to server at \"10.0.6.120\", port 5433 failed: Connection refused",
+        "message": 'connection to server at "10.0.6.120", port 5433 failed: Connection refused',
         "ts": time.time(),
     }
     try:
@@ -81,7 +81,7 @@ def test_get_collection_postgres_records_operational_error(monkeypatch):
 
         def get_collection(self, **kw):
             raise _FakeOperationalError(
-                "connection to server at \"10.0.6.120\", port 5433 failed: Connection refused"
+                'connection to server at "10.0.6.120", port 5433 failed: Connection refused'
             )
 
     import mempalace.backends.postgres as pg_mod

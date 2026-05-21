@@ -312,7 +312,9 @@ def test_session_start_warns_when_daemon_degraded(tmp_path):
             with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
                 with patch("mempalace.pending_queue.PENDING_DIR", tmp_path / "pending"):
                     with patch("mempalace.hooks_cli._daemon_health_ok", return_value=False):
-                        with patch("mempalace.hooks_cli._replay_pending_quietly", return_value=None):
+                        with patch(
+                            "mempalace.hooks_cli._replay_pending_quietly", return_value=None
+                        ):
                             result = _capture_hook_output(
                                 hook_session_start,
                                 {"session_id": "deg-session-1"},
@@ -332,7 +334,9 @@ def test_session_start_warning_throttled_per_session(tmp_path):
             with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
                 with patch("mempalace.pending_queue.PENDING_DIR", tmp_path / "pending"):
                     with patch("mempalace.hooks_cli._daemon_health_ok", return_value=False):
-                        with patch("mempalace.hooks_cli._replay_pending_quietly", return_value=None):
+                        with patch(
+                            "mempalace.hooks_cli._replay_pending_quietly", return_value=None
+                        ):
                             first = _capture_hook_output(
                                 hook_session_start,
                                 {"session_id": "throttle-test"},

@@ -304,9 +304,7 @@ def test_replay_claims_file_so_concurrent_enqueue_survives(queue_dir):
     live = queue_dir / "2026-05-21.jsonl"
     assert live.exists(), "concurrent enqueue must still be on disk"
     rows = _read_lines(live)
-    assert any(r["dir"] == "/raced" for r in rows), (
-        f"raced enqueue lost! file contains: {rows}"
-    )
+    assert any(r["dir"] == "/raced" for r in rows), f"raced enqueue lost! file contains: {rows}"
 
 
 def test_replay_failed_lines_appended_back_not_rewritten(queue_dir):
@@ -319,9 +317,7 @@ def test_replay_failed_lines_appended_back_not_rewritten(queue_dir):
     def post(req):
         if req["dir"] == "/ok":
             # Simulate concurrent enqueue between read and write.
-            pending_queue.enqueue(
-                {"dir": "/raced", "wing": "w", "mode": "convos"}, now=base
-            )
+            pending_queue.enqueue({"dir": "/raced", "wing": "w", "mode": "convos"}, now=base)
             return True
         return False  # /fail stays pending
 
@@ -342,9 +338,7 @@ def test_replay_respects_deadline(queue_dir):
 
     base = datetime(2026, 5, 21, tzinfo=timezone.utc)
     for i in range(20):
-        pending_queue.enqueue(
-            {"dir": f"/lots{i}", "wing": "w", "mode": "convos"}, now=base
-        )
+        pending_queue.enqueue({"dir": f"/lots{i}", "wing": "w", "mode": "convos"}, now=base)
 
     call_count = 0
 

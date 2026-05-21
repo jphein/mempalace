@@ -114,7 +114,10 @@ def _dedupe(lines: Iterable[str]) -> list[str]:
         if prev is None or obj.get("ts", "") >= prev.get("ts", ""):
             seen[key] = obj
     # Preserve oldest-first ordering so older targets are tried first.
-    return [json.dumps(obj, sort_keys=True, ensure_ascii=False) for obj in sorted(seen.values(), key=lambda o: o.get("ts", ""))]
+    return [
+        json.dumps(obj, sort_keys=True, ensure_ascii=False)
+        for obj in sorted(seen.values(), key=lambda o: o.get("ts", ""))
+    ]
 
 
 def replay(
