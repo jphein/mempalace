@@ -298,7 +298,9 @@ class KnowledgeGraphAGE:
             for r in rows
         ]
 
-    def add_entity(self, name: str, entity_type: str = "unknown", properties: Optional[dict] = None) -> str:
+    def add_entity(
+        self, name: str, entity_type: str = "unknown", properties: Optional[dict] = None
+    ) -> str:
         """Add or update an entity node.
 
         Mirrors ``KnowledgeGraph.add_entity`` in the SQLite backend. MERGE
@@ -335,7 +337,9 @@ class KnowledgeGraphAGE:
         the same id for the same entity name."""
         return name.lower().replace(" ", "_").replace("'", "")
 
-    def invalidate(self, subject: str, predicate: str, obj: str, ended: Optional[str] = None) -> int:
+    def invalidate(
+        self, subject: str, predicate: str, obj: str, ended: Optional[str] = None
+    ) -> int:
         """Mark active triples matching (subject, predicate, object) as expired.
 
         Sets ``valid_to`` to ``ended`` (or today if None) on every RELATION
@@ -353,6 +357,7 @@ class KnowledgeGraphAGE:
         obj = sanitize_kg_value(obj, "object")
         if ended is None:
             from datetime import date as _date
+
             ended = _date.today().isoformat()
         ended = sanitize_iso_temporal(ended, "ended")
 
@@ -432,17 +437,19 @@ class KnowledgeGraphAGE:
             )
             for r in rows:
                 vt = self._unwrap_agtype(r[4])
-                results.append({
-                    "direction": "outgoing",
-                    "subject": self._unwrap_agtype(r[0]),
-                    "predicate": self._unwrap_agtype(r[1]),
-                    "object": self._unwrap_agtype(r[2]),
-                    "valid_from": self._unwrap_agtype(r[3]),
-                    "valid_to": vt,
-                    "confidence": self._unwrap_agtype(r[5]),
-                    "source_closet": self._unwrap_agtype(r[6]),
-                    "current": vt is None,
-                })
+                results.append(
+                    {
+                        "direction": "outgoing",
+                        "subject": self._unwrap_agtype(r[0]),
+                        "predicate": self._unwrap_agtype(r[1]),
+                        "object": self._unwrap_agtype(r[2]),
+                        "valid_from": self._unwrap_agtype(r[3]),
+                        "valid_to": vt,
+                        "confidence": self._unwrap_agtype(r[5]),
+                        "source_closet": self._unwrap_agtype(r[6]),
+                        "current": vt is None,
+                    }
+                )
 
         if direction in ("incoming", "both"):
             rows = self._run_cypher(
@@ -459,17 +466,19 @@ class KnowledgeGraphAGE:
             )
             for r in rows:
                 vt = self._unwrap_agtype(r[4])
-                results.append({
-                    "direction": "incoming",
-                    "subject": self._unwrap_agtype(r[0]),
-                    "predicate": self._unwrap_agtype(r[1]),
-                    "object": self._unwrap_agtype(r[2]),
-                    "valid_from": self._unwrap_agtype(r[3]),
-                    "valid_to": vt,
-                    "confidence": self._unwrap_agtype(r[5]),
-                    "source_closet": self._unwrap_agtype(r[6]),
-                    "current": vt is None,
-                })
+                results.append(
+                    {
+                        "direction": "incoming",
+                        "subject": self._unwrap_agtype(r[0]),
+                        "predicate": self._unwrap_agtype(r[1]),
+                        "object": self._unwrap_agtype(r[2]),
+                        "valid_from": self._unwrap_agtype(r[3]),
+                        "valid_to": vt,
+                        "confidence": self._unwrap_agtype(r[5]),
+                        "source_closet": self._unwrap_agtype(r[6]),
+                        "current": vt is None,
+                    }
+                )
 
         return results
 
@@ -602,8 +611,13 @@ class KnowledgeGraphAGE:
             MERGE (e:Entity {name: $ename})
             CREATE (d)-[:MENTIONS {count: $count, confidence: $conf, etype: $etype}]->(e)
             """,
-            {"did": drawer_id, "ename": entity_name, "count": count,
-             "conf": confidence, "etype": entity_type},
+            {
+                "did": drawer_id,
+                "ename": entity_name,
+                "count": count,
+                "conf": confidence,
+                "etype": entity_type,
+            },
             commit=commit,
         )
 
@@ -616,7 +630,6 @@ class KnowledgeGraphAGE:
         per batch. The single-statement default still commits per call.
         """
         self._conn.commit()
-
 
     def seed_from_entity_facts(self, entity_facts: dict) -> int:
         """Seed the graph from fact_checker.py ENTITY_FACTS dict.

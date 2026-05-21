@@ -432,7 +432,13 @@ def _daemon_strict() -> bool:
     )
 
 
-def _post_daemon_mine(directory: str, wing: str, mode: str = "convos") -> bool:
+def _post_daemon_mine(
+    directory: str,
+    wing: str,
+    mode: str = "convos",
+    *,
+    skip_queue: bool = False,
+) -> bool:
     """POST a /mine request to palace-daemon. Returns True on accepted job, False on error.
 
     The hook sends client-side absolute paths (e.g. ``/home/<user>/.claude/projects/...``);
@@ -443,6 +449,17 @@ def _post_daemon_mine(directory: str, wing: str, mode: str = "convos") -> bool:
     so the timeout is sized for typical workloads rather than network
     round-trip; on a real mine that exceeds it, the hook gets a stale
     timeout log but the daemon-side work still completes.
+
+    On any transport failure (connection refused, timeout, non-2xx, daemon-side
+    backend-unreachable), the request is appended to the pending queue
+    (``~/.mempalace/pending/``) so it can be replayed when the daemon recovers.
+    Power-resilience design 2026-05-21: prevents silent write loss during
+    daemon/backend outages.
+
+    ``skip_queue=True`` is for replay callers: when this function is
+    invoked from inside ``pending_queue.replay``, a failure must NOT
+    re-enqueue the request — the replay machinery already keeps it in
+    the queue file for the next attempt. (Gemini PR #104 review.)
     """
     daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
     if not daemon_url:
@@ -464,8 +481,71 @@ def _post_daemon_mine(directory: str, wing: str, mode: str = "convos") -> bool:
         _log(f"Daemon mine accepted: dir={directory} wing={wing} mode={mode} resp={body[:200]}")
         return True
     except Exception as e:
-        _log(f"Daemon mine failed (dir={directory} wing={wing}): {e}")
+        if skip_queue:
+            _log(
+                f"Daemon mine failed during replay (dir={directory} wing={wing}): {e}; "
+                "not re-queueing (already in queue)"
+            )
+            return False
+        _log(f"Daemon mine failed (dir={directory} wing={wing}): {e}; queueing for replay")
+        try:
+            from . import pending_queue
+
+            path = pending_queue.enqueue({"dir": directory, "wing": wing, "mode": mode})
+            _log(f"Queued pending mine: {path}")
+        except Exception as q_exc:
+            _log(f"Pending-queue enqueue failed: {q_exc}")
         return False
+
+
+SESSION_START_REPLAY_BUDGET_SEC = 2.0
+
+
+def _replay_pending_quietly(budget_sec: float = SESSION_START_REPLAY_BUDGET_SEC):
+    """Best-effort replay of any pending mine requests, capped at ``budget_sec``.
+
+    Called from session_start (off the hot path) and from CLI commands.
+    Returns a ``pending_queue.ReplayReport`` on attempt, ``None`` if
+    the queue module or daemon URL are unavailable. Never raises —
+    failures are logged and swallowed.
+
+    The ``budget_sec`` cap is the design's "2s timeout" guard: a large
+    queue + slow daemon shouldn't block session start indefinitely.
+    Unfinished entries stay in the queue for the next replay (Gemini
+    PR #104 review).
+    """
+    import time
+
+    daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
+    if not daemon_url:
+        return None
+    try:
+        from . import pending_queue
+    except Exception as e:
+        _log(f"replay: import pending_queue failed: {e}")
+        return None
+
+    def post(request: dict) -> bool:
+        return _post_daemon_mine(
+            request["dir"],
+            request["wing"],
+            request.get("mode", "convos"),
+            skip_queue=True,
+        )
+
+    deadline = time.monotonic() + budget_sec if budget_sec > 0 else None
+    try:
+        report = pending_queue.replay(post, deadline=deadline)
+        if not report.is_empty:
+            _log(
+                f"Replay swept: attempted={report.attempted} "
+                f"succeeded={report.succeeded} failed={report.failed} "
+                f"files_drained={report.files_drained}"
+            )
+        return report
+    except Exception as e:
+        _log(f"replay sweep raised: {e}")
+        return None
 
 
 def _wing_from_mine_dir(mine_dir: str) -> str:
@@ -665,67 +745,132 @@ def _parse_harness_input(data: dict, harness: str) -> dict:
     }
 
 
+# Common parent-dir tokens stripped from the encoded folder when no
+# explicit ``-Projects-`` segment is present. Order matters: only the
+# first match strips. These cover the bulk of Unix layouts; cwd-from-JSONL
+# (the primary path) handles the long tail correctly without heuristics.
+_ENCODED_PARENT_PREFIXES = (
+    "git-",
+    "dev-",
+    "projects-",
+    "Projects-",
+    "src-",
+    "code-",
+    "work-",
+    "Documents-",
+)
+
+
+def _wing_from_jsonl_cwd(transcript_path: str) -> Optional[str]:
+    """Read ``cwd`` from the first JSONL line that records it.
+
+    Claude Code stores the absolute working directory on most message
+    types (tool_use, tool_result, user/assistant turns), but not all
+    (e.g. queue-operation lines lack it). Scan up to 200 lines to find
+    the first record that includes a non-empty cwd, then derive the
+    wing from its leaf path segment. Returns ``None`` if the file is
+    unreadable, empty, or contains no cwd.
+    """
+    try:
+        path = Path(transcript_path).expanduser()
+        if not path.is_file():
+            return None
+        with path.open("r", encoding="utf-8", errors="replace") as f:
+            for i, line in enumerate(f):
+                if i >= 200:
+                    break
+                line = line.strip()
+                if not line or '"cwd"' not in line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                cwd = data.get("cwd")
+                if not cwd or not isinstance(cwd, str):
+                    continue
+                cwd_norm = cwd.replace("\\", "/").rstrip("/")
+                if not cwd_norm:
+                    continue
+                project = cwd_norm.rsplit("/", 1)[-1]
+                if project:
+                    slug = project.lower().replace(" ", "_").replace("-", "_")
+                    return f"wing_{slug}"
+    except OSError:
+        pass
+    return None
+
+
 def _wing_from_transcript_path(transcript_path: str) -> str:
     """Derive a project wing name from a Claude Code transcript path.
 
-    Claude Code encodes the project's source directory by replacing path
-    separators with dashes:
+    Strategy (in priority order):
 
-        ~/Projects/realm-watch
-            → /.claude/projects/-home-jp-Projects-realm-watch/
+    1. PRIMARY — Read ``cwd`` from the JSONL transcript. Claude Code records
+       the absolute working directory on most message types, so the project
+       name is whatever the leaf path segment of cwd is. This is the
+       canonical answer when present.
 
-        ~/dev/realm-watch
-            → /.claude/projects/-home-igor-dev-realm-watch/
+    2. FALLBACK — Decode the encoded folder under ``.claude/projects/``.
+       Claude Code flattens path separators to dashes (``/Users/me/code/foo``
+       → ``-Users-me-code-foo``), so the original directory boundaries are
+       lost. We strip the platform user-home prefix (``Users-<user>-`` or
+       ``home-<user>-``) and one common parent-dir token (``git-``, ``dev-``,
+       ``projects-``, etc.), then convert the remaining dashes to
+       underscores. Unlike the previous "last token only" heuristic, this
+       never silently truncates a hyphenated project folder name like
+       ``claude-code``, ``react-native``, or ``customer-portal``.
 
-        ~/dev/MemPalace/mempalace
-            → /.claude/projects/-home-igor-dev-MemPalace-mempalace/
+    3. LEGACY — Match an explicit ``-Projects-<name>`` segment for
+       transcripts not under the standard Claude Code projects dir.
 
-    The encoding is lossy: ``-`` separates path components but project
-    names also commonly contain ``-``, and we don't know the path's
-    depth from the encoded form alone. The ``-Projects-`` segment is
-    the only unambiguous marker (operators don't typically use
-    ``Projects`` as a project name); it's the resolution we trust.
+    4. DEFAULT — ``wing_sessions``.
 
-    Resolution order:
+    Closes #1410.
 
-    1. ``-Projects-<name>`` — preserves dashes in ``<name>``. Matches
-       JP's ``~/Projects/<project>`` layout exactly. Wing equals
-       ``normalize_wing_name(project)``.
-    2. Last dash-separated token of ``/.claude/projects/-...`` —
-       best-effort fallback for non-Projects layouts.
-
-    **Known limitation** (Copilot finding on jphein/mempalace#10):
-    in the fallback path, project names containing dashes collapse to
-    the last segment. ``~/dev/realm-watch`` → wing ``watch`` (hook)
-    vs ``realm_watch`` (operator mine of the same dir). We don't add
-    ``-dev-``/``-code-``/etc. markers because they're ALSO ambiguous
-    (``~/dev/<project>`` vs ``~/dev/<parent>/<project>`` encode
-    identically). Workaround for affected setups: pass ``--wing
-    <expected>`` to ``mempalace mine`` so the operator-side wing
-    matches the hook-derived one, or move the project to
-    ``~/Projects/``.
-
-    Returns ``"sessions"`` for paths that don't match
-    ``/.claude/projects/-...``.
+    TODO: post-merge reconcile — fork's hooks route through palace-daemon
+    (``clients/hook.py``) so this in-process wing derivation is no longer
+    called by the active hook pipeline; daemon-side wing derivation lives
+    in palace-daemon's own code. Verify palace-daemon's wing convention
+    matches this ``wing_<project>`` shape before relying on tests here
+    for production behavior on the fork.
     """
-    from .config import normalize_wing_name
+    # 1. Primary — cwd from JSONL is the canonical source of truth
+    cwd_wing = _wing_from_jsonl_cwd(transcript_path)
+    if cwd_wing:
+        return cwd_wing
 
+    # Normalize path separators for cross-platform (Windows backslashes)
     normalized = transcript_path.replace("\\", "/")
-    # Primary: explicit ``-Projects-<name>`` segment. Preferred because
-    # it's the only path layout where the project boundary is
-    # unambiguously recoverable.
-    match = re.search(r"-Projects-([^/]+?)(?:/|$)", normalized)
-    if match:
-        return normalize_wing_name(match.group(1))
-    # Fallback: last dash-separated token of the encoded folder.
-    # Best-effort; loses dashes within project names (documented above).
+
+    # 2. Fallback — encoded project folder under .claude/projects/
     match = re.search(r"/\.claude/projects/-([^/]+)", normalized)
     if match:
         encoded = match.group(1)
-        project = encoded.rsplit("-", 1)[-1]
+        # Strip platform user-home prefix so the wing isn't dominated by
+        # /Users/<user>/ or /home/<user>/.
+        m = re.match(r"(?:Users|home)-[^-]+-(.+)", encoded)
+        if m:
+            encoded = m.group(1)
+        # Strip one common parent-dir token if present, keeping the rest as
+        # the project path. Hyphens become underscores to preserve
+        # uniqueness for hyphenated project folder names.
+        for prefix in _ENCODED_PARENT_PREFIXES:
+            if encoded.startswith(prefix):
+                encoded = encoded[len(prefix) :]
+                break
+        project = encoded.lower().replace(" ", "_").replace("-", "_")
         if project:
-            return normalize_wing_name(project)
-    return "sessions"
+            return f"wing_{project}"
+
+    # 3. Legacy — explicit -Projects-<name> segment
+    match = re.search(r"-Projects-([^/]+?)(?:/|$)", normalized)
+    if match:
+        project = match.group(1).lower().replace(" ", "_").replace("-", "_")
+        return f"wing_{project}"
+
+    # 4. Default
+    return "wing_sessions"
 
 
 def hook_stop(data: dict, harness: str):
@@ -833,7 +978,15 @@ def hook_stop(data: dict, harness: str):
 
 
 def hook_session_start(data: dict, harness: str):
-    """Session start hook: initialize session tracking state."""
+    """Session start hook: initialize session tracking state.
+
+    Also runs a best-effort pending-queue replay and, when the daemon
+    looks unreachable or the queue has pending entries, emits a one-line
+    warning via ``systemMessage`` so the user notices within minutes
+    (rather than days, as happened in the 2026-05-17 power-event
+    incident). The warning is throttled to once per session via a marker
+    in ``STATE_DIR``.
+    """
     if not _palace_root_exists():
         _output({})
         return
@@ -845,8 +998,91 @@ def hook_session_start(data: dict, harness: str):
     # Initialize session state directory
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
+    warning = _check_daemon_and_queue_for_warning(session_id)
+    if warning:
+        _output({"systemMessage": warning})
+        return
+
     # Pass through — no blocking on session start
     _output({})
+
+
+def _check_daemon_and_queue_for_warning(session_id: str) -> Optional[str]:
+    """Replay pending writes, then return a warning string if state is degraded.
+
+    Behaviour:
+      1. Best-effort replay of any pending requests.
+      2. After replay, check daemon ``/health`` and pending count.
+      3. If either signals trouble AND we haven't warned this session
+         yet, return a one-line systemMessage.
+      4. Otherwise return ``None``.
+
+    The marker file (``STATE_DIR/<session_id>_resilience_warned``)
+    prevents the warning from showing up on every session-start fire
+    once the user has acknowledged the issue.
+    """
+    daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
+    if not daemon_url:
+        return None
+
+    # 1. Drain whatever we can.
+    _replay_pending_quietly()
+
+    # 2. Check daemon health and pending count.
+    try:
+        from . import pending_queue
+
+        pending_after = pending_queue.pending_count()
+    except Exception:
+        pending_after = 0
+
+    health_ok = _daemon_health_ok(daemon_url)
+
+    if health_ok and pending_after == 0:
+        return None
+
+    # 3. Throttle: one warning per session_id.
+    try:
+        marker = STATE_DIR / f"{session_id}_resilience_warned"
+        if marker.exists():
+            return None
+        marker.touch()
+    except OSError:
+        # If we can't write the marker, still emit the warning once —
+        # the worst case is the user sees it twice, not zero times.
+        pass
+
+    parts: list[str] = []
+    if not health_ok:
+        parts.append("palace-daemon /health is not OK")
+    if pending_after > 0:
+        parts.append(f"{pending_after} pending write{'s' if pending_after != 1 else ''} in queue")
+    return "⚠ " + "; ".join(parts) + " (run `mempalace replay` to drain)"
+
+
+def _daemon_health_ok(daemon_url: str) -> bool:
+    """GET <daemon_url>/health with a short timeout. ``True`` only on 200 + ``status=ok``.
+
+    Parses the response body as JSON rather than substring-matching
+    on ``"status":"ok"`` so whitespace, field reordering, or unrelated
+    occurrences of the literal string don't fool the check.
+    (Gemini PR #104 review.)
+    """
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(f"{daemon_url}/health", method="GET")
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            if resp.status != 200:
+                return False
+            body = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return False
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return data.get("status") == "ok"
 
 
 def hook_precompact(data: dict, harness: str):

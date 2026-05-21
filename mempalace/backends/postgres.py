@@ -313,7 +313,8 @@ class PostgresCollection(BaseCollection):
                 except Exception as e:  # noqa: BLE001 — opportunistic enrichment
                     logger.warning(
                         "KG write-through hook failed for drawer %s: %s",
-                        doc_id, e,
+                        doc_id,
+                        e,
                     )
 
     def set_kg_writethrough(self, hook) -> None:

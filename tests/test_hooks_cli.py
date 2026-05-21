@@ -238,8 +238,10 @@ def test_stop_hook_saves_silently_at_interval(tmp_path):
         )
     # Verbatim-only: systemMessage tells the user the ingest fired; no count or themes.
     assert result["systemMessage"].startswith("\u2726 Transcript ingest triggered")
-    # tmp_path has no "-Projects-" segment, so _wing_from_transcript_path falls back to "sessions"
-    assert "wing=sessions" in result["systemMessage"]
+    # tmp_path has no JSONL cwd and no "-Projects-" segment, so
+    # _wing_from_transcript_path falls back to "wing_sessions"
+    # (upstream #1410 API).
+    assert "wing=wing_sessions" in result["systemMessage"]
     mock_ingest.assert_called_once_with(str(transcript))
 
 
@@ -259,7 +261,10 @@ def test_stop_hook_derives_wing_from_transcript_path(tmp_path):
             {"session_id": "test", "stop_hook_active": False, "transcript_path": str(transcript)},
             state_dir=tmp_path,
         )
-    assert "wing=myproject" in result["systemMessage"]
+    # Upstream #1410 API: ``-Projects-myproject`` → ``wing_myproject``
+    # via the legacy ``-Projects-<name>`` branch of
+    # _wing_from_transcript_path.
+    assert "wing=wing_myproject" in result["systemMessage"]
     mock_ingest.assert_called_once_with(str(transcript))
 
 
@@ -297,6 +302,78 @@ def test_session_start_passes_through(tmp_path):
     assert result == {}
 
 
+def test_session_start_warns_when_daemon_degraded(tmp_path):
+    """Power-resilience design 2026-05-21: session start surfaces a
+    one-line warning when the daemon /health is non-200 OR the pending
+    queue has entries. Throttled to once per session via a marker file."""
+    env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli._palace_root_exists", return_value=True):
+            with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+                with patch("mempalace.pending_queue.PENDING_DIR", tmp_path / "pending"):
+                    with patch("mempalace.hooks_cli._daemon_health_ok", return_value=False):
+                        with patch(
+                            "mempalace.hooks_cli._replay_pending_quietly", return_value=None
+                        ):
+                            result = _capture_hook_output(
+                                hook_session_start,
+                                {"session_id": "deg-session-1"},
+                                state_dir=tmp_path,
+                            )
+    assert "systemMessage" in result
+    assert "palace-daemon" in result["systemMessage"]
+    assert "mempalace replay" in result["systemMessage"]
+    assert (tmp_path / "deg-session-1_resilience_warned").exists()
+
+
+def test_session_start_warning_throttled_per_session(tmp_path):
+    """A second session_start fire for the same session_id stays silent."""
+    env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli._palace_root_exists", return_value=True):
+            with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+                with patch("mempalace.pending_queue.PENDING_DIR", tmp_path / "pending"):
+                    with patch("mempalace.hooks_cli._daemon_health_ok", return_value=False):
+                        with patch(
+                            "mempalace.hooks_cli._replay_pending_quietly", return_value=None
+                        ):
+                            first = _capture_hook_output(
+                                hook_session_start,
+                                {"session_id": "throttle-test"},
+                                state_dir=tmp_path,
+                            )
+                            second = _capture_hook_output(
+                                hook_session_start,
+                                {"session_id": "throttle-test"},
+                                state_dir=tmp_path,
+                            )
+    assert "systemMessage" in first
+    assert second == {}
+
+
+def test_session_start_silent_when_no_daemon_url(tmp_path):
+    """Without PALACE_DAEMON_URL set, no daemon checks happen and we pass through.
+
+    Pending-queue contents are irrelevant in this mode: the daemon-routing
+    gate is what triggers the queue/warning machinery; without a daemon URL
+    the user is on the local-mine path which doesn't use the queue.
+    """
+    with patch.dict("os.environ", {}, clear=True):
+        with patch("mempalace.hooks_cli._palace_root_exists", return_value=True):
+            with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+                (tmp_path / "pending").mkdir()
+                (tmp_path / "pending" / "2026-05-21.jsonl").write_text(
+                    '{"dir":"/x","wing":"w","mode":"convos","ts":"2026-05-21T00:00:00+00:00"}\n'
+                )
+                with patch("mempalace.pending_queue.PENDING_DIR", tmp_path / "pending"):
+                    result = _capture_hook_output(
+                        hook_session_start,
+                        {"session_id": "no-daemon"},
+                        state_dir=tmp_path,
+                    )
+    assert result == {}
+
+
 # --- hook_precompact ---
 
 
@@ -314,82 +391,189 @@ def test_precompact_allows(tmp_path):
 
 def test_wing_from_transcript_path_extracts_project():
     path = "/home/jp/.claude/projects/-home-jp-Projects-memorypalace/session.jsonl"
-    assert _wing_from_transcript_path(path) == "memorypalace"
+    assert _wing_from_transcript_path(path) == "wing_memorypalace"
 
 
 def test_wing_from_transcript_path_fallback():
-    assert _wing_from_transcript_path("/some/random/path.jsonl") == "sessions"
+    assert _wing_from_transcript_path("/some/random/path.jsonl") == "wing_sessions"
 
 
 def test_wing_from_transcript_path_windows_backslashes():
     path = "C:\\Users\\jp\\.claude\\projects\\-home-jp-Projects-myapp\\session.jsonl"
-    assert _wing_from_transcript_path(path) == "myapp"
+    assert _wing_from_transcript_path(path) == "wing_myapp"
 
 
 def test_wing_from_transcript_path_lowercases():
     path = "/home/jp/.claude/projects/-home-jp-Projects-MyProject/session.jsonl"
-    assert _wing_from_transcript_path(path) == "myproject"
+    assert _wing_from_transcript_path(path) == "wing_myproject"
 
 
 def test_wing_from_transcript_path_non_projects_layout():
-    # Linux users with code under ~/dev/, ~/src/, ~/code/ — no -Projects- segment.
-    # Project name is the final dash-separated token of the encoded folder.
+    # Linux user with code under ~/dev/. The encoded form ``dev-MemPalace-mempalace``
+    # is ambiguous between ``~/dev/MemPalace/mempalace/`` (project = mempalace) and
+    # ``~/dev/MemPalace-mempalace/`` (hyphenated single-name project). With no JSONL
+    # cwd to disambiguate, we preserve all post-``dev-`` segments rather than silently
+    # truncating to the last token (which would drop ``MemPalace`` here and collide
+    # with any other ``-mempalace`` leaf elsewhere on the system).
     path = "/home/igor/.claude/projects/-home-igor-dev-MemPalace-mempalace/session.jsonl"
-    assert _wing_from_transcript_path(path) == "mempalace"
+    assert _wing_from_transcript_path(path) == "wing_mempalace_mempalace"
 
 
 def test_wing_from_transcript_path_macos_users_layout():
-    # macOS ~/ layout without a Projects/ segment.
+    # macOS ~/ layout without a Projects/ segment — single-token project name
+    # so the heuristic produces the same result as the leaf-only approach.
     path = "/Users/alice/.claude/projects/-Users-alice-code-MyApp/session.jsonl"
-    assert _wing_from_transcript_path(path) == "myapp"
+    assert _wing_from_transcript_path(path) == "wing_myapp"
 
 
 def test_wing_from_transcript_path_nested_deep():
+    # Deep tree: ``-home-bob-work-clients-acme-frontend``. Without JSONL cwd we
+    # can't tell whether ``frontend`` is the project, ``acme-frontend`` is a
+    # hyphenated project, or the project lives several levels in. Strip the
+    # user-home and one common parent (``work-``), then keep the remaining
+    # path as the wing — collision-safe even if multiple clients have a
+    # ``frontend/`` subdir.
     path = "/home/bob/.claude/projects/-home-bob-work-clients-acme-frontend/session.jsonl"
-    assert _wing_from_transcript_path(path) == "frontend"
+    assert _wing_from_transcript_path(path) == "wing_clients_acme_frontend"
 
 
-def test_wing_from_transcript_path_dashed_project():
-    """Project names containing dashes (realm-watch) survive intact via
-    normalize_wing_name — dashes become underscores. Closes Copilot
-    finding on jphein/mempalace#9: previously the last-dash-token rule
-    collapsed ``realm-watch`` to ``watch``.
-    """
-    path = "/home/jp/.claude/projects/-home-jp-Projects-realm-watch/session.jsonl"
-    assert _wing_from_transcript_path(path) == "realm_watch"
+# --- _wing_from_transcript_path: hyphenated project names (issue #1410) ---
 
 
-def test_wing_from_transcript_path_dashed_project_uppercase():
-    """Combined: dashes preserved AND lowercased."""
-    path = "/home/jp/.claude/projects/-home-jp-Projects-Realm-Watch/session.jsonl"
-    assert _wing_from_transcript_path(path) == "realm_watch"
+def test_wing_from_transcript_path_hyphenated_claude_code():
+    """Regression: ``claude-code`` was truncated to ``wing_code`` (#1410)."""
+    path = "/Users/me/.claude/projects/-Users-me-claude-code/abc.jsonl"
+    assert _wing_from_transcript_path(path) == "wing_claude_code"
 
 
-def test_wing_from_transcript_path_matches_operator_mine():
-    """The wing this returns matches what `mempalace mine ~/Projects/X`
-    would produce when --wing is omitted (convo_miner.normalize_wing_name
-    over the dir basename). This is the convergence the bare-name shape
-    is supposed to deliver."""
-    from mempalace.config import normalize_wing_name
-
-    path = "/home/jp/.claude/projects/-home-jp-Projects-realm-watch/session.jsonl"
-    operator_wing = normalize_wing_name("realm-watch")
-    assert _wing_from_transcript_path(path) == operator_wing
+def test_wing_from_transcript_path_hyphenated_react_native():
+    """Regression: ``react-native`` was truncated to ``wing_native`` (#1410)."""
+    path = "/Users/me/.claude/projects/-Users-me-react-native/abc.jsonl"
+    assert _wing_from_transcript_path(path) == "wing_react_native"
 
 
-def test_wing_from_transcript_path_non_projects_dashed_collapses():
-    """Documented limitation (Copilot finding on #10): project names
-    with dashes that live OUTSIDE ~/Projects/ collapse to the last
-    dash-separated token via the fallback path. ``~/dev/realm-watch``
-    → wing ``watch``. The encoding from Claude Code is lossy here —
-    ``-dev-realm-watch`` and ``-dev-realm-watch-subproject`` are
-    ambiguous without path-depth info. Pinned as a regression test
-    so future "fixes" that try to handle dashes don't accidentally
-    break ``~/dev/<parent>/<project>`` layouts that DO want the last
-    token (see ``test_wing_from_transcript_path_non_projects_layout``).
-    """
-    path = "/home/igor/.claude/projects/-home-igor-dev-realm-watch/session.jsonl"
-    assert _wing_from_transcript_path(path) == "watch"
+def test_wing_from_transcript_path_no_collision_between_hyphenated_siblings():
+    """Regression: ``customer-portal`` and ``admin-portal`` both truncated to
+    ``wing_portal`` under the old heuristic, merging diary entries from two
+    independent projects into one wing (#1410)."""
+    customer = _wing_from_transcript_path(
+        "/Users/me/.claude/projects/-Users-me-customer-portal/abc.jsonl"
+    )
+    admin = _wing_from_transcript_path(
+        "/Users/me/.claude/projects/-Users-me-admin-portal/abc.jsonl"
+    )
+    assert customer == "wing_customer_portal"
+    assert admin == "wing_admin_portal"
+    assert customer != admin
+
+
+def test_wing_from_transcript_path_strips_parent_dir_with_hyphenated_project():
+    """Reporter's example: ``-home-alice-projects-react-native`` should keep
+    the full project name after stripping the ``projects-`` parent (#1410)."""
+    path = "/home/alice/.claude/projects/-home-alice-projects-react-native/abc.jsonl"
+    assert _wing_from_transcript_path(path) == "wing_react_native"
+
+
+# --- _wing_from_transcript_path: cwd-from-JSONL primary path ---
+
+
+def test_wing_from_transcript_path_uses_cwd_from_jsonl(tmp_path):
+    """When the JSONL records ``cwd``, the leaf segment of cwd is the wing —
+    even if the encoded folder name would have produced a different (and
+    noisier) wing."""
+    # Encoded folder says ``-home-igor-dev-MemPalace-mempalace`` (would yield
+    # ``wing_mempalace_mempalace`` via fallback), but cwd is the truth.
+    project_dir = tmp_path / "-home-igor-dev-MemPalace-mempalace"
+    project_dir.mkdir()
+    transcript = project_dir / "session.jsonl"
+    transcript.write_text(
+        '{"type":"queue-operation","operation":"enqueue","timestamp":"2026-05-09T00:00:00Z"}\n'
+        '{"type":"user","cwd":"/home/igor/dev/MemPalace/mempalace","content":"hi"}\n',
+        encoding="utf-8",
+    )
+    assert _wing_from_transcript_path(str(transcript)) == "wing_mempalace"
+
+
+def test_wing_from_transcript_path_cwd_with_hyphenated_project(tmp_path):
+    """cwd primary path correctly handles hyphenated project names without
+    truncation."""
+    project_dir = tmp_path / "-Users-me-claude-code"
+    project_dir.mkdir()
+    transcript = project_dir / "session.jsonl"
+    transcript.write_text(
+        '{"type":"user","cwd":"/Users/me/git/claude-code","content":"hi"}\n',
+        encoding="utf-8",
+    )
+    assert _wing_from_transcript_path(str(transcript)) == "wing_claude_code"
+
+
+def test_wing_from_transcript_path_cwd_skips_lines_without_cwd(tmp_path):
+    """Lines that lack ``cwd`` (queue-operation, etc.) are skipped; the first
+    line that records cwd wins."""
+    project_dir = tmp_path / "-Users-me-foo"
+    project_dir.mkdir()
+    transcript = project_dir / "session.jsonl"
+    lines = [
+        '{"type":"queue-operation","operation":"enqueue"}',
+        '{"type":"queue-operation","operation":"dequeue"}',
+        '{"type":"queue-operation","operation":"complete"}',
+        '{"type":"tool_use","cwd":"/Users/me/work/real-project","content":"ok"}',
+        '{"type":"user","cwd":"/Users/me/somewhere-else","content":"later"}',
+    ]
+    transcript.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    # First cwd record wins (line 4, real-project).
+    assert _wing_from_transcript_path(str(transcript)) == "wing_real_project"
+
+
+def test_wing_from_transcript_path_cwd_falls_back_when_no_cwd_in_jsonl(tmp_path):
+    """If no JSONL line has cwd, fall through to the encoded-folder heuristic."""
+    project_dir = tmp_path / "-Users-me-no-cwd-project"
+    project_dir.mkdir()
+    transcript = project_dir / "session.jsonl"
+    transcript.write_text(
+        '{"type":"queue-operation","operation":"enqueue"}\n'
+        '{"type":"queue-operation","operation":"complete"}\n',
+        encoding="utf-8",
+    )
+    # tmp_path leaks into the path before .claude/projects, so the regex
+    # won't match and we hit the wing_sessions default. The point of this
+    # test: the cwd reader doesn't crash and returns None cleanly.
+    result = _wing_from_transcript_path(str(transcript))
+    assert result == "wing_sessions"
+
+
+def test_wing_from_transcript_path_cwd_handles_malformed_jsonl(tmp_path):
+    """Malformed JSON lines must not crash the wing extraction."""
+    project_dir = tmp_path / "-Users-me-broken-project"
+    project_dir.mkdir()
+    transcript = project_dir / "session.jsonl"
+    transcript.write_text(
+        "this is not json at all\n"
+        '{"type":"broken",\n'  # truncated mid-record
+        '{"type":"valid","cwd":"/Users/me/git/clean-name","content":"ok"}\n',
+        encoding="utf-8",
+    )
+    assert _wing_from_transcript_path(str(transcript)) == "wing_clean_name"
+
+
+def test_wing_from_transcript_path_cwd_handles_missing_file():
+    """Nonexistent transcript path falls back cleanly to the encoded heuristic."""
+    path = "/Users/me/.claude/projects/-Users-me-claude-code/does-not-exist.jsonl"
+    assert _wing_from_transcript_path(path) == "wing_claude_code"
+
+
+def test_wing_from_transcript_path_cwd_handles_non_string_cwd(tmp_path):
+    """A cwd field that isn't a string (e.g. null, number) must be skipped."""
+    project_dir = tmp_path / "-Users-me-fallback-name"
+    project_dir.mkdir()
+    transcript = project_dir / "session.jsonl"
+    transcript.write_text(
+        '{"type":"x","cwd":null}\n'
+        '{"type":"x","cwd":42}\n'
+        '{"type":"x","cwd":"/Users/me/git/proper-name"}\n',
+        encoding="utf-8",
+    )
+    assert _wing_from_transcript_path(str(transcript)) == "wing_proper_name"
 
 
 # --- _log ---
@@ -583,13 +767,27 @@ def test_post_daemon_mine_posts_correct_body(tmp_path):
 
 
 def test_post_daemon_mine_returns_false_on_error(tmp_path):
-    """_post_daemon_mine swallows network errors and returns False."""
+    """_post_daemon_mine swallows network errors and returns False.
+
+    Side-effect: on failure the request is appended to the pending queue
+    so it can be replayed when the daemon recovers (power-resilience
+    design 2026-05-21). We patch PENDING_DIR to a tmp path here so the
+    test doesn't write to the real ~/.mempalace/pending/.
+    """
     env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
     with patch.dict("os.environ", env, clear=True):
         with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
-            with patch("urllib.request.urlopen", side_effect=ConnectionError("boom")):
-                ok = _post_daemon_mine("/some/dir", wing="wing_x")
+            with patch("mempalace.pending_queue.PENDING_DIR", tmp_path / "pending"):
+                with patch("urllib.request.urlopen", side_effect=ConnectionError("boom")):
+                    ok = _post_daemon_mine("/some/dir", wing="wing_x")
     assert ok is False
+    # Confirm queue captured the dropped request.
+    pending_files = list((tmp_path / "pending").glob("*.jsonl"))
+    assert len(pending_files) == 1
+    line = json.loads(pending_files[0].read_text().splitlines()[0])
+    assert line["dir"] == "/some/dir"
+    assert line["wing"] == "wing_x"
+    assert line["mode"] == "convos"
 
 
 def test_post_daemon_mine_no_url_returns_false(tmp_path):
@@ -656,7 +854,8 @@ def test_ingest_transcript_routes_through_daemon(tmp_path):
     mock_post.assert_called_once()
     args, kwargs = mock_post.call_args
     assert args[0] == str(convo_dir)
-    assert kwargs["wing"] == "myapp"
+    # Upstream #1410 API: ``wing_<project>`` shape.
+    assert kwargs["wing"] == "wing_myapp"
     assert kwargs["mode"] == "convos"
 
 
@@ -969,7 +1168,7 @@ def test_ingest_transcript_skips_when_target_running(tmp_path):
                     "--mode",
                     "convos",
                     "--wing",
-                    "sessions",
+                    "wing_sessions",
                 ]
                 pid_file = _pid_file_for_cmd(expected_cmd)
                 pid_file.parent.mkdir(parents=True, exist_ok=True)
@@ -1254,11 +1453,12 @@ def test_precompact_mines_transcript_dir(tmp_path, monkeypatch):
     mock_popen.assert_called_once()
     cmd = mock_popen.call_args[0][0]
     # Mines the transcript's parent dir as convos. Wing is derived per-transcript;
-    # for a path outside the standard Claude Code projects layout, _wing_from_transcript_path
-    # falls back to "sessions".
+    # for a path outside the standard Claude Code projects layout,
+    # _wing_from_transcript_path falls back to "wing_sessions"
+    # (upstream #1410 API).
     assert str(tmp_path) in cmd
     assert cmd[cmd.index("--mode") + 1] == "convos"
-    assert cmd[cmd.index("--wing") + 1] == "sessions"
+    assert cmd[cmd.index("--wing") + 1] == "wing_sessions"
 
 
 # --- run_hook ---

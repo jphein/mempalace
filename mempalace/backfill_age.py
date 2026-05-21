@@ -58,6 +58,7 @@ from .palace_graph_age import populate_from_postgres
 # performance-hot and this validator makes the contract obvious to
 # auditors (Gemini PR #101 review, 2026-05-17).
 import re as _re
+
 _PG_IDENT_RE = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
@@ -68,6 +69,7 @@ def _validate_pg_identifier(name: str, field: str = "table_name") -> str:
             f"must match [A-Za-z_][A-Za-z0-9_]*"
         )
     return name
+
 
 logger = logging.getLogger("mempalace.backfill_age")
 
@@ -121,13 +123,13 @@ def _get_extractor(name: str = "regex"):
     if name == "regex":
         try:
             from sme.extractors.regex import extract as sme_extract  # type: ignore
+
             return sme_extract
         except ImportError:
             from .kg_writethrough import _builtin_regex_extractor
+
             return _builtin_regex_extractor
-    raise ValueError(
-        f"unknown extractor={name!r}; supported: regex (spacy/llm pending)"
-    )
+    raise ValueError(f"unknown extractor={name!r}; supported: regex (spacy/llm pending)")
 
 
 def backfill(
@@ -201,7 +203,9 @@ def backfill(
         if not _checkpoint_done(checkpoint_conn, "palace", palace_key):
             logger.info("backfill: phase=palace key=%s", palace_key)
             counters["palace"] = populate_from_postgres(
-                kg, dsn=dsn, table_name=table_name,
+                kg,
+                dsn=dsn,
+                table_name=table_name,
                 # We rebuild drawers in phase B with entity extraction;
                 # palace pass only needs the structural Wing/Room/SHARED_VIA.
                 skip_drawers=True,
@@ -311,7 +315,9 @@ def backfill(
                             counters["errors"] += 1
                             logger.debug(
                                 "add_mention failed (%s, %s): %s",
-                                drawer_id, ent.name, e,
+                                drawer_id,
+                                ent.name,
+                                e,
                             )
 
                     pending_marks.append(drawer_id)
@@ -348,17 +354,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--dsn", required=True, help="Postgres DSN")
     parser.add_argument("--table", default="mempalace_drawers", help="Drawer table name")
     parser.add_argument("--wing", default=None, help="Restrict to a single wing")
-    parser.add_argument("--skip-palace", action="store_true",
-                        help="Skip Wing/Room/SHARED_VIA structure")
-    parser.add_argument("--skip-entities", action="store_true",
-                        help="Skip per-drawer entity extraction")
+    parser.add_argument(
+        "--skip-palace", action="store_true", help="Skip Wing/Room/SHARED_VIA structure"
+    )
+    parser.add_argument(
+        "--skip-entities", action="store_true", help="Skip per-drawer entity extraction"
+    )
     parser.add_argument("--extractor", default="regex", help="Entity extractor (regex)")
     parser.add_argument("--max-entities", type=int, default=50)
-    parser.add_argument("--restart", action="store_true",
-                        help="Clear checkpoint table before starting")
+    parser.add_argument(
+        "--restart", action="store_true", help="Clear checkpoint table before starting"
+    )
     parser.add_argument("--log-every", type=int, default=500)
-    parser.add_argument("--commit-every", type=int, default=100,
-                        help="Batch KG commits every N drawers (default 100)")
+    parser.add_argument(
+        "--commit-every",
+        type=int,
+        default=100,
+        help="Batch KG commits every N drawers (default 100)",
+    )
     args = parser.parse_args(argv)
 
     counters = backfill(

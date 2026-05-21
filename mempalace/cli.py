@@ -194,7 +194,16 @@ def _print_daemon_status(data: dict) -> None:
             else:
                 print(f"  WING: {wing:30} {count:>6} drawers")
     elif "error" in data:
+        # Render daemon errors with the same shape as _print_daemon_search:
+        # error → message → hint. Important for "palace.backend_unreachable"
+        # so the user sees "start the postgres container" instead of the
+        # legacy "Run: mempalace init <dir>" hint that was actively misleading
+        # during the 2026-05-17 power-event diagnosis.
         print(f"  daemon reported error: {data['error']}")
+        if "message" in data:
+            print(f"  {data['message']}")
+        if "hint" in data:
+            print(f"  {data['hint']}")
     else:
         # Surface unexpected shapes verbatim.
         print(_json.dumps(data, indent=2))
@@ -851,6 +860,10 @@ def cmd_sync(args):
     if not os.path.isdir(palace_path):
         print(f"\n  No palace found at {palace_path}")
         return
+    if not os.path.isfile(os.path.join(palace_path, "chroma.sqlite3")):
+        print(f"\n  Palace dir at {palace_path} exists but has no chroma.sqlite3 yet.")
+        print("  Run: mempalace mine <dir>")
+        return
 
     project_dirs = []
     if args.dir:
@@ -1239,6 +1252,51 @@ def cmd_purge(args):
 
     remaining = col.count()
     print(f"\n  Purged {match_count:,} drawers. Remaining: {remaining:,}\n")
+
+
+def cmd_replay(args):
+    """Drain ``~/.mempalace/pending/*.jsonl`` by re-issuing each request to the daemon.
+
+    Pending requests accumulate when the Stop / PreCompact hooks fire while
+    the daemon (or its backend) is unreachable — see the 2026-05-21
+    power-resilience design. Drain semantics:
+
+    * Each line is one ``{"dir", "wing", "mode", "ts"}`` mine request.
+    * On 2xx daemon response the line is consumed; on failure the line
+      stays in the file for the next attempt.
+    * Duplicate ``(dir, wing, mode)`` tuples are deduped before transmit
+      so a long outage doesn't replay the same target N times.
+    """
+    if not _daemon_strict():
+        print(
+            "mempalace replay: nothing to do (PALACE_DAEMON_URL not set or strict mode off).",
+            file=sys.stderr,
+        )
+        return 0
+
+    try:
+        from . import pending_queue
+    except Exception as e:
+        print(f"  ERROR: could not import pending_queue: {e}", file=sys.stderr)
+        return 1
+
+    def post(request: dict) -> bool:
+        # _post_daemon_mine_cli doesn't share the hook's pending-queue
+        # re-enqueue path, so skip_queue isn't applicable here; the
+        # CLI variant prints to stderr and returns bool unconditionally.
+        return _post_daemon_mine_cli(request["dir"], request["wing"], request.get("mode", "convos"))
+
+    report = pending_queue.replay(post)
+    if report.is_empty:
+        print("mempalace replay: pending queue is empty.")
+        return 0
+
+    print(
+        f"mempalace replay: attempted={report.attempted} "
+        f"succeeded={report.succeeded} failed={report.failed} "
+        f"files_drained={report.files_drained}"
+    )
+    return 0 if report.failed == 0 else 1
 
 
 def cmd_status(args):
@@ -1634,8 +1692,8 @@ def cmd_mcp(args):
 
 def cmd_compress(args):
     """Compress drawers in a wing using AAAK Dialect."""
-    from .backends.chroma import ChromaBackend
     from .dialect import Dialect
+    from .palace import get_closets_collection
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
 
@@ -1653,18 +1711,13 @@ def cmd_compress(args):
     else:
         dialect = Dialect()
 
-    # Connect to palace
-    backend = ChromaBackend()
-    from .backends.base import PalaceRef
+    # State-aware open: distinguish "no palace" from "initialized but empty"
+    # from "corrupt" via the shared helper (#1498). MCP and library callers
+    # catch the backend exceptions directly; CLI gets the friendly print.
+    from .palace import _open_collection_or_explain
 
-    try:
-        col = backend.get_collection(
-            palace=PalaceRef(id=palace_path, local_path=palace_path),
-            collection_name="mempalace_drawers",
-        )
-    except Exception:
-        print(f"\n  No palace found at {palace_path}")
-        print("  Run: mempalace init <dir> then mempalace mine <dir>")
+    col = _open_collection_or_explain(palace_path, collection_name="mempalace_drawers")
+    if col is None:
         sys.exit(1)
 
     # Query drawers in batches to avoid SQLite variable limit (~999)
@@ -1736,7 +1789,10 @@ def cmd_compress(args):
     # Store compressed versions (unless dry-run)
     if not args.dry_run:
         try:
-            comp_col = backend.get_or_create_collection(palace_path, "mempalace_closets")
+            # Route through palace.get_closets_collection so the shared
+            # _DEFAULT_BACKEND is reused (avoids a redundant ChromaBackend
+            # instance and its potential WAL-lock contention on Windows).
+            comp_col = get_closets_collection(palace_path, create=True)
             for doc_id, compressed, meta, stats in compressed_entries:
                 comp_meta = dict(meta)
                 comp_meta["compression_ratio"] = round(stats["size_ratio"], 1)
@@ -1780,6 +1836,21 @@ def _reconfigure_stdio_utf8_on_windows():
 
 
 def main():
+    """CLI entry point for the ``mempalace`` console script.
+
+    Side effect: pops ``PYTHONPATH`` from ``os.environ`` (see #1423) so
+    any subprocess this CLI spawns inherits a clean env. Host applications
+    that call ``main()`` programmatically should be aware that the parent
+    process loses ``PYTHONPATH`` as well. Library imports
+    (``import mempalace.searcher`` from a host app) do NOT trigger this
+    side effect; only the CLI/MCP entry points pop the env var.
+    """
+    # Drop leaked PYTHONPATH so any subprocess the CLI spawns (mine workers,
+    # repair tooling) starts with a clean env. The sys.path filter in
+    # mempalace/__init__.py already protects this process from the same
+    # ABI mismatch; here we extend the protection to children.
+    os.environ.pop("PYTHONPATH", None)
+
     _reconfigure_stdio_utf8_on_windows()
 
     version_label = f"MemPalace {__version__}"
@@ -2238,6 +2309,11 @@ def main():
 
     sub.add_parser("status", help="Show what's been filed")
 
+    sub.add_parser(
+        "replay",
+        help="Drain ~/.mempalace/pending/ by re-issuing queued mine requests to the daemon",
+    )
+
     p_mined = sub.add_parser(
         "mined",
         help="List mined source files grouped by wing (companion to status, which groups by room)",
@@ -2305,6 +2381,7 @@ def main():
         "rooms": cmd_rooms,
         "status": cmd_status,
         "mined": cmd_mined,
+        "replay": cmd_replay,
     }
 
     # Issue #49: announce the routing decision to stderr when daemon_url is

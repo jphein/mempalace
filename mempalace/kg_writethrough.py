@@ -119,7 +119,9 @@ def make_age_writethrough(
             except Exception as e:  # noqa: BLE001
                 logger.debug(
                     "add_mention failed for (%s, %s): %s",
-                    drawer_id, ent.name, e,
+                    drawer_id,
+                    ent.name,
+                    e,
                 )
 
     return hook
@@ -164,6 +166,7 @@ def make_writethrough_from_env(kg: Optional[Any] = None):
         # to a minimal built-in.
         try:
             from sme.extractors.regex import extract as sme_extract  # type: ignore
+
             extractor = sme_extract
         except ImportError:
             extractor = _builtin_regex_extractor

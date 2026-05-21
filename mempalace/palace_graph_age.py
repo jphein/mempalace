@@ -111,7 +111,8 @@ def populate_from_postgres(
     all_wings = sorted({w for _, wings in rooms_by_wings for w in wings})
     logger.info(
         "palace_graph_age: %d unique rooms across %d wings",
-        len(rooms_by_wings), len(all_wings),
+        len(rooms_by_wings),
+        len(all_wings),
     )
 
     # Wing nodes
@@ -146,7 +147,8 @@ def populate_from_postgres(
         if (counters["rooms"] % batch_log_every) == 0:
             logger.info(
                 "palace_graph_age: %d rooms / %d Wing-CONTAINS-Room edges so far",
-                counters["rooms"], counters["contains_edges"],
+                counters["rooms"],
+                counters["contains_edges"],
             )
 
     # Pass 2 (optional): Drawer nodes + Room → CONTAINS → Drawer edges.
@@ -318,7 +320,4 @@ def tunnels_from_wing(kg: KnowledgeGraphAGE, wing_name: str) -> list[dict]:
         {"wing": wing_clean},
         fetch=True,
     )
-    return [
-        {"to_wing": kg._unwrap_agtype(r[0]), "via_room": kg._unwrap_agtype(r[1])}
-        for r in rows
-    ]
+    return [{"to_wing": kg._unwrap_agtype(r[0]), "via_room": kg._unwrap_agtype(r[1])} for r in rows]

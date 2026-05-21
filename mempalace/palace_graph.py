@@ -43,8 +43,12 @@ def _normalize_wing(wing: str | None) -> str | None:
     (e.g. ``mempalace_public``).  Callers that pass the raw directory name
     (``mempalace-public``) would silently miss.  This helper aligns the lookup
     key with the stored metadata.
+
+    Non-string inputs (from corrupt or hand-edited ``tunnels.json``) return
+    ``None`` rather than raising, so a single malformed record cannot break
+    the read-path filters that iterate the whole file.
     """
-    if wing is None:
+    if not isinstance(wing, str):
         return None
     wing = wing.strip()
     if not wing:
@@ -561,7 +565,8 @@ def create_tunnel(
     Tunnels are undirected: ``create_tunnel(A, B)`` and ``create_tunnel(B, A)``
     resolve to the same canonical ID. A second call with the same endpoints
     updates the stored label (and drawer IDs, if provided) rather than
-    creating a duplicate.
+    creating a duplicate. Endpoints are compared **verbatim** — ``"my-wing"``
+    and ``"my_wing"`` are distinct (see Note below and #1504).
 
     The ``source`` / ``target`` fields on the returned dict preserve the
     argument order the caller used, so callers can display it directionally
@@ -586,14 +591,18 @@ def create_tunnel(
 
     Raises:
         ValueError: if any wing or room is empty or non-string.
+
+    Note:
+        Wing slugs are stored verbatim — passing ``"my-wing"`` and ``"my_wing"``
+        produces two distinct tunnels (canonical IDs differ). Read-path helpers
+        (``list_tunnels`` / ``follow_tunnels``) normalize both sides at compare
+        time so legacy underscore data and explicit-flag hyphen data both
+        match queries in either form. See #1504.
     """
     source_wing = _require_name(source_wing, "source_wing")
     source_room = _require_name(source_room, "source_room")
     target_wing = _require_name(target_wing, "target_wing")
     target_room = _require_name(target_room, "target_room")
-
-    source_wing = _normalize_wing(source_wing)
-    target_wing = _normalize_wing(target_wing)
 
     tunnel_id = _canonical_tunnel_id(source_wing, source_room, target_wing, target_room)
 
@@ -657,10 +666,17 @@ def list_tunnels(wing: str = None, include_passive: bool = False, col=None, conf
     norm_wing = _normalize_wing(wing)
     explicit = _load_tunnels()
     if norm_wing:
+        # Normalize stored wings too: older tunnels.json records hold the
+        # underscore form (from the prior write-path normalization), while
+        # post-#1504 records hold whatever the caller passed. Comparing
+        # normalized-on-both-sides matches either.
+        # ``t.get(k) or {}`` (not ``t.get(k, {})``) handles ``"source": null``
+        # from a hand-edited file — ``.get`` defaults only on missing keys.
         explicit = [
             t
             for t in explicit
-            if t["source"]["wing"] == norm_wing or t["target"]["wing"] == norm_wing
+            if _normalize_wing((t.get("source") or {}).get("wing")) == norm_wing
+            or _normalize_wing((t.get("target") or {}).get("wing")) == norm_wing
         ]
     # Tunnels stored on disk already carry a kind field (set by create_tunnel
     # or compute_topic_tunnels — e.g. "explicit", "topic"). Don't clobber it;
@@ -670,19 +686,30 @@ def list_tunnels(wing: str = None, include_passive: bool = False, col=None, conf
     if not include_passive:
         return explicit_tagged
 
-    # Safety guard for large palaces (#75 followup): graph_stats(col) walks
-    # every drawer's metadata via 1k-row batches and accumulates a per-room
-    # dict in memory. On the production 271k-drawer palace this OOM-killed
-    # the daemon process (observed live 2026-05-16). Until the underlying
-    # graph_stats memory bloat is fixed (separate issue), don't synthesize
-    # passive tunnels on palaces above this threshold — return only the
-    # explicit list with a structured warning so consumers know what they
-    # lost. 100k was picked to cover all currently-deployed palaces; tune
-    # downward if the breakage point comes in lower on weaker hosts.
+    # Safety guard for large palaces — keeps the chroma walk path from
+    # OOMing on six-figure palaces. #98 made build_graph fast on postgres
+    # backends (single SQL aggregate instead of per-row metadata walk),
+    # so postgres collections skip the guard and go straight to the fast
+    # path. Chroma backends still walk-and-accumulate; the 100k threshold
+    # is what was empirically safe before the cascade. Tune downward if
+    # the breakage point comes in lower on weaker hosts.
     LARGE_PALACE_PASSIVE_THRESHOLD = 100_000
     try:
         passive_col = col if col is not None else _get_collection(config)
-        if passive_col is not None and passive_col.count() > LARGE_PALACE_PASSIVE_THRESHOLD:
+        # Duck-type the postgres fast path: PostgresCollection has both
+        # `dsn` (str) and `table_name`. Chroma collections have neither.
+        # MagicMock collections in tests don't pass the str-typed check.
+        is_postgres = (
+            passive_col is not None
+            and isinstance(getattr(passive_col, "dsn", None), str)
+            and getattr(passive_col, "dsn", None)
+            and hasattr(passive_col, "table_name")
+        )
+        if (
+            passive_col is not None
+            and not is_postgres
+            and passive_col.count() > LARGE_PALACE_PASSIVE_THRESHOLD
+        ):
             return explicit_tagged + [
                 {
                     "kind": "passive_skipped",
@@ -719,15 +746,23 @@ def follow_tunnels(wing: str, room: str, col=None, config=None):
     Given a location (wing/room), finds all tunnels leading from or to it,
     and optionally fetches the connected drawer content.
     """
+    # Fall back to raw ``wing`` so an empty/whitespace query string still
+    # produces a value to compare with; ``_normalize_wing`` returns ``None``
+    # for empty input. Stored wings are normalized on the read path so the
+    # mempalace.yaml slug (underscore) and an explicit ``--wing`` slug
+    # (verbatim) both resolve through the same comparison.
     norm_wing = _normalize_wing(wing) or wing
     tunnels = _load_tunnels()
     connections = []
 
     for t in tunnels:
-        src = t["source"]
-        tgt = t["target"]
+        # ``or {}`` (not ``.get(k, {})``) handles ``"source": null`` from a
+        # hand-edited file — ``.get`` defaults only on missing keys, not on
+        # explicit ``null`` values.
+        src = t.get("source") or {}
+        tgt = t.get("target") or {}
 
-        if src["wing"] == norm_wing and src["room"] == room:
+        if _normalize_wing(src.get("wing")) == norm_wing and src.get("room") == room:
             connections.append(
                 {
                     "direction": "outgoing",
@@ -738,7 +773,7 @@ def follow_tunnels(wing: str, room: str, col=None, config=None):
                     "tunnel_id": t["id"],
                 }
             )
-        elif tgt["wing"] == norm_wing and tgt["room"] == room:
+        elif _normalize_wing(tgt.get("wing")) == norm_wing and tgt.get("room") == room:
             connections.append(
                 {
                     "direction": "incoming",
@@ -856,7 +891,12 @@ def compute_topic_tunnels(
                 continue
             bucket.setdefault(key, n.strip())
         if bucket:
-            wing_topics[wing.strip()] = bucket
+            # Auto-generated topic tunnels normalize the wing key so repeated
+            # mining runs with mixed slug forms (``my-wing`` vs ``my_wing``)
+            # produce one canonical record, not two parallel ones. User-issued
+            # ``create_tunnel`` calls (e.g. via MCP) preserve verbatim slugs;
+            # only this auto-generation path canonicalizes the key.
+            wing_topics[normalize_wing_name(wing.strip())] = bucket
 
     wings = sorted(wing_topics.keys())
     created: list[dict] = []
@@ -900,8 +940,19 @@ def topic_tunnels_for_wing(
     if not topics_by_wing or not isinstance(wing, str) or not wing.strip():
         return []
 
-    wing = wing.strip()
+    # Canonicalize the lookup key so a hyphenated arg still finds an
+    # underscore-normalized entry (and vice versa). ``compute_topic_tunnels``
+    # canonicalizes the keys it writes, so callers can pass either form.
+    wing = normalize_wing_name(wing.strip())
     own = topics_by_wing.get(wing)
+    if own is None:
+        # Fallback: caller may have built ``topics_by_wing`` with verbatim
+        # keys (unusual but allowed). Try every entry, normalized, before
+        # giving up.
+        for k, v in topics_by_wing.items():
+            if isinstance(k, str) and normalize_wing_name(k.strip()) == wing:
+                own = v
+                break
     if not isinstance(own, (list, tuple)) or not own:
         return []
 
@@ -911,7 +962,9 @@ def topic_tunnels_for_wing(
     # one place.
     created: list[dict] = []
     for other, other_topics in topics_by_wing.items():
-        if not isinstance(other, str) or not other.strip() or other == wing:
+        if not isinstance(other, str) or not other.strip():
+            continue
+        if normalize_wing_name(other.strip()) == wing:
             continue
         if not isinstance(other_topics, (list, tuple)) or not other_topics:
             continue
