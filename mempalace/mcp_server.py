@@ -305,6 +305,11 @@ def _call_kg(op):
 _client_cache = None
 _collection_cache = None
 _postgres_backend_cache = None  # set when _config.backend == "postgres"
+# Last backend connection failure (set in _get_collection_postgres on except).
+# Read by _no_palace() to distinguish "backend unreachable" from "no palace
+# configured", so the CLI can render an actionable hint instead of the
+# misleading "Run: mempalace init <dir>". Cleared on next successful open.
+_last_backend_error: dict | None = None
 _palace_db_inode = 0  # inode of chroma.sqlite3 at cache time
 _palace_db_mtime = 0.0  # mtime of chroma.sqlite3 at cache time
 
@@ -612,10 +617,14 @@ def _get_collection_postgres(create=False):
     Failure semantics differ from the chroma branch's stale-handle
     retry: postgres connection errors are surfaced clearly (no HNSW
     staleness class to heal), so we log + return None rather than retry.
-    A future enhancement could add connection-pool retry for transient
-    network errors.
+
+    On failure, the exception type+message is captured in the module-level
+    ``_last_backend_error`` slot so ``_no_palace()`` can distinguish a
+    truly-uninitialised palace from a reachable-but-down backend (power-
+    resilience design 2026-05-21).
     """
     global _collection_cache, _postgres_backend_cache, _metadata_cache, _metadata_cache_time
+    global _last_backend_error
     try:
         if _postgres_backend_cache is None:
             from .backends.postgres import PostgresBackend
@@ -638,14 +647,24 @@ def _get_collection_postgres(create=False):
             )
             _metadata_cache = None
             _metadata_cache_time = 0
+        _last_backend_error = None
         return _collection_cache
-    except Exception:
+    except Exception as e:
         logger.exception(
             "_get_collection_postgres failed (palace=%s, create=%s, dsn-set=%s)",
             _config.palace_path,
             create,
             bool(_config.postgres_dsn),
         )
+        _last_backend_error = {
+            "type": type(e).__name__,
+            "message": str(e),
+            "ts": time.time(),
+        }
+        # Drop the cached backend so a re-imported PostgresBackend re-resolves
+        # the DSN cleanly when postgres comes back. Without this, the failed
+        # connection in PostgresBackend's pool keeps being reused.
+        _postgres_backend_cache = None
         return None
 
 
@@ -737,6 +756,36 @@ def _get_collection_chroma(create=False):
 
 
 def _no_palace():
+    """Build a "no palace" response, distinguishing two failure modes.
+
+    * **Backend unreachable** — the configured postgres DSN refused the
+      connection (most commonly because the ``mempalace-db`` container is
+      stopped). The fix is to start the backend, not to re-init the
+      palace. This is the failure mode that bit JP for 3 days during the
+      2026-05-17 power event.
+    * **No palace configured** — the daemon is wired up and the backend
+      responded, but the collection is empty / palace was never built.
+      The fix is to ``mempalace init`` / ``mempalace mine``.
+
+    The module-level ``_last_backend_error`` slot is set by
+    ``_get_collection_postgres`` on connection failure; we inspect it
+    here so the response carries the actual cause.
+    """
+    err = _last_backend_error
+    if err and err.get("type") == "OperationalError":
+        return {
+            "error": "palace.backend_unreachable",
+            "message": f"daemon up, but its postgres backend is unreachable: {err.get('message', 'unknown')}",
+            "hint": "Check: docker ps mempalace-db (and `cd /opt/mediaserver && docker compose start mempalace-db`)",
+        }
+    if err:
+        # Other backend errors — surface the type+message so the user
+        # sees something actionable instead of the misleading init hint.
+        return {
+            "error": "palace.backend_error",
+            "message": f"{err.get('type', 'Error')}: {err.get('message', 'unknown')}",
+            "hint": "Check daemon logs (sudo journalctl -u palace-daemon -n 50)",
+        }
     return {
         "error": "No palace found",
         "hint": "Run: mempalace init <dir> && mempalace mine <dir>",

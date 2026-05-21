@@ -194,7 +194,16 @@ def _print_daemon_status(data: dict) -> None:
             else:
                 print(f"  WING: {wing:30} {count:>6} drawers")
     elif "error" in data:
+        # Render daemon errors with the same shape as _print_daemon_search:
+        # error → message → hint. Important for "palace.backend_unreachable"
+        # so the user sees "start the postgres container" instead of the
+        # legacy "Run: mempalace init <dir>" hint that was actively misleading
+        # during the 2026-05-17 power-event diagnosis.
         print(f"  daemon reported error: {data['error']}")
+        if "message" in data:
+            print(f"  {data['message']}")
+        if "hint" in data:
+            print(f"  {data['hint']}")
     else:
         # Surface unexpected shapes verbatim.
         print(_json.dumps(data, indent=2))
@@ -1245,6 +1254,50 @@ def cmd_purge(args):
     print(f"\n  Purged {match_count:,} drawers. Remaining: {remaining:,}\n")
 
 
+def cmd_replay(args):
+    """Drain ``~/.mempalace/pending/*.jsonl`` by re-issuing each request to the daemon.
+
+    Pending requests accumulate when the Stop / PreCompact hooks fire while
+    the daemon (or its backend) is unreachable — see the 2026-05-21
+    power-resilience design. Drain semantics:
+
+    * Each line is one ``{"dir", "wing", "mode", "ts"}`` mine request.
+    * On 2xx daemon response the line is consumed; on failure the line
+      stays in the file for the next attempt.
+    * Duplicate ``(dir, wing, mode)`` tuples are deduped before transmit
+      so a long outage doesn't replay the same target N times.
+    """
+    if not _daemon_strict():
+        print(
+            "mempalace replay: nothing to do (PALACE_DAEMON_URL not set or strict mode off).",
+            file=sys.stderr,
+        )
+        return 0
+
+    try:
+        from . import pending_queue
+    except Exception as e:
+        print(f"  ERROR: could not import pending_queue: {e}", file=sys.stderr)
+        return 1
+
+    def post(request: dict) -> bool:
+        return _post_daemon_mine_cli(
+            request["dir"], request["wing"], request.get("mode", "convos")
+        )
+
+    report = pending_queue.replay(post)
+    if report.is_empty:
+        print("mempalace replay: pending queue is empty.")
+        return 0
+
+    print(
+        f"mempalace replay: attempted={report.attempted} "
+        f"succeeded={report.succeeded} failed={report.failed} "
+        f"files_drained={report.files_drained}"
+    )
+    return 0 if report.failed == 0 else 1
+
+
 def cmd_status(args):
     if _daemon_strict() and not args.palace:
         # --palace overrides routing: an explicit local-path argument
@@ -2255,6 +2308,11 @@ def main():
 
     sub.add_parser("status", help="Show what's been filed")
 
+    sub.add_parser(
+        "replay",
+        help="Drain ~/.mempalace/pending/ by re-issuing queued mine requests to the daemon",
+    )
+
     p_mined = sub.add_parser(
         "mined",
         help="List mined source files grouped by wing (companion to status, which groups by room)",
@@ -2322,6 +2380,7 @@ def main():
         "rooms": cmd_rooms,
         "status": cmd_status,
         "mined": cmd_mined,
+        "replay": cmd_replay,
     }
 
     # Issue #49: announce the routing decision to stderr when daemon_url is

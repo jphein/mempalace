@@ -302,6 +302,74 @@ def test_session_start_passes_through(tmp_path):
     assert result == {}
 
 
+def test_session_start_warns_when_daemon_degraded(tmp_path):
+    """Power-resilience design 2026-05-21: session start surfaces a
+    one-line warning when the daemon /health is non-200 OR the pending
+    queue has entries. Throttled to once per session via a marker file."""
+    env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli._palace_root_exists", return_value=True):
+            with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+                with patch("mempalace.pending_queue.PENDING_DIR", tmp_path / "pending"):
+                    with patch("mempalace.hooks_cli._daemon_health_ok", return_value=False):
+                        with patch("mempalace.hooks_cli._replay_pending_quietly", return_value=None):
+                            result = _capture_hook_output(
+                                hook_session_start,
+                                {"session_id": "deg-session-1"},
+                                state_dir=tmp_path,
+                            )
+    assert "systemMessage" in result
+    assert "palace-daemon" in result["systemMessage"]
+    assert "mempalace replay" in result["systemMessage"]
+    assert (tmp_path / "deg-session-1_resilience_warned").exists()
+
+
+def test_session_start_warning_throttled_per_session(tmp_path):
+    """A second session_start fire for the same session_id stays silent."""
+    env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+    with patch.dict("os.environ", env, clear=True):
+        with patch("mempalace.hooks_cli._palace_root_exists", return_value=True):
+            with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+                with patch("mempalace.pending_queue.PENDING_DIR", tmp_path / "pending"):
+                    with patch("mempalace.hooks_cli._daemon_health_ok", return_value=False):
+                        with patch("mempalace.hooks_cli._replay_pending_quietly", return_value=None):
+                            first = _capture_hook_output(
+                                hook_session_start,
+                                {"session_id": "throttle-test"},
+                                state_dir=tmp_path,
+                            )
+                            second = _capture_hook_output(
+                                hook_session_start,
+                                {"session_id": "throttle-test"},
+                                state_dir=tmp_path,
+                            )
+    assert "systemMessage" in first
+    assert second == {}
+
+
+def test_session_start_silent_when_no_daemon_url(tmp_path):
+    """Without PALACE_DAEMON_URL set, no daemon checks happen and we pass through.
+
+    Pending-queue contents are irrelevant in this mode: the daemon-routing
+    gate is what triggers the queue/warning machinery; without a daemon URL
+    the user is on the local-mine path which doesn't use the queue.
+    """
+    with patch.dict("os.environ", {}, clear=True):
+        with patch("mempalace.hooks_cli._palace_root_exists", return_value=True):
+            with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
+                (tmp_path / "pending").mkdir()
+                (tmp_path / "pending" / "2026-05-21.jsonl").write_text(
+                    '{"dir":"/x","wing":"w","mode":"convos","ts":"2026-05-21T00:00:00+00:00"}\n'
+                )
+                with patch("mempalace.pending_queue.PENDING_DIR", tmp_path / "pending"):
+                    result = _capture_hook_output(
+                        hook_session_start,
+                        {"session_id": "no-daemon"},
+                        state_dir=tmp_path,
+                    )
+    assert result == {}
+
+
 # --- hook_precompact ---
 
 
@@ -695,13 +763,27 @@ def test_post_daemon_mine_posts_correct_body(tmp_path):
 
 
 def test_post_daemon_mine_returns_false_on_error(tmp_path):
-    """_post_daemon_mine swallows network errors and returns False."""
+    """_post_daemon_mine swallows network errors and returns False.
+
+    Side-effect: on failure the request is appended to the pending queue
+    so it can be replayed when the daemon recovers (power-resilience
+    design 2026-05-21). We patch PENDING_DIR to a tmp path here so the
+    test doesn't write to the real ~/.mempalace/pending/.
+    """
     env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
     with patch.dict("os.environ", env, clear=True):
         with patch("mempalace.hooks_cli.STATE_DIR", tmp_path):
-            with patch("urllib.request.urlopen", side_effect=ConnectionError("boom")):
-                ok = _post_daemon_mine("/some/dir", wing="wing_x")
+            with patch("mempalace.pending_queue.PENDING_DIR", tmp_path / "pending"):
+                with patch("urllib.request.urlopen", side_effect=ConnectionError("boom")):
+                    ok = _post_daemon_mine("/some/dir", wing="wing_x")
     assert ok is False
+    # Confirm queue captured the dropped request.
+    pending_files = list((tmp_path / "pending").glob("*.jsonl"))
+    assert len(pending_files) == 1
+    line = json.loads(pending_files[0].read_text().splitlines()[0])
+    assert line["dir"] == "/some/dir"
+    assert line["wing"] == "wing_x"
+    assert line["mode"] == "convos"
 
 
 def test_post_daemon_mine_no_url_returns_false(tmp_path):
