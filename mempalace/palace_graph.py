@@ -977,3 +977,78 @@ def topic_tunnels_for_wing(
             )
         )
     return created
+
+
+def entity_tunnels_for_wing(
+    wing: str,
+    hallways: list,
+    label_prefix: str = "shared entity",
+) -> list:
+    """Compute entity tunnels involving a single wing.
+
+    An entity tunnel bridges two wings when the same entity (person,
+    project, concept, interest) appears in within-wing hallways of both.
+    This is the architectural counterpart to ``topic_tunnels_for_wing`` —
+    same storage path (``create_tunnel`` → ``~/.mempalace/tunnels.json``),
+    same dedup, same listing API — but the substrate is hallway records
+    rather than raw topic words. See v4 architecture doc, Wing →
+    Drawer-entities → Hallway → Tunnel.
+
+    Endpoints use the synthetic room id ``entity:<name>`` (mirrors
+    ``topic:<slug>``) so they can't collide with literal folder-derived
+    rooms of the same name. Casing of the entity is preserved.
+
+    Topic tunnels are NOT replaced — both systems coexist for one release
+    cycle while entity tunnels prove out. Deprecation is a separate PR.
+    """
+    if not hallways or not isinstance(wing, str) or not wing.strip():
+        return []
+
+    wing_norm = normalize_wing_name(wing.strip())
+
+    # Build: entity -> {normalized_wing -> original_wing_display_name}
+    # Both entity_a and entity_b positions count toward "this entity is
+    # in this wing"; the hallway primitive treats the pair as unordered.
+    entity_wings: dict = {}
+    for h in hallways:
+        if not isinstance(h, dict):
+            continue
+        h_wing = h.get("wing")
+        if not isinstance(h_wing, str) or not h_wing.strip():
+            continue
+        h_wing_norm = normalize_wing_name(h_wing.strip())
+        for ent_key in ("entity_a", "entity_b"):
+            ent = h.get(ent_key)
+            if not isinstance(ent, str) or not ent.strip():
+                continue
+            # setdefault preserves the first-seen display form so the
+            # tunnel endpoint matches the wing name the caller used.
+            entity_wings.setdefault(ent, {}).setdefault(h_wing_norm, h_wing)
+
+    if not entity_wings:
+        return []
+
+    created: list = []
+    # Stable entity order so tunnels materialize deterministically across
+    # runs — matters for tests and for diff-able tunnels.json files.
+    for entity in sorted(entity_wings.keys()):
+        wings_for_entity = entity_wings[entity]
+        if wing_norm not in wings_for_entity:
+            continue
+        own_wing_display = wings_for_entity[wing_norm]
+        # Stable other-wing order; ``wing_norm`` itself is excluded so an
+        # entity that lives only in this wing produces zero tunnels.
+        other_wings_norm = sorted(w for w in wings_for_entity if w != wing_norm)
+        for other_norm in other_wings_norm:
+            other_display = wings_for_entity[other_norm]
+            room = f"entity:{entity}"
+            tunnel = create_tunnel(
+                source_wing=own_wing_display,
+                source_room=room,
+                target_wing=other_display,
+                target_room=room,
+                label=f"{label_prefix}: {entity}",
+                kind="entity",
+            )
+            created.append(tunnel)
+    return created

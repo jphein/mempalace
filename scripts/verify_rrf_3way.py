@@ -123,7 +123,7 @@ def main(argv=None):
         p = workdir / "default"
         p.mkdir()
         r = _run_one("default", strategy_fn, corpus, p, probes, args.n_results)
-        print(f"  drawers: {r['drawer_count']}  MRR: {r['mrr']:.4f}  ({time.time()-t0:.1f}s)")
+        print(f"  drawers: {r['drawer_count']}  MRR: {r['mrr']:.4f}  ({time.time() - t0:.1f}s)")
         runs.append(r)
 
         # Run 2: FT-Code-1000
@@ -135,7 +135,7 @@ def main(argv=None):
         emb_mod._EF_CACHE.clear()
         emb_mod.get_embedding_function = lambda device=None: ef
         r = _run_one("ft1000", strategy_fn, corpus, p, probes, args.n_results)
-        print(f"  drawers: {r['drawer_count']}  MRR: {r['mrr']:.4f}  ({time.time()-t0:.1f}s)")
+        print(f"  drawers: {r['drawer_count']}  MRR: {r['mrr']:.4f}  ({time.time() - t0:.1f}s)")
         runs.append(r)
 
         # Run 3: FT-Code-5000
@@ -147,7 +147,7 @@ def main(argv=None):
         emb_mod._EF_CACHE.clear()
         emb_mod.get_embedding_function = lambda device=None: ef
         r = _run_one("ft5000", strategy_fn, corpus, p, probes, args.n_results)
-        print(f"  drawers: {r['drawer_count']}  MRR: {r['mrr']:.4f}  ({time.time()-t0:.1f}s)")
+        print(f"  drawers: {r['drawer_count']}  MRR: {r['mrr']:.4f}  ({time.time() - t0:.1f}s)")
         runs.append(r)
     finally:
         emb_mod._EF_CACHE.clear()

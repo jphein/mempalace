@@ -31,8 +31,7 @@ class TestValidateRoom:
     def test_canonical_rooms_produce_no_warnings(self):
         for room in CANONICAL_ROOMS:
             assert validate_room(room) == [], (
-                f"canonical room {room!r} should produce no warnings; got "
-                f"{validate_room(room)!r}"
+                f"canonical room {room!r} should produce no warnings; got {validate_room(room)!r}"
             )
 
     def test_seven_canonical_rooms_total(self):
