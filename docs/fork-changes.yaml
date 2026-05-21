@@ -27,6 +27,7 @@ entries:
   - id: power-resilience-pending-queue
     date: 2026-05-21
     bucket: Added
+    commit: 0c34464
     area: Reliability
     summary: "Pending-writes journal + replay so daemon outages stop being silent"
     body: |
@@ -63,6 +64,7 @@ entries:
   - id: backend-unreachable-error-mapping
     date: 2026-05-21
     bucket: Fixed
+    commit: 0c34464
     area: Reliability
     summary: "MCP server distinguishes 'backend unreachable' from 'no palace found'"
     body: |
