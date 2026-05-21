@@ -1277,7 +1277,11 @@ def tool_walk_palace(
     if anchors_set != 1:
         return {
             "error": "exactly one of start_wing, start_room, start_entity must be provided",
-            "got": {"start_wing": start_wing, "start_room": start_room, "start_entity": start_entity},
+            "got": {
+                "start_wing": start_wing,
+                "start_room": start_room,
+                "start_entity": start_entity,
+            },
         }
     depth = max(1, min(depth, 5))
     limit = max(1, min(limit, 500))
@@ -2443,11 +2447,20 @@ TOOLS = {
         "input_schema": {
             "type": "object",
             "properties": {
-                "start_wing": {"type": "string", "description": "Wing name to walk from (mutually exclusive with start_room/start_entity)"},
+                "start_wing": {
+                    "type": "string",
+                    "description": "Wing name to walk from (mutually exclusive with start_room/start_entity)",
+                },
                 "start_room": {"type": "string", "description": "Room name to walk from"},
-                "start_entity": {"type": "string", "description": "Entity name to walk from (inverse walk)"},
+                "start_entity": {
+                    "type": "string",
+                    "description": "Entity name to walk from (inverse walk)",
+                },
                 "depth": {"type": "integer", "description": "Walk depth (1..5, default 2)"},
-                "limit": {"type": "integer", "description": "Max rows to return (1..500, default 50)"},
+                "limit": {
+                    "type": "integer",
+                    "description": "Max rows to return (1..500, default 50)",
+                },
             },
         },
         "handler": tool_walk_palace,
