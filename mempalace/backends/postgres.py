@@ -217,6 +217,14 @@ class PostgresCollection(BaseCollection):
 
         rows_by_id: dict[str, tuple[str, str, str, str, str, str]] = {}
         ordered_ids: list[str] = []
+        # Track the *post-pop* metadata dict (wing/room already removed) so
+        # the KG write-through hook block below can use it without
+        # re-parsing ``json.dumps(metadata)`` back into a dict. Gemini PR
+        # #101 review flagged the re-parse as redundant; we use a parallel
+        # in-memory map rather than the *raw* ``metadatas`` argument because
+        # the raw form still has wing/room and the hook contract expects
+        # them already-popped.
+        metadata_by_id: dict[str, dict[str, Any]] = {}
         for index, (doc_id, document) in enumerate(zip(ids, documents)):
             metadata = dict(metadatas[index]) if metadatas else {}
             wing = _metadata_value(metadata.pop("wing", ""))
@@ -232,6 +240,7 @@ class PostgresCollection(BaseCollection):
                     embedding,
                     json.dumps(metadata),
                 )
+                metadata_by_id[doc_id] = metadata
             elif update_on_conflict:
                 rows_by_id[doc_id] = (
                     wing,
@@ -241,6 +250,7 @@ class PostgresCollection(BaseCollection):
                     embedding,
                     json.dumps(metadata),
                 )
+                metadata_by_id[doc_id] = metadata
 
         rows = [rows_by_id[doc_id] for doc_id in ordered_ids]
         if not rows:
@@ -292,11 +302,12 @@ class PostgresCollection(BaseCollection):
         hook = getattr(self, "_kg_writethrough", None)
         if hook is not None:
             for row in rows:
-                doc_id, document, metadata_json = row[2], row[3], row[5]
-                try:
-                    metadata = json.loads(metadata_json) if metadata_json else {}
-                except (ValueError, TypeError):
-                    metadata = {}
+                doc_id, document = row[2], row[3]
+                # Use the in-memory post-pop metadata dict rather than
+                # re-parsing ``row[5]`` (which is the JSON-serialized form).
+                # Same contract — wing/room already popped — but no
+                # round-trip through json.loads. (Gemini PR #101 review.)
+                metadata = metadata_by_id.get(doc_id, {})
                 try:
                     hook(drawer_id=doc_id, document=document, metadata=metadata)
                 except Exception as e:  # noqa: BLE001 — opportunistic enrichment

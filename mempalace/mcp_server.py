@@ -1105,13 +1105,19 @@ def tool_walk_palace(
     # Require postgres + AGE
     if _config.backend != "postgres":
         return {"error": "tool_walk_palace requires MEMPALACE_BACKEND=postgres"}
+    if _config.kg_backend != "age":
+        return {"error": "tool_walk_palace requires MEMPALACE_KG_BACKEND=age"}
     dsn = _config.postgres_dsn
     if not dsn:
         return {"error": "MEMPALACE_POSTGRES_DSN not set"}
 
     try:
-        from .knowledge_graph_age import KnowledgeGraphAGE
-        kg = KnowledgeGraphAGE(dsn)
+        # _get_kg() returns the cached KnowledgeGraphAGE instance when
+        # kg_backend == "age". Direct ``KnowledgeGraphAGE(dsn)`` would
+        # open a fresh postgres connection on every call — across
+        # repeated tool_walk_palace invocations that's both expensive
+        # and unnecessary. (Gemini PR #101 review.)
+        kg = _get_kg()
     except Exception as e:
         return {"error": f"could not connect to AGE: {e}"}
 

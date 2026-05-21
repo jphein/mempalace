@@ -476,7 +476,15 @@ def _identity(payload: dict) -> str:
     if did:
         return f"id:{did}"
     doc = payload.get("document") or ""
-    return f"doc:{hash(doc)}"
+    # Stable hash: ``hash()`` randomizes per-process (PYTHONHASHSEED), so
+    # two processes — e.g. palace-daemon and the MCP server — would assign
+    # different identities to the same chunk, breaking RRF fusion. sha256
+    # is deterministic across processes and python versions. 16 hex chars
+    # = 64 bits of namespace, plenty for chunk-identity collision safety.
+    # (Gemini PR #101 review.)
+    import hashlib
+
+    return f"doc:{hashlib.sha256(doc.encode('utf-8')).hexdigest()[:16]}"
 
 
 def _first_or_empty(result: Any, key: str) -> list:
