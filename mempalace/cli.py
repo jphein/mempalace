@@ -1281,6 +1281,9 @@ def cmd_replay(args):
         return 1
 
     def post(request: dict) -> bool:
+        # _post_daemon_mine_cli doesn't share the hook's pending-queue
+        # re-enqueue path, so skip_queue isn't applicable here; the
+        # CLI variant prints to stderr and returns bool unconditionally.
         return _post_daemon_mine_cli(
             request["dir"], request["wing"], request.get("mode", "convos")
         )

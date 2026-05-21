@@ -23,11 +23,10 @@ from __future__ import annotations
 
 import json
 import os
-import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Iterable
+from typing import Callable, Iterable, Optional
 
 PENDING_DIR = Path.home() / ".mempalace" / "pending"
 
@@ -121,7 +120,8 @@ def _dedupe(lines: Iterable[str]) -> list[str]:
 def replay(
     post_fn: Callable[[dict], bool],
     *,
-    directory: Path | None = None,
+    directory: Optional[Path] = None,
+    deadline: Optional[float] = None,
 ) -> ReplayReport:
     """Drain the queue by re-issuing each request via ``post_fn``.
 
@@ -132,23 +132,56 @@ def replay(
     best-effort background sweep and must not abort partway just
     because one request blew up.
 
-    File-level rewrite is atomic via ``tempfile + os.replace`` so a
-    crash mid-drain cannot truncate or duplicate lines.
+    **Concurrency model (Gemini PR #104 review):** atomic-rewrite via
+    ``tempfile + os.replace`` is NOT safe against concurrent
+    ``enqueue`` calls: any line appended while we hold the file in
+    memory would be silently lost when we replace. We instead
+    "claim" each file by renaming it to ``<name>.replay-<pid>`` before
+    reading. ``enqueue`` always writes to ``YYYY-MM-DD.jsonl``, so any
+    concurrent appends land in a fresh file rather than the one we're
+    draining. Failed lines are appended back to the live file (not
+    rewritten) so they merge with any newly-enqueued entries.
+
+    ``deadline`` is a ``time.monotonic()`` timestamp at which the
+    sweep stops processing more lines and returns whatever has been
+    drained so far. Used by ``hook_session_start`` to cap total replay
+    cost on the hot path. ``None`` (default) means no time limit.
     """
+    import time
+
     base = directory if directory is not None else PENDING_DIR
     if not base.is_dir():
         return ReplayReport(0, 0, 0, 0)
 
     attempted = succeeded = failed = files_drained = 0
+    pid = os.getpid()
+
     for path in sorted(base.glob("*.jsonl")):
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+
+        # Claim the file by renaming. Any enqueue racing us will write to
+        # the original name (creating a fresh file or appending to one we
+        # already drained) — no data loss either way.
+        claimed = path.with_name(path.name + f".replay-{pid}")
         try:
-            with open(path, encoding="utf-8") as f:
-                raw_lines = [line.rstrip("\n") for line in f if line.strip()]
+            os.replace(path, claimed)
+        except FileNotFoundError:
+            # Another replay process beat us to it.
+            continue
         except OSError:
             continue
+
+        try:
+            with open(claimed, encoding="utf-8") as f:
+                raw_lines = [line.rstrip("\n") for line in f if line.strip()]
+        except OSError:
+            # Couldn't read claimed file; leave it for manual recovery.
+            continue
+
         if not raw_lines:
             try:
-                path.unlink()
+                claimed.unlink()
                 files_drained += 1
             except OSError:
                 pass
@@ -157,6 +190,10 @@ def replay(
         unique_lines = _dedupe(raw_lines)
         remaining: list[str] = []
         for line in unique_lines:
+            if deadline is not None and time.monotonic() >= deadline:
+                # Time's up — preserve unprocessed lines so they replay next.
+                remaining.append(line)
+                continue
             attempted += 1
             try:
                 request = json.loads(line)
@@ -175,28 +212,26 @@ def replay(
 
         if not remaining:
             try:
-                path.unlink()
+                claimed.unlink()
                 files_drained += 1
             except OSError:
                 pass
-        elif len(remaining) != len(raw_lines):
-            # Rewrite atomically with only the still-pending lines.
+        else:
+            # Append failed lines back to the live queue file. This merges
+            # with any concurrent enqueue activity; the daemon's per-drawer
+            # idempotency handles any resulting duplicates.
             try:
-                fd, tmp_path = tempfile.mkstemp(prefix=path.name + ".", dir=str(base))
+                with open(path, "a", encoding="utf-8") as live:
+                    live.write("\n".join(remaining) + "\n")
+                    live.flush()
+                    os.fsync(live.fileno())
                 try:
-                    with os.fdopen(fd, "w", encoding="utf-8") as tmp:
-                        tmp.write("\n".join(remaining) + "\n")
-                        tmp.flush()
-                        os.fsync(tmp.fileno())
-                    os.replace(tmp_path, path)
-                except Exception:
-                    try:
-                        os.unlink(tmp_path)
-                    except OSError:
-                        pass
-                    raise
+                    claimed.unlink()
+                except OSError:
+                    pass
             except OSError:
-                # Leave the file as-is; next replay will retry everything.
+                # If append failed, keep claimed file in place so a future
+                # replay can pick it up.
                 pass
 
     return ReplayReport(attempted, succeeded, failed, files_drained)

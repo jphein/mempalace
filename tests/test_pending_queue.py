@@ -268,3 +268,98 @@ def test_cmd_replay_returns_1_on_partial_failure(monkeypatch, capsys, tmp_path):
 
     rc = cli.cmd_replay(object())
     assert rc == 1
+
+
+# ---- Concurrency fixes (Gemini PR #104 review) ------------------------------
+
+
+def test_replay_claims_file_so_concurrent_enqueue_survives(queue_dir):
+    """Critical race fix: an enqueue racing replay must not be silently lost.
+
+    Gemini's review correctly identified that the prior atomic-rewrite
+    pattern would clobber any line appended between replay's read and
+    its os.replace. The fix is to claim the file by renaming it; any
+    concurrent enqueue then writes to a fresh file with the original
+    name.
+    """
+    base = datetime(2026, 5, 21, tzinfo=timezone.utc)
+    pending_queue.enqueue({"dir": "/initial", "wing": "w", "mode": "convos"}, now=base)
+
+    enqueue_during_replay: list[str] = []
+
+    def post(req):
+        # Simulate a Stop hook firing mid-drain: append a new line to the
+        # original (now-vacated) queue file via the public enqueue API.
+        if req["dir"] == "/initial":
+            new_path = pending_queue.enqueue(
+                {"dir": "/raced", "wing": "w", "mode": "convos"}, now=base
+            )
+            enqueue_during_replay.append(str(new_path))
+        return True
+
+    pending_queue.replay(post)
+
+    # The /initial line was drained successfully. The /raced line should
+    # have survived in the live queue file — NOT been silently overwritten.
+    live = queue_dir / "2026-05-21.jsonl"
+    assert live.exists(), "concurrent enqueue must still be on disk"
+    rows = _read_lines(live)
+    assert any(r["dir"] == "/raced" for r in rows), (
+        f"raced enqueue lost! file contains: {rows}"
+    )
+
+
+def test_replay_failed_lines_appended_back_not_rewritten(queue_dir):
+    """When replay fails some lines AND a concurrent enqueue happens,
+    both the failed-replay lines AND the new enqueue must survive."""
+    base = datetime(2026, 5, 21, tzinfo=timezone.utc)
+    pending_queue.enqueue({"dir": "/ok", "wing": "w", "mode": "convos"}, now=base)
+    pending_queue.enqueue({"dir": "/fail", "wing": "w", "mode": "convos"}, now=base)
+
+    def post(req):
+        if req["dir"] == "/ok":
+            # Simulate concurrent enqueue between read and write.
+            pending_queue.enqueue(
+                {"dir": "/raced", "wing": "w", "mode": "convos"}, now=base
+            )
+            return True
+        return False  # /fail stays pending
+
+    pending_queue.replay(post)
+
+    live = queue_dir / "2026-05-21.jsonl"
+    assert live.exists()
+    rows = _read_lines(live)
+    dirs = {r["dir"] for r in rows}
+    assert "/fail" in dirs, "failed replay line lost"
+    assert "/raced" in dirs, "concurrent enqueue lost"
+    assert "/ok" not in dirs, "successfully replayed line should be gone"
+
+
+def test_replay_respects_deadline(queue_dir):
+    """``deadline=`` caps total wall time — unfinished lines stay queued."""
+    import time as time_mod
+
+    base = datetime(2026, 5, 21, tzinfo=timezone.utc)
+    for i in range(20):
+        pending_queue.enqueue(
+            {"dir": f"/lots{i}", "wing": "w", "mode": "convos"}, now=base
+        )
+
+    call_count = 0
+
+    def slow_post(req):
+        nonlocal call_count
+        call_count += 1
+        time_mod.sleep(0.05)  # 50ms each
+        return True
+
+    deadline = time_mod.monotonic() + 0.12  # ~2-3 calls fit
+    pending_queue.replay(slow_post, deadline=deadline)
+
+    # Should have called post at most a handful of times — not 20.
+    assert call_count <= 5, f"deadline ignored, called {call_count} times"
+    # Unfinished entries must still be in the live queue.
+    live = queue_dir / "2026-05-21.jsonl"
+    remaining = _read_lines(live)
+    assert len(remaining) >= 15, f"too many drained ({len(remaining)}/20 left)"

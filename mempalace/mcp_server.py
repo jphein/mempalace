@@ -309,7 +309,11 @@ _postgres_backend_cache = None  # set when _config.backend == "postgres"
 # Read by _no_palace() to distinguish "backend unreachable" from "no palace
 # configured", so the CLI can render an actionable hint instead of the
 # misleading "Run: mempalace init <dir>". Cleared on next successful open.
-_last_backend_error: dict | None = None
+# Typed as Optional[dict] (not dict | None) for Python 3.9 compatibility —
+# pyproject targets py39, and PEP 604 union syntax in runtime annotations
+# is 3.10+. Wrapping in Optional avoids needing `from __future__ import
+# annotations` at the top of the (large) module.
+_last_backend_error: Optional[dict] = None
 _palace_db_inode = 0  # inode of chroma.sqlite3 at cache time
 _palace_db_mtime = 0.0  # mtime of chroma.sqlite3 at cache time
 
