@@ -21,7 +21,6 @@ from .backends import (
     get_backend,
     resolve_backend_for_palace,
 )
-from .backends.chroma import ChromaBackend
 from .config import DEFAULT_COLLECTION_NAME, MempalaceConfig
 
 logger = logging.getLogger("mempalace_mcp")

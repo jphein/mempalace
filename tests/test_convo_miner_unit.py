@@ -5,8 +5,6 @@ import sys
 
 import pytest
 
-import pytest
-
 from mempalace.convo_miner import (
     _file_chunks_locked,
     chunk_exchanges,

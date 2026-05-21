@@ -432,7 +432,13 @@ def _daemon_strict() -> bool:
     )
 
 
-def _post_daemon_mine(directory: str, wing: str, mode: str = "convos") -> bool:
+def _post_daemon_mine(
+    directory: str,
+    wing: str,
+    mode: str = "convos",
+    *,
+    skip_queue: bool = False,
+) -> bool:
     """POST a /mine request to palace-daemon. Returns True on accepted job, False on error.
 
     The hook sends client-side absolute paths (e.g. ``/home/<user>/.claude/projects/...``);
@@ -443,6 +449,17 @@ def _post_daemon_mine(directory: str, wing: str, mode: str = "convos") -> bool:
     so the timeout is sized for typical workloads rather than network
     round-trip; on a real mine that exceeds it, the hook gets a stale
     timeout log but the daemon-side work still completes.
+
+    On any transport failure (connection refused, timeout, non-2xx, daemon-side
+    backend-unreachable), the request is appended to the pending queue
+    (``~/.mempalace/pending/``) so it can be replayed when the daemon recovers.
+    Power-resilience design 2026-05-21: prevents silent write loss during
+    daemon/backend outages.
+
+    ``skip_queue=True`` is for replay callers: when this function is
+    invoked from inside ``pending_queue.replay``, a failure must NOT
+    re-enqueue the request — the replay machinery already keeps it in
+    the queue file for the next attempt. (Gemini PR #104 review.)
     """
     daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
     if not daemon_url:
@@ -464,8 +481,71 @@ def _post_daemon_mine(directory: str, wing: str, mode: str = "convos") -> bool:
         _log(f"Daemon mine accepted: dir={directory} wing={wing} mode={mode} resp={body[:200]}")
         return True
     except Exception as e:
-        _log(f"Daemon mine failed (dir={directory} wing={wing}): {e}")
+        if skip_queue:
+            _log(
+                f"Daemon mine failed during replay (dir={directory} wing={wing}): {e}; "
+                "not re-queueing (already in queue)"
+            )
+            return False
+        _log(f"Daemon mine failed (dir={directory} wing={wing}): {e}; queueing for replay")
+        try:
+            from . import pending_queue
+
+            path = pending_queue.enqueue({"dir": directory, "wing": wing, "mode": mode})
+            _log(f"Queued pending mine: {path}")
+        except Exception as q_exc:
+            _log(f"Pending-queue enqueue failed: {q_exc}")
         return False
+
+
+SESSION_START_REPLAY_BUDGET_SEC = 2.0
+
+
+def _replay_pending_quietly(budget_sec: float = SESSION_START_REPLAY_BUDGET_SEC):
+    """Best-effort replay of any pending mine requests, capped at ``budget_sec``.
+
+    Called from session_start (off the hot path) and from CLI commands.
+    Returns a ``pending_queue.ReplayReport`` on attempt, ``None`` if
+    the queue module or daemon URL are unavailable. Never raises —
+    failures are logged and swallowed.
+
+    The ``budget_sec`` cap is the design's "2s timeout" guard: a large
+    queue + slow daemon shouldn't block session start indefinitely.
+    Unfinished entries stay in the queue for the next replay (Gemini
+    PR #104 review).
+    """
+    import time
+
+    daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
+    if not daemon_url:
+        return None
+    try:
+        from . import pending_queue
+    except Exception as e:
+        _log(f"replay: import pending_queue failed: {e}")
+        return None
+
+    def post(request: dict) -> bool:
+        return _post_daemon_mine(
+            request["dir"],
+            request["wing"],
+            request.get("mode", "convos"),
+            skip_queue=True,
+        )
+
+    deadline = time.monotonic() + budget_sec if budget_sec > 0 else None
+    try:
+        report = pending_queue.replay(post, deadline=deadline)
+        if not report.is_empty:
+            _log(
+                f"Replay swept: attempted={report.attempted} "
+                f"succeeded={report.succeeded} failed={report.failed} "
+                f"files_drained={report.files_drained}"
+            )
+        return report
+    except Exception as e:
+        _log(f"replay sweep raised: {e}")
+        return None
 
 
 def _wing_from_mine_dir(mine_dir: str) -> str:
@@ -898,7 +978,15 @@ def hook_stop(data: dict, harness: str):
 
 
 def hook_session_start(data: dict, harness: str):
-    """Session start hook: initialize session tracking state."""
+    """Session start hook: initialize session tracking state.
+
+    Also runs a best-effort pending-queue replay and, when the daemon
+    looks unreachable or the queue has pending entries, emits a one-line
+    warning via ``systemMessage`` so the user notices within minutes
+    (rather than days, as happened in the 2026-05-17 power-event
+    incident). The warning is throttled to once per session via a marker
+    in ``STATE_DIR``.
+    """
     if not _palace_root_exists():
         _output({})
         return
@@ -910,8 +998,91 @@ def hook_session_start(data: dict, harness: str):
     # Initialize session state directory
     STATE_DIR.mkdir(parents=True, exist_ok=True)
 
+    warning = _check_daemon_and_queue_for_warning(session_id)
+    if warning:
+        _output({"systemMessage": warning})
+        return
+
     # Pass through — no blocking on session start
     _output({})
+
+
+def _check_daemon_and_queue_for_warning(session_id: str) -> Optional[str]:
+    """Replay pending writes, then return a warning string if state is degraded.
+
+    Behaviour:
+      1. Best-effort replay of any pending requests.
+      2. After replay, check daemon ``/health`` and pending count.
+      3. If either signals trouble AND we haven't warned this session
+         yet, return a one-line systemMessage.
+      4. Otherwise return ``None``.
+
+    The marker file (``STATE_DIR/<session_id>_resilience_warned``)
+    prevents the warning from showing up on every session-start fire
+    once the user has acknowledged the issue.
+    """
+    daemon_url = os.environ.get("PALACE_DAEMON_URL", "").strip().rstrip("/")
+    if not daemon_url:
+        return None
+
+    # 1. Drain whatever we can.
+    _replay_pending_quietly()
+
+    # 2. Check daemon health and pending count.
+    try:
+        from . import pending_queue
+
+        pending_after = pending_queue.pending_count()
+    except Exception:
+        pending_after = 0
+
+    health_ok = _daemon_health_ok(daemon_url)
+
+    if health_ok and pending_after == 0:
+        return None
+
+    # 3. Throttle: one warning per session_id.
+    try:
+        marker = STATE_DIR / f"{session_id}_resilience_warned"
+        if marker.exists():
+            return None
+        marker.touch()
+    except OSError:
+        # If we can't write the marker, still emit the warning once —
+        # the worst case is the user sees it twice, not zero times.
+        pass
+
+    parts: list[str] = []
+    if not health_ok:
+        parts.append("palace-daemon /health is not OK")
+    if pending_after > 0:
+        parts.append(f"{pending_after} pending write{'s' if pending_after != 1 else ''} in queue")
+    return "⚠ " + "; ".join(parts) + " (run `mempalace replay` to drain)"
+
+
+def _daemon_health_ok(daemon_url: str) -> bool:
+    """GET <daemon_url>/health with a short timeout. ``True`` only on 200 + ``status=ok``.
+
+    Parses the response body as JSON rather than substring-matching
+    on ``"status":"ok"`` so whitespace, field reordering, or unrelated
+    occurrences of the literal string don't fool the check.
+    (Gemini PR #104 review.)
+    """
+    try:
+        import urllib.request
+
+        req = urllib.request.Request(f"{daemon_url}/health", method="GET")
+        with urllib.request.urlopen(req, timeout=1.0) as resp:
+            if resp.status != 200:
+                return False
+            body = resp.read().decode("utf-8", errors="replace")
+    except Exception:
+        return False
+    try:
+        data = json.loads(body)
+    except (json.JSONDecodeError, ValueError):
+        return False
+    return data.get("status") == "ok"
 
 
 def hook_precompact(data: dict, harness: str):
