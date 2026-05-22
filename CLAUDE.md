@@ -50,7 +50,7 @@ TechEmpower's production fork of [MemPalace/mempalace](https://github.com/MemPal
 
 - `~/Projects/mempalace.yaml` — **do not delete**. Mining config with wing/room definitions. Regenerate with `mempalace init ~/Projects --yes` if lost.
 - `~/.mempalace/config.json` — topic wings and hall keywords, customized for JP's domains (infrastructure, development, tools, creative, projects, system).
-- `~/.mempalace/palace/` — ChromaDB vector store. The actual data.
+- **Palace data lives in postgres on `disks.jphe.in`**, reached via palace-daemon at `http://disks.jphe.in:8085`. The local `~/.mempalace/palace/` ChromaDB store was retired on the 2026-05-14 pgvector cutover (renamed to `~/.mempalace/palace.retired-pre-pgcutover-2026-05-14/`); a `~/.mempalace/RETIRED` marker refuses default-palace opens so misconfigured tools can't silently fall back to the stale local store.
 - `~/.mempalace/hook_state/` — stop hook session tracking.
 
 ## Development
@@ -83,7 +83,7 @@ Workflow for landing new fork-ahead changes lives in [Documentation maintenance]
 Claude Code has two complementary memory layers, used in tandem:
 
 - **Auto-memory** (`~/.claude/projects/*/memory/`) — lightweight preferences, context, feedback. Manual writes only. (Anthropic's "Auto Dream" research-preview shipped late April 2026 in Claude Code `/dream` + the Managed Agents Dreams API; MemPalace deliberately stays un-consolidated and the Dreams API design ratifies the verbatim-vs-derivative axis. See `~/.claude/projects/-home-jp-Projects-memorypalace/memory/project_auto_dream.md`.)
-- **MemPalace** (`~/.mempalace/palace/`, ~183K drawers behind the daemon) — verbatim conversations, tool output, code. Write-only archive, searchable via MCP. Completeness is the feature. Wing/room layout follows the canonical 7-room taxonomy (see `palace-taxonomy` skill / `~/Projects/familiar.realm.watch/docs/superpowers/specs/2026-05-13-palace-room-taxonomy.md`).
+- **MemPalace** (postgres + pgvector + AGE on `disks.jphe.in`, reached via palace-daemon at `http://disks.jphe.in:8085`, 300K+ drawers) — verbatim conversations, tool output, code. Write-only archive, searchable via MCP. Completeness is the feature. Wing/room layout follows the canonical 7-room taxonomy (see `palace-taxonomy` skill / `~/Projects/familiar.realm.watch/docs/superpowers/specs/2026-05-13-palace-room-taxonomy.md`).
 
 Both systems coexist. Hook saves are scoped to MemPalace ("For THIS save, use MemPalace MCP tools only") — this is not a permanent ban on auto-memory.
 
