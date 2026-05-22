@@ -29,13 +29,13 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: 'pip'
       - run: pip install -e ".[dev]"
-      # cov-fail-under: 79 (was 80). The postgres backend code paths
-      # only get covered in the test-postgres job (which has a service
-      # container), not test-linux. Adding new postgres-specific code
-      # therefore mechanically drops the test-linux number even when
-      # the postgres job is at 100%. Tracking issue to combine the two
-      # jobs' coverage artifacts so the bar stays meaningful at 80%+.
-      - run: python -m pytest tests/ -v --ignore=tests/benchmarks --cov=mempalace --cov-report=term-missing --cov-fail-under=79 --durations=10
+      - run: python -m pytest tests/ -v --ignore=tests/benchmarks --cov=mempalace --cov-report=xml --cov-report=term-missing --cov-fail-under=0 --durations=10
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-linux-${{ matrix.python-version }}
+          path: .coverage
+          include-hidden-files: true
+          if-no-files-found: error
 
   # Windows + macOS run only on manual dispatch (Actions budget — Windows
   # is 2x Linux billing, macOS is 10x). Trigger via Actions tab → "Tests"
@@ -51,13 +51,7 @@ jobs:
           python-version: "3.13"
           cache: 'pip'
       - run: pip install -e ".[dev]"
-      # cov-fail-under: 79 (was 80). The postgres backend code paths
-      # only get covered in the test-postgres job (which has a service
-      # container), not test-linux. Adding new postgres-specific code
-      # therefore mechanically drops the test-linux number even when
-      # the postgres job is at 100%. Tracking issue to combine the two
-      # jobs' coverage artifacts so the bar stays meaningful at 80%+.
-      - run: python -m pytest tests/ -v --ignore=tests/benchmarks --cov=mempalace --cov-report=term-missing --cov-fail-under=79 --durations=10
+      - run: python -m pytest tests/ -v --ignore=tests/benchmarks --cov=mempalace --cov-report=term-missing --durations=10
 
   test-macos:
     if: github.event_name == 'workflow_dispatch'
@@ -69,13 +63,7 @@ jobs:
           python-version: "3.13"
           cache: 'pip'
       - run: pip install -e ".[dev]"
-      # cov-fail-under: 79 (was 80). The postgres backend code paths
-      # only get covered in the test-postgres job (which has a service
-      # container), not test-linux. Adding new postgres-specific code
-      # therefore mechanically drops the test-linux number even when
-      # the postgres job is at 100%. Tracking issue to combine the two
-      # jobs' coverage artifacts so the bar stays meaningful at 80%+.
-      - run: python -m pytest tests/ -v --ignore=tests/benchmarks --cov=mempalace --cov-report=term-missing --cov-fail-under=79 --durations=10
+      - run: python -m pytest tests/ -v --ignore=tests/benchmarks --cov=mempalace --cov-report=term-missing --durations=10
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -127,4 +115,44 @@ jobs:
       - name: Run postgres backend tests
         env:
           TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/mempalace_test
-        run: python -m pytest tests/test_backends_postgres.py -v
+        run: python -m pytest tests/test_backends_postgres.py -v --cov=mempalace --cov-report=xml --cov-report=term-missing --cov-fail-under=0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage-postgres
+          path: .coverage
+          include-hidden-files: true
+          if-no-files-found: error
+
+  # Combined coverage gate. Each test job runs pytest with --cov but no
+  # --cov-fail-under; this job downloads every coverage artifact, merges
+  # them with `coverage combine`, and enforces the 80% threshold once.
+  # That keeps the bar meaningful even when new code lives in a backend
+  # only one job exercises (e.g. postgres-only paths covered by
+  # test-postgres but not by test-linux). See #99.
+  check-coverage:
+    runs-on: ubuntu-latest
+    needs: [test-linux, test-postgres]
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+      - run: pip install -e ".[dev]"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: coverage-artifacts
+      - name: Combine coverage and enforce threshold
+        run: |
+          # Each artifact directory contains a single .coverage file.
+          # Rename them to .coverage.<artifact-name> so `coverage combine`
+          # picks them all up rather than overwriting on collision.
+          mkdir -p combined
+          for d in coverage-artifacts/*/; do
+            name=$(basename "$d")
+            cp "$d/.coverage" "combined/.coverage.$name"
+          done
+          cd combined
+          coverage combine
+          coverage report --fail-under=80
