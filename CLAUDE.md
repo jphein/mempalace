@@ -56,8 +56,8 @@ TechEmpower's production fork of [MemPalace/mempalace](https://github.com/MemPal
 ## Development
 
 ```bash
-source venv/bin/activate
-python -m pytest tests/ -q              # ~1096 tests (benchmarks deselected)
+source .venv/bin/activate
+python -m pytest tests/ -q              # 2486 tests (benchmarks deselected)
 mempalace status                         # check palace state
 mempalace search "query"                 # test search
 python -m mempalace.mcp_server           # run MCP server standalone

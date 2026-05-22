@@ -45,13 +45,13 @@ failures=0
 
 # ── 1. test count ────────────────────────────────────────────────────────
 step "1/4  test count in README"
-readme_count=$(grep -oE '^[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
+readme_count=$(grep -oE '[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
 if [ -z "$readme_count" ]; then
-    warn "README has no '<N> tests pass on \`main\`' line — skipping"
+    warn "README has no '<N> tests pass on \`main\`' phrase — skipping"
 else
     # Prefer the repo venv's pytest so the check works without an
     # activated environment. Falls back to whatever pytest is on PATH.
-    pytest_bin="$REPO_ROOT/venv/bin/pytest"
+    pytest_bin="$REPO_ROOT/.venv/bin/pytest"
     [ -x "$pytest_bin" ] || pytest_bin="$(command -v pytest 2>/dev/null || true)"
     if [ -z "$pytest_bin" ]; then
         warn "no pytest available — skipping"
@@ -106,7 +106,7 @@ fi
 step "3/4  FORK_CHANGELOG.md regenerates clean"
 render_bin="$REPO_ROOT/scripts/render-docs.py"
 if [ -x "$render_bin" ]; then
-    py="$REPO_ROOT/venv/bin/python"
+    py="$REPO_ROOT/.venv/bin/python"
     [ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
     if [ -z "$py" ]; then
         warn "no python interpreter — skipping render check"
