@@ -3029,6 +3029,17 @@ def handle_request(request):
                 ]
             },
         }
+    elif method == "resources/list":
+        # MCP spec optional method. We don't expose any resources — the
+        # palace surfaces drawers via the tools/call interface, not via
+        # the resource model. Return an empty list rather than -32601 so
+        # clients that probe on connect (e.g. OpenCode 1.15.x) don't log
+        # an ERROR every session. (#-32601-noise / fork follow-up.)
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"resources": []}}
+    elif method == "prompts/list":
+        # MCP spec optional method. We don't expose any prompts. Same
+        # rationale as resources/list above — quiet client probes.
+        return {"jsonrpc": "2.0", "id": req_id, "result": {"prompts": []}}
     elif method == "tools/call":
         if not isinstance(params, dict) or "name" not in params:
             return {
