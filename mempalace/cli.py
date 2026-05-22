@@ -1832,8 +1832,9 @@ def cmd_compress(args):
     if not args.dry_run:
         try:
             # Route through palace.get_closets_collection so the shared
-            # _DEFAULT_BACKEND is reused (avoids a redundant ChromaBackend
-            # instance and its potential WAL-lock contention on Windows).
+            # chroma backend (via get_backend("chroma")) is reused — avoids
+            # a redundant ChromaBackend instance and its potential WAL-lock
+            # contention on Windows.
             comp_col = get_closets_collection(palace_path, create=True)
             for doc_id, compressed, meta, stats in compressed_entries:
                 comp_meta = dict(meta)

@@ -61,20 +61,6 @@ SKIP_DIRS = {
 #               drawers stored system tags / hook chrome verbatim.
 NORMALIZE_VERSION = 2
 
-# Fork-only compat shim. Upstream #665 removed the module-level
-# `_DEFAULT_BACKEND = ChromaBackend()` symbol because `get_collection`
-# now routes through `resolve_backend_for_palace`. But fork-side callers
-# in `mcp_server.py` still treat the default backend as a module attribute
-# (cache invalidation via `._clients.pop()` / `._freshness.pop()` and
-# `.close_palace()`), and `tests/test_backends.py` + `tests/test_mcp_server.py`
-# monkeypatch it. Aliasing to `get_backend("chroma")` preserves all five
-# call sites without leaking through to the postgres path — postgres
-# collections don't use the same `_clients`/`_freshness` cache, so
-# routing those calls at the chroma backend is structurally correct.
-# Follow-up: migrate callers to the new abstraction in a separate PR;
-# this shim is transitional, not a permanent fixture.
-_DEFAULT_BACKEND = get_backend("chroma")
-
 
 def get_collection(
     palace_path: str,
