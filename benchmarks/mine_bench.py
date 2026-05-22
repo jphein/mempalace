@@ -170,10 +170,11 @@ def mine_once(project_dir: str, palace_path: str, batched: bool) -> tuple[int, f
 
 def _reset_backend_caches() -> None:
     """Drop the in-process client cache so each run pays cold-open cost equally."""
-    from mempalace.palace import _DEFAULT_BACKEND
+    from mempalace.palace import get_backend
 
-    _DEFAULT_BACKEND._clients.clear()
-    _DEFAULT_BACKEND._freshness.clear()
+    chroma_backend = get_backend("chroma")
+    chroma_backend._clients.clear()
+    chroma_backend._freshness.clear()
 
 
 def run_scenario(label: str, n_files: int, paragraphs_per_file: int, seed: int) -> dict:

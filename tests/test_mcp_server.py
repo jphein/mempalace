@@ -2301,7 +2301,7 @@ class TestCacheInvalidation:
         from mempalace import mcp_server, palace
 
         close_palace = MagicMock()
-        monkeypatch.setattr(palace._DEFAULT_BACKEND, "close_palace", close_palace)
+        monkeypatch.setattr(palace.get_backend("chroma"), "close_palace", close_palace)
 
         class _FakeCol:
             def count(self):

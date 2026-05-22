@@ -1788,7 +1788,9 @@ def test_palace_get_collection_uses_configured_collection_name(monkeypatch):
         return object()
 
     monkeypatch.setenv("MEMPALACE_COLLECTION_NAME", "custom_drawers")
-    monkeypatch.setattr(palace._DEFAULT_BACKEND, "get_collection", fake_get_collection)
+    monkeypatch.setattr(
+        palace.get_backend("chroma"), "get_collection", fake_get_collection
+    )
 
     palace.get_collection("/palace", create=False)
 
