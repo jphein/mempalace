@@ -342,7 +342,7 @@ def fused_query(  # noqa: C901 — N-encoder fan-out + RRF fusion; complexity is
     specs = load_roster()
     if not specs:
         raise RuntimeError(
-            "multi_encoder: roster is empty after parsing — check " f"{ENV_ENCODERS}/{ENV_PATHS}"
+            f"multi_encoder: roster is empty after parsing — check {ENV_ENCODERS}/{ENV_PATHS}"
         )
 
     if collection_getter is None:

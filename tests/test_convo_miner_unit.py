@@ -6,6 +6,8 @@ import sys
 import pytest
 
 from mempalace.convo_miner import (
+    CHUNK_SIZE,
+    _emit_bounded,
     _file_chunks_locked,
     chunk_exchanges,
     detect_convo_room,
@@ -38,11 +40,32 @@ class TestChunkExchanges:
         assert len(chunks) >= 2
 
     def test_paragraph_line_group_fallback(self):
-        """Long content with no paragraph breaks chunks by line groups."""
+        """Long content with no paragraph breaks chunks by line groups.
+
+        Each emitted drawer must respect CHUNK_SIZE. Before #1534 the
+        fallback chunker emitted one drawer per 25-line group without
+        a size cap, so a 25-line group of long lines produced an
+        oversized drawer that crashed embedding upsert.
+        """
         lines = [f"Line {i}: some content that is meaningful" for i in range(60)]
         content = "\n".join(lines)
         chunks = chunk_exchanges(content)
         assert len(chunks) >= 1
+        max_len = max(len(c["content"]) for c in chunks)
+        assert max_len <= CHUNK_SIZE, f"oversized chunk: max_len={max_len}"
+
+    def test_line_group_fallback_drops_sub_min_trailing_group(self):
+        """A trailing line-group whose stripped length is at or below
+        MIN_CHUNK_SIZE must be dropped, not emitted as a tiny drawer."""
+        lines = [f"Line {i}" for i in range(51)]
+        content = "\n".join(lines)
+        chunks = chunk_exchanges(content)
+        from mempalace.convo_miner import MIN_CHUNK_SIZE
+
+        assert len(chunks) == 2, (
+            f"expected 2 drawers (groups 0-24 and 25-49); got {len(chunks)}; "
+            f"the single-line tail group should drop below MIN_CHUNK_SIZE={MIN_CHUNK_SIZE}"
+        )
 
     def test_empty_content(self):
         chunks = chunk_exchanges("")
@@ -96,6 +119,136 @@ class TestChunkExchanges:
         # All 13 lines must be present — none silently dropped
         for i in range(1, 14):
             assert f"Step {i}:" in stored, f"Step {i} was truncated and not stored"
+
+    def test_paragraph_loop_enforces_chunk_size(self):
+        """A paragraph longer than CHUNK_SIZE must split into multiple
+        bounded drawers. Regression for #1534: the paragraph loop in
+        ``_chunk_by_paragraph`` used to append each paragraph as a
+        single drawer regardless of size, producing one giant chunk
+        that crashed embedding upsert with
+        ``RuntimeError: Invalid buffer size: ... GiB``.
+        """
+        big_para = "x" * 5000
+        tail = "small paragraph tail of meaningful length"
+        content = big_para + "\n\n" + tail
+        chunks = chunk_exchanges(content)
+        max_len = max(len(c["content"]) for c in chunks)
+        assert max_len <= CHUNK_SIZE, f"oversized chunk: max_len={max_len}"
+        assert len(chunks) > 1, "5000-char content should produce multiple drawers"
+        assert chunks[-1]["content"] == tail, (
+            "trailing paragraph must be preserved as the last drawer"
+        )
+
+    def test_custom_chunk_size_propagates_to_paragraph_path(self):
+        """User-supplied chunk_size must govern the paragraph chunker, not
+        only the exchange chunker. Confirms config plumbing reaches both
+        paths after the #1534 fix.
+        """
+        big_para = "y" * 3000
+        content = big_para + "\n\ntail paragraph of meaningful length"
+        chunks = chunk_exchanges(content, chunk_size=400)
+        max_len = max(len(c["content"]) for c in chunks)
+        assert max_len <= 400, f"oversized chunk under custom chunk_size=400: {max_len}"
+
+    def test_paragraph_loop_no_content_loss(self):
+        """Verbatim principle: every char of a single long paragraph lands
+        in some drawer in order. The slicing helper must not drop or
+        reorder content."""
+        content = "a" * 5000
+        chunks = chunk_exchanges(content)
+        joined = "".join(c["content"] for c in chunks)
+        assert joined == content
+
+    def test_chunk_exactly_at_size_boundary(self):
+        """Content length == CHUNK_SIZE produces exactly one drawer of CHUNK_SIZE."""
+        content = "z" * CHUNK_SIZE
+        chunks = chunk_exchanges(content)
+        assert len(chunks) == 1
+        assert len(chunks[0]["content"]) == CHUNK_SIZE
+
+    def test_chunk_many_multiples_of_size(self):
+        """Content length == 8 * CHUNK_SIZE produces exactly 8 drawers, each
+        of length CHUNK_SIZE."""
+        content = "w" * (8 * CHUNK_SIZE)
+        chunks = chunk_exchanges(content)
+        assert len(chunks) == 8
+        assert all(len(c["content"]) == CHUNK_SIZE for c in chunks)
+
+    def test_paragraph_loop_preserves_slice_order(self):
+        """Slices must appear in source order. Guards against a future
+        regression where the helper reverses, shuffles, or duplicates
+        slices — the verbatim invariant in CLAUDE.md depends on order
+        as well as content."""
+        content = "a" * CHUNK_SIZE + "b" * CHUNK_SIZE + "c" * CHUNK_SIZE
+        chunks = chunk_exchanges(content)
+        assert len(chunks) == 3
+        assert chunks[0]["content"] == "a" * CHUNK_SIZE
+        assert chunks[1]["content"] == "b" * CHUNK_SIZE
+        assert chunks[2]["content"] == "c" * CHUNK_SIZE
+
+
+class TestEmitBounded:
+    """Direct unit tests for the chunk-size-enforcement helper."""
+
+    def test_emits_no_oversized_chunks(self):
+        chunks = []
+        _emit_bounded(chunks, "abc" * 20, chunk_size=10, min_chunk_size=0)
+        assert all(len(c["content"]) <= 10 for c in chunks)
+
+    def test_assigns_sequential_chunk_indices(self):
+        chunks = []
+        _emit_bounded(chunks, "x" * 25, chunk_size=10, min_chunk_size=0)
+        assert [c["chunk_index"] for c in chunks] == [0, 1, 2]
+
+    def test_continues_existing_chunk_index(self):
+        chunks = [{"content": "pre-existing entry", "chunk_index": 0}]
+        _emit_bounded(chunks, "y" * 5, chunk_size=10, min_chunk_size=0)
+        assert len(chunks) == 2
+        assert chunks[1]["chunk_index"] == 1
+
+    def test_empty_content_noop(self):
+        chunks = []
+        _emit_bounded(chunks, "", chunk_size=10, min_chunk_size=0)
+        assert chunks == []
+
+    def test_small_trailing_slice_preserved(self):
+        """Once the whole content passes the floor, every slice is emitted
+        verbatim so small trailing remainders are not silently dropped.
+        Regression test for the data-loss class flagged on PR #1538."""
+        chunks = []
+        _emit_bounded(chunks, "z" * 23, chunk_size=10, min_chunk_size=5)
+        assert len(chunks) == 3
+        assert [len(c["content"]) for c in chunks] == [10, 10, 3]
+        assert "".join(c["content"] for c in chunks) == "z" * 23
+
+    def test_trailing_whitespace_slice_preserved_when_whole_passes(self):
+        """When the whole content passes the floor, a trailing
+        whitespace-only slice is preserved verbatim rather than dropped.
+        The floor is a noise filter on the WHOLE input, not a per-slice gate."""
+        chunks = []
+        _emit_bounded(chunks, "a" * 10 + " " * 10, chunk_size=10, min_chunk_size=5)
+        assert len(chunks) == 2
+        assert chunks[0]["content"] == "a" * 10
+        assert chunks[1]["content"] == " " * 10
+
+    def test_whole_content_below_floor_dropped(self):
+        """The floor is applied to the stripped whole content. An all-whitespace
+        input (stripped length 0) or a too-short input is dropped without slicing."""
+        chunks = []
+        _emit_bounded(chunks, " " * 100, chunk_size=10, min_chunk_size=5)
+        _emit_bounded(chunks, "ab", chunk_size=10, min_chunk_size=5)
+        assert chunks == []
+
+    def test_split_805_chars_at_chunk_size_800_preserves_tail(self):
+        """805 chars at chunk_size=800 produces a 5-char tail. With the
+        whole-content floor (not per-slice), the 5-char tail is preserved
+        verbatim. Directly addresses the data-loss scenario raised on PR #1538."""
+        chunks = []
+        _emit_bounded(chunks, "y" * 805, chunk_size=800, min_chunk_size=30)
+        assert len(chunks) == 2
+        assert chunks[0]["content"] == "y" * 800
+        assert chunks[1]["content"] == "y" * 5
+        assert "".join(c["content"] for c in chunks) == "y" * 805
 
 
 class TestDetectConvoRoom:
@@ -258,7 +411,7 @@ class TestFileChunksLocked:
         col = FakeCol()
         monkeypatch.setattr(convo_miner, "DRAWER_UPSERT_BATCH_SIZE", 2)
         monkeypatch.setattr(
-            convo_miner, "file_already_mined", lambda collection, source_file: False
+            convo_miner, "file_already_mined", lambda collection, source_file, **kwargs: False
         )
         monkeypatch.setattr(convo_miner, "mine_lock", lambda source_file: contextlib.nullcontext())
         monkeypatch.setattr(convo_miner, "_detect_hall_cached", lambda content: "conversations")

@@ -63,9 +63,9 @@ class TestTunnelStorage:
         assert file_mode == 0o600, f"tunnels.json mode is {oct(file_mode)}, expected 0o600"
 
         parent_mode = stat.S_IMODE(os.stat(tunnel_file.parent).st_mode)
-        assert (
-            parent_mode == 0o700
-        ), f"tunnels.json parent dir mode is {oct(parent_mode)}, expected 0o700"
+        assert parent_mode == 0o700, (
+            f"tunnels.json parent dir mode is {oct(parent_mode)}, expected 0o700"
+        )
 
 
 class TestExplicitTunnels:
@@ -548,3 +548,159 @@ class TestHyphenatedWingNormalization:
 
         assert len(palace_graph.follow_tunnels("mempalace_public", "auth")) == 1
         assert len(palace_graph.follow_tunnels("mempalace-public", "auth")) == 1
+
+
+class TestEntityTunnels:
+    """Cross-wing entity tunnels (the Wing → Drawer-entities → Hallway →
+    Tunnel sequence from the v4 architecture vision).
+
+    When an entity has within-wing hallways in two or more wings, an entity
+    tunnel bridges those wings, anchored on the entity. This is the
+    architectural counterpart to ``compute_topic_tunnels`` — same storage,
+    same dedup, but the substrate is hallway records (entity-grounded)
+    rather than raw topic words.
+
+    Endpoints use the synthetic room id ``entity:<name>`` so they can't
+    collide with literal folder-derived rooms of the same name (mirrors
+    the ``topic:<name>`` convention).
+
+    Topic tunnels are NOT removed by this work — both systems run in
+    parallel for one release cycle so existing palaces don't lose
+    tunnels between mines. Deprecation is a separate follow-up PR.
+    """
+
+    def test_entity_tunnels_creates_cross_wing_tunnel_for_shared_entity(
+        self, tmp_path, monkeypatch
+    ):
+        """Ben appears in a hallway in wing_aya AND in wing_mempalace →
+        exactly one entity tunnel between those two wings, anchored on Ben."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        hallways = [
+            {"wing": "wing_aya", "entity_a": "Ben", "entity_b": "Aya"},
+            {"wing": "wing_mempalace", "entity_a": "Ben", "entity_b": "Igor"},
+        ]
+        created = palace_graph.entity_tunnels_for_wing("wing_aya", hallways)
+        assert len(created) == 1
+        tunnel = created[0]
+        assert {tunnel["source"]["wing"], tunnel["target"]["wing"]} == {
+            "wing_aya",
+            "wing_mempalace",
+        }
+        # Endpoint is the synthetic entity room — same casing as the
+        # stored entity, prefixed with ``entity:`` to prevent collision
+        # with a literal folder room of the same name.
+        assert tunnel["source"]["room"] == "entity:Ben"
+        assert tunnel["target"]["room"] == "entity:Ben"
+        assert tunnel["kind"] == "entity"
+        # Label carries the entity name without the prefix.
+        assert "Ben" in tunnel["label"]
+        assert "entity:Ben" not in tunnel["label"]
+
+    def test_entity_tunnels_skips_entities_in_only_one_wing(self, tmp_path, monkeypatch):
+        """Aya has hallways only in wing_aya → no tunnel for her."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        hallways = [
+            {"wing": "wing_aya", "entity_a": "Aya", "entity_b": "Lumi"},
+            {"wing": "wing_aya", "entity_a": "Aya", "entity_b": "Ever"},
+        ]
+        created = palace_graph.entity_tunnels_for_wing("wing_aya", hallways)
+        assert created == []
+
+    def test_entity_tunnels_counts_entity_in_either_pair_position(self, tmp_path, monkeypatch):
+        """Entity may appear as entity_a in one hallway and entity_b in
+        another. Both positions count toward 'this entity is in this wing'."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        hallways = [
+            # Ben is entity_b in wing_aya
+            {"wing": "wing_aya", "entity_a": "Aya", "entity_b": "Ben"},
+            # Ben is entity_a in wing_mempalace
+            {"wing": "wing_mempalace", "entity_a": "Ben", "entity_b": "Igor"},
+        ]
+        created = palace_graph.entity_tunnels_for_wing("wing_aya", hallways)
+        assert len(created) == 1
+        assert "Ben" in created[0]["label"]
+
+    def test_entity_tunnels_three_wings_pairwise_from_focus_wing(self, tmp_path, monkeypatch):
+        """When Ben has hallways in {wing_aya, wing_mp, wing_lt} and we
+        compute for wing_aya, we create wing_aya↔wing_mp AND wing_aya↔wing_lt
+        only — NOT wing_mp↔wing_lt. The cross-wing tunnel between the two
+        other wings is the job of whichever of those two mines next.
+        """
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        hallways = [
+            {"wing": "wing_aya", "entity_a": "Ben", "entity_b": "Aya"},
+            {"wing": "wing_mempalace", "entity_a": "Ben", "entity_b": "Igor"},
+            {"wing": "wing_lantern", "entity_a": "Ben", "entity_b": "Lumi"},
+        ]
+        created = palace_graph.entity_tunnels_for_wing("wing_aya", hallways)
+        assert len(created) == 2
+        target_wings = set()
+        for t in created:
+            other = (
+                t["target"]["wing"] if t["source"]["wing"] == "wing_aya" else t["source"]["wing"]
+            )
+            target_wings.add(other)
+        assert target_wings == {"wing_mempalace", "wing_lantern"}
+
+    def test_entity_tunnels_idempotent_on_rerun(self, tmp_path, monkeypatch):
+        """Re-running on the same hallway data must not duplicate tunnels.
+        ``create_tunnel`` dedup-on-canonical-id is the guarantee — this test
+        pins the contract."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        hallways = [
+            {"wing": "wing_aya", "entity_a": "Ben", "entity_b": "Aya"},
+            {"wing": "wing_mempalace", "entity_a": "Ben", "entity_b": "Igor"},
+        ]
+        palace_graph.entity_tunnels_for_wing("wing_aya", hallways)
+        palace_graph.entity_tunnels_for_wing("wing_aya", hallways)
+        listed = palace_graph.list_tunnels()
+        # Only one stored tunnel even after two passes.
+        entity_tunnels = [t for t in listed if t.get("kind") == "entity"]
+        assert len(entity_tunnels) == 1
+
+    def test_entity_tunnels_retrievable_via_list_tunnels(self, tmp_path, monkeypatch):
+        """Once written, entity tunnels appear in the standard
+        ``list_tunnels`` query — readers don't need a separate API."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        hallways = [
+            {"wing": "wing_aya", "entity_a": "Ben", "entity_b": "Aya"},
+            {"wing": "wing_mempalace", "entity_a": "Ben", "entity_b": "Igor"},
+        ]
+        created = palace_graph.entity_tunnels_for_wing("wing_aya", hallways)
+        listed = palace_graph.list_tunnels()
+        assert {t["id"] for t in listed} == {t["id"] for t in created}
+
+    def test_entity_tunnels_empty_hallways_is_noop(self, tmp_path, monkeypatch):
+        """No hallways → no tunnels. No crash."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        assert palace_graph.entity_tunnels_for_wing("wing_aya", []) == []
+
+    def test_entity_tunnels_unknown_wing_is_noop(self, tmp_path, monkeypatch):
+        """Wing that doesn't appear in any hallway → no tunnels (the wing
+        has no entities to bridge from)."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        hallways = [
+            {"wing": "wing_other", "entity_a": "Ben", "entity_b": "Aya"},
+        ]
+        assert palace_graph.entity_tunnels_for_wing("wing_nonexistent", hallways) == []
+
+    def test_entity_tunnel_room_does_not_collide_with_literal_room(self, tmp_path, monkeypatch):
+        """A literal folder room ``Ben`` (created via explicit tunnel) and the
+        synthetic entity room ``entity:Ben`` must produce distinct tunnels —
+        not get deduped together by id collision."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        # Pre-create an explicit tunnel with a literal "Ben" room.
+        palace_graph.create_tunnel(
+            "wing_aya", "Ben", "wing_mempalace", "Ben", label="literal", kind="explicit"
+        )
+        hallways = [
+            {"wing": "wing_aya", "entity_a": "Ben", "entity_b": "Aya"},
+            {"wing": "wing_mempalace", "entity_a": "Ben", "entity_b": "Igor"},
+        ]
+        palace_graph.entity_tunnels_for_wing("wing_aya", hallways)
+        listed = palace_graph.list_tunnels()
+        # Two distinct tunnels: one literal "Ben" → "Ben", one
+        # "entity:Ben" → "entity:Ben". Different canonical IDs.
+        assert len(listed) == 2
+        kinds = {t.get("kind") for t in listed}
+        assert kinds == {"explicit", "entity"}
