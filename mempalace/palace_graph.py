@@ -230,7 +230,7 @@ def build_graph(col=None, config=None):
             pg_result = _build_graph_postgres(col, config)
         except Exception as e:
             logger.warning(
-                "palace_graph: postgres aggregate path failed (%s); " "falling back to row walk.",
+                "palace_graph: postgres aggregate path failed (%s); falling back to row walk.",
                 e,
             )
             pg_result = None
