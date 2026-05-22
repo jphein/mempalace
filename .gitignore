@@ -52,3 +52,5 @@ scratch/
 # Local benchmark artifacts (large jsonl dumps, per-question stdout)
 benchmarks/c_beta/*.jsonl
 benchmarks/c_beta/*.stdout
+
+.review-logs

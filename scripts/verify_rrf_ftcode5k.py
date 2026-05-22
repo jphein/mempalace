@@ -203,7 +203,7 @@ def main(argv=None):
             args.strategy, strategy_fn, corpus, palace_a, probes, args.n_results
         )
         print(
-            f"  drawers: {run_default['drawer_count']}  MRR: {run_default['mrr']:.4f}  ({time.time()-t0:.1f}s)"
+            f"  drawers: {run_default['drawer_count']}  MRR: {run_default['mrr']:.4f}  ({time.time() - t0:.1f}s)"
         )
         print()
 
@@ -218,7 +218,7 @@ def main(argv=None):
             args.strategy, strategy_fn, corpus, palace_b, probes, args.n_results
         )
         print(
-            f"  drawers: {run_ftcode['drawer_count']}  MRR: {run_ftcode['mrr']:.4f}  ({time.time()-t0:.1f}s)"
+            f"  drawers: {run_ftcode['drawer_count']}  MRR: {run_ftcode['mrr']:.4f}  ({time.time() - t0:.1f}s)"
         )
         print()
     finally:

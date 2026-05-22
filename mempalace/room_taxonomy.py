@@ -80,7 +80,7 @@ def validate_room(room: str) -> List[str]:
         # Empty room string is its own pathology — callers should
         # validate non-empty before calling us, but be defensive.
         return [
-            "room is empty; canonical rooms are " f"[{', '.join(CANONICAL_ROOMS)}]. Accepted as-is."
+            f"room is empty; canonical rooms are [{', '.join(CANONICAL_ROOMS)}]. Accepted as-is."
         ]
     if is_canonical_room(room):
         return []
@@ -93,6 +93,4 @@ def validate_room(room: str) -> List[str]:
             f"[{canonical_list}]. Accepted as-is; "
             f"consider {suggestion!r} as the closest canonical match."
         ]
-    return [
-        f"room {room!r} is not in the canonical taxonomy " f"[{canonical_list}]. Accepted as-is."
-    ]
+    return [f"room {room!r} is not in the canonical taxonomy [{canonical_list}]. Accepted as-is."]
