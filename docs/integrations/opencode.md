@@ -145,6 +145,23 @@ plugin — which is why this fork ships its own plugin (Option A).
 Re-apply both patches after `npm update opencode-plugin-mempalace` (they
 are idempotent — `patch --dry-run` first to confirm).
 
+#### Patch target gotcha — opencode caches plugins independently of npm
+
+OpenCode does **not** run plugins from `~/.npm-global/lib/node_modules/`.
+On first use it copies the package into
+`~/.cache/opencode/packages/opencode-plugin-mempalace@latest/` and runs
+from there. Patching the global npm install has **no effect** on the
+copy OpenCode actually executes. To make the patches stick:
+
+```bash
+patch -d ~/.cache/opencode/packages/opencode-plugin-mempalace@latest/dist \
+  < $REPO/examples/opencode/option-k-plugin-daemon-routing.patch
+patch -d ~/.cache/opencode/packages/opencode-plugin-mempalace@latest/dist \
+  < $REPO/examples/opencode/option-k-plugin-message-updated.patch
+```
+
+Re-apply if the cache is cleared or the version pin moves.
+
 ### 5. Retrospective backfill
 
 After install, ingest historical OpenCode sessions in one shot using the
@@ -219,6 +236,20 @@ After setup, in any OpenCode session:
 Expected: agent calls the tool and reports drawer count + wing list. If you see "no palace found" or auth errors, check that the wrapper script can read `~/.config/palace-daemon/env`.
 
 To confirm live-capture is firing, watch `mempalace status` over a few minutes of OpenCode use — drawer count should increment.
+
+### What "looks like an error but isn't"
+
+OpenCode launched from this repo root logs the following on session start. None of these are errors despite ERROR-level appearance:
+
+| Log line | What it is |
+|---|---|
+| `mcp stderr: palace-daemon: connected at http://disks.jphe.in:8085` | The bridge announcing it found the daemon. Good. |
+| (Older sessions) `mcp stderr: routing → local palace @ ~/.mempalace/palace` | Pre-2026-05-21 behavior. Indicates the spawn was opening the legacy local palace. Fixed by clearing the repo `.opencode/opencode.json` `mcp` block. If you still see it, your repo checkout is on an older commit — `git pull`. |
+| (Older sessions) `mcp stderr: HNSW capacity divergence detected` | Same root cause as the line above — the bridge was opening the legacy local ChromaDB store whose HNSW index lagged its sqlite. Gone after the local palace was archived to `~/.mempalace/palace.retired-pre-pgcutover-2026-05-14/` and the `~/.mempalace/RETIRED` marker was added. |
+
+### If you see a different palace count
+
+If `mempalace_status` (via MCP) and `mempalace status` (via CLI) disagree on drawer count, you're hitting two different palaces. Common cause: the CLI ran from a shell without `PALACE_DAEMON_URL` exported, so it tried the local palace. On this fork the local palace is intentionally retired; the CLI will print the `~/.mempalace/RETIRED` marker text telling you to set `PALACE_DAEMON_URL`. If it shows a real drawer count instead of the retire message, you're running an older `mempalace` install (pre-2026-05-22) — pull main + restart the daemon.
 
 ## Coordination notes
 

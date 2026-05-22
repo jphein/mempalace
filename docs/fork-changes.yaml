@@ -24,6 +24,152 @@
 
 entries:
 
+  - id: local-palace-retired-marker
+    date: 2026-05-22
+    bucket: Added
+    commit: 798cf14
+    area: Reliability
+    summary: "Honor ~/.mempalace/RETIRED marker — refuse default palace, surface retire message"
+    body: |
+      Recurring confusion source on this fork: any code path that opens
+      mempalace without ``PALACE_DAEMON_URL`` set silently falls
+      through to the default chroma palace at ``~/.mempalace/palace``
+      and reports a smaller, stale drawer count. Today an opencode
+      agent ran the CLI directly and saw 24,920 drawers, then noticed
+      the daemon said 310,031 and got confused trying to reconcile —
+      the local palace was a retired pre-pgvector-cutover artifact
+      with broken HNSW.
+
+      When a user has retired their local palace in favor of a
+      daemon-routed setup, they can drop a text file at
+      ``~/.mempalace/RETIRED`` explaining the situation. Three layers
+      honor it:
+
+      - ``mempalace/mcp_server.py:_check_local_palace_retired`` —
+        ``_get_collection_chroma`` calls this at entry. If the marker
+        exists AND the configured palace path resolves to the
+        default, the open is refused; ``_no_palace`` returns a new
+        error type ``palace.local_retired`` with the marker contents
+        as the message. ``MEMPALACE_ALLOW_RETIRED_PALACE=1`` is the
+        escape hatch for forensic reads of the archived palace.
+      - ``mempalace/palace.py:_open_collection_or_explain`` — the
+        four CLI-facing "No palace found" emit sites route through a
+        new inner ``_emit_palace_missing()`` helper that checks the
+        marker first.
+      - ``mempalace/cli.py:_print_retired_local_palace_or_default`` —
+        four ``cmd_*`` paths that printed
+        ``"No palace found at ... Run: mempalace init <dir>"``
+        directly now route through the helper.
+
+      Tests: ``tests/test_local_palace_retired.py`` (4 cases —
+      default+marker triggers retired text; no-marker falls through
+      to init hint; explicit ``--palace`` ignored; escape-hatch env
+      var bypasses).
+    files:
+      - mempalace/mcp_server.py
+      - mempalace/palace.py
+      - mempalace/cli.py
+      - tests/test_local_palace_retired.py
+
+  - id: opencode-repo-config-empty-mcp
+    date: 2026-05-22
+    bucket: Fixed
+    commit: 7133eee
+    area: CLI
+    summary: "Empty repo .opencode/opencode.json mcp block — disabled flag wasn't being respected"
+    body: |
+      ``.opencode/opencode.json`` from upstream PR #1567 spawns a
+      local ``mempalace.mcp_server`` when opencode launches in the
+      repo root. On daemon-routed setups this creates **two MCP
+      servers exposing different palaces** — the user-level wrapper
+      hitting the daemon, and the repo-level spawn hitting the
+      local store. PR #108 attempted ``enabled: false`` but opencode
+      merges entries by name across configs and the repo
+      ``command`` overrode the user-level one anyway.
+
+      This PR strips the ``mcp`` block from the repo config
+      entirely. User-level wrapper becomes the sole source of truth.
+      Contributors who don't have a daemon set up can add their own
+      user-level config or a ``.opencode/opencode.local.json``
+      (gitignored).
+    supersedes:
+      - opencode-repo-mcp-disable-flag
+    files:
+      - .opencode/opencode.json
+
+  - id: opencode-repo-mcp-drop-comment-key
+    date: 2026-05-22
+    bucket: Fixed
+    commit: 637bb01
+    area: CLI
+    summary: "Drop \\$comment from .opencode/opencode.json — schema rejects unknown root keys"
+    body: |
+      Commit ``47018e5`` (PR #108) added a ``\$comment`` field to
+      ``.opencode/opencode.json`` explaining why the repo-level MCP
+      entry defaulted to ``enabled: false``. Opencode's strict
+      schema validator rejected the unknown root key with
+      ``ConfigInvalidError`` and refused to start the TUI:
+
+          Error: 4 of 5 requests failed: Unexpected server error.
+          Affected startup requests: config.providers, provider.list,
+          app.agents, config.get
+
+      JSON parses (``\$comment`` is a popular convention,
+      JSON-Schema recognizes it), but opencode doesn't allow it.
+      Removing the field unblocks startup; explanations move to
+      commit messages + PR descriptions.
+    files:
+      - .opencode/opencode.json
+
+  - id: opencode-repo-mcp-disable-flag
+    date: 2026-05-22
+    bucket: Fixed
+    commit: 47018e5
+    area: CLI
+    summary: "Disable repo-level MCP entry by default + venv-python fallback"
+    body: |
+      First attempt at the daemon-routed-vs-local-spawn double-server
+      problem from upstream PR #1567's ``.opencode/opencode.json``.
+      Set ``enabled: false`` on the repo entry; switched the spawn
+      command from bare ``python -m mempalace.mcp_server`` to
+      ``.venv/bin/python -m mempalace.mcp_server`` so a contributor
+      flipping ``enabled`` back to true would actually find mempalace
+      installed (uv-managed clones have it in the venv, not on PATH).
+
+      Superseded same-day by ``opencode-repo-config-empty-mcp``
+      (#110) — opencode's config merger doesn't actually honor
+      ``enabled: false`` for command overrides, so the entry had to
+      be stripped entirely.
+    superseded_by:
+      - opencode-repo-config-empty-mcp
+    files:
+      - .opencode/opencode.json
+
+  - id: mcp-stub-resources-prompts-list
+    date: 2026-05-21
+    bucket: Fixed
+    commit: 6ca0670
+    area: Reliability
+    summary: "Stub resources/list + prompts/list so MCP clients stop ERROR-logging on connect"
+    body: |
+      OpenCode 1.15.x and other MCP clients probe ``resources/list``
+      and ``prompts/list`` on connect to discover server
+      capabilities. mempalace's MCP server only exposes ``tools/*``;
+      these probes returned ``-32601: Unknown method``, which
+      clients log as ERROR every session. Two log-noise lines per
+      session, surfacing as scary text in opencode's TUI.
+
+      Both methods are optional per the MCP spec. Return empty
+      lists instead of the error, matching what other MCP servers
+      without resources/prompts do (e.g. server-everything, the
+      filesystem reference server).
+    tests: |
+      tests/test_mcp_server.py — two new TestProtocol cases asserting
+      empty-list shape and absence of ERROR.
+    files:
+      - mempalace/mcp_server.py
+      - tests/test_mcp_server.py
+
   - id: opencode-live-capture-plugin
     date: 2026-05-21
     bucket: Added

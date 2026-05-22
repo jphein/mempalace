@@ -157,7 +157,7 @@ Three bands of work, all instances of the principles above. Detail rows in the [
 ## Quickstart
 
 ```bash
-git clone https://github.com/jphein/mempalace.git
+git clone https://github.com/techempower-org/mempalace.git
 cd mempalace
 uv sync --extra dev          # recommended; or: python -m venv venv && pip install -e ".[dev]"
 
@@ -348,7 +348,7 @@ Built *on top of* or *alongside* MemPalace by community contributors who use the
 
 | Fork | Contributor work |
 |---|---|
-| [jphein/mempalace](https://github.com/jphein/mempalace) | this fork |
+| [techempower-org/mempalace](https://github.com/techempower-org/mempalace) | this fork (transferred from `jphein/mempalace` in May 2026) |
 | [kostadis/mempalace](https://github.com/kostadis/mempalace) | hierarchical AAAK pruning branch |
 | [fuzzymoomoo/cdd-mempalace](https://github.com/fuzzymoomoo/cdd-mempalace) | 10 comment refs; CDD integration layer |
 | [potterdigital/mempalace](https://github.com/potterdigital/mempalace) | author of upstream [#1081](https://github.com/MemPalace/mempalace/pull/1081) |
@@ -388,7 +388,7 @@ Forward-looking, in rough priority order. The substrate work is the biggest sing
 
 ```bash
 # Setup
-git clone https://github.com/jphein/mempalace.git
+git clone https://github.com/techempower-org/mempalace.git
 cd mempalace
 uv sync --extra dev                       # recommended; or pip install -e ".[dev]"
 
