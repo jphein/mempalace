@@ -846,7 +846,7 @@ regressions in non-postgres paths.
   surfaces only when a rebuild reaches the upsert path after
   extraction, which is the specific operational shape this fork's
   151K+ drawer palace has been exercising. JP's parallel-session
-  work originally landed both fixes as commit `848774c` on the
+  work originally landed both fixes on the
   `fix/repair-empty-metadata` branch (filed upstream as #1459 for
   the first slice); cherry-picked onto fork main as `949cb20` so
   both fixes are live on `jphein/mempalace` immediately.
@@ -1307,8 +1307,8 @@ config-file readback. Suite total 1562 passed.
   the contract ``convo_miner.py`` relies on (``is None`` ⇔
   "untuned") is restored.
 
-  Same fix pushed to the open #1024 PR branch as commit
-  ``df9187c`` so the bug doesn't get reintroduced when #1024
+  Same fix pushed to the open #1024 PR branch (squash-merged
+  upstream) so the bug doesn't get reintroduced when #1024
   merges. Amends fork-ahead row 17.
 
   *Tests:* 1548/1548 (was 1546/1548 with 2 isolation failures in test_convo_miner)
