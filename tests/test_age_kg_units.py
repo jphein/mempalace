@@ -562,6 +562,108 @@ def test_backfill_main_exits_nonzero_without_dsn():
     assert "--dsn" in buf.getvalue() or "dsn" in buf.getvalue().lower()
 
 
+def test_make_age_writethrough_skips_when_extractor_returns_empty():
+    """The early-return on ``not entities`` (line 104) is reached when
+    the extractor finds nothing. The KG should NOT be touched."""
+    from mempalace.kg_writethrough import make_age_writethrough
+
+    kg = MagicMock()
+    hook = make_age_writethrough(kg, lambda text: [])
+    hook(drawer_id="d1", document="content with no extractable entities", metadata={})
+    kg.add_mention.assert_not_called()
+
+
+# =============================================================================
+# backfill_age — checkpoint helpers with a connection mock
+# =============================================================================
+
+
+class _CheckpointCursor:
+    """Cursor stand-in that captures SQL + lets the test seed fetchone/rowcount."""
+
+    def __init__(self, fetchone=None, rowcount=0):
+        self.executes: list[tuple[str, tuple | None]] = []
+        self._fetchone = fetchone
+        self.rowcount = rowcount
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+    def execute(self, sql, params=None):
+        self.executes.append((sql, params))
+
+    def fetchone(self):
+        return self._fetchone
+
+
+class _CheckpointConn:
+    """Connection stand-in for backfill_age._checkpoint_* helpers."""
+
+    def __init__(self, *, fetchone=None, rowcount=0):
+        self._cursor = _CheckpointCursor(fetchone=fetchone, rowcount=rowcount)
+        self.commits = 0
+
+    def cursor(self):
+        return self._cursor
+
+    def commit(self):
+        self.commits += 1
+
+
+def test_ensure_checkpoint_table_emits_create_and_commits():
+    from mempalace.backfill_age import CHECKPOINT_TABLE, _ensure_checkpoint_table
+
+    conn = _CheckpointConn()
+    _ensure_checkpoint_table(conn)
+    sql = conn._cursor.executes[0][0]
+    assert "CREATE TABLE IF NOT EXISTS" in sql
+    assert CHECKPOINT_TABLE in sql
+    assert conn.commits == 1
+
+
+def test_checkpoint_done_returns_true_when_row_exists():
+    from mempalace.backfill_age import _checkpoint_done
+
+    conn = _CheckpointConn(fetchone=(1,))
+    assert _checkpoint_done(conn, phase="mine", key="k1") is True
+    sql, params = conn._cursor.executes[0]
+    assert "SELECT 1 FROM" in sql
+    assert params == ("mine", "k1")
+
+
+def test_checkpoint_done_returns_false_when_absent():
+    from mempalace.backfill_age import _checkpoint_done
+
+    conn = _CheckpointConn(fetchone=None)
+    assert _checkpoint_done(conn, phase="mine", key="missing") is False
+
+
+def test_checkpoint_mark_inserts_with_conflict_clause():
+    from mempalace.backfill_age import _checkpoint_mark
+
+    conn = _CheckpointConn()
+    _checkpoint_mark(conn, phase="mine", key="k1")
+    sql, params = conn._cursor.executes[0]
+    assert "INSERT INTO" in sql
+    assert "ON CONFLICT" in sql
+    assert params == ("mine", "k1")
+    assert conn.commits == 1
+
+
+def test_checkpoint_clear_deletes_and_returns_rowcount():
+    from mempalace.backfill_age import _checkpoint_clear
+
+    conn = _CheckpointConn(rowcount=7)
+    deleted = _checkpoint_clear(conn)
+    assert deleted == 7
+    sql, _ = conn._cursor.executes[0]
+    assert "DELETE FROM" in sql
+    assert conn.commits == 1
+
+
 def test_backfill_main_rejects_bad_table_name():
     """The CLI rejects identifiers that wouldn't pass ``_validate_pg_identifier``."""
     from mempalace.backfill_age import main
