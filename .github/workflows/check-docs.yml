@@ -1,0 +1,63 @@
+name: Check docs
+
+# Auto-trigger scripts/check-docs.sh whenever the fork-ahead doc surface
+# changes. Catches drift between docs/fork-changes.yaml (canonical source)
+# and the rendered FORK_CHANGELOG.md, stale commit hashes, mismatched
+# upstream PR states, and the README test count.
+#
+# Issue: techempower-org/mempalace#65
+#
+# Security note: this workflow only consumes secrets.GITHUB_TOKEN and the
+# checked-out repo contents — no untrusted event payload fields (issue
+# titles, PR bodies, commit messages) are interpolated into run blocks.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'docs/fork-changes.yaml'
+      - 'scripts/render-docs.py'
+      - 'scripts/check-docs.sh'
+      - 'FORK_CHANGELOG.md'
+      - 'README.md'
+      - 'CLAUDE.md'
+      - '.github/workflows/check-docs.yml'
+  pull_request:
+    paths:
+      - 'docs/fork-changes.yaml'
+      - 'scripts/render-docs.py'
+      - 'scripts/check-docs.sh'
+      - 'FORK_CHANGELOG.md'
+      - 'README.md'
+      - 'CLAUDE.md'
+      - '.github/workflows/check-docs.yml'
+  workflow_dispatch:
+
+jobs:
+  check-docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # check-docs.sh resolves commit hashes referenced in docs via
+          # `git cat-file -e`; needs full history, not the shallow default.
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: 'pip'
+
+      # `pip install -e ".[dev]"` pulls pytest (needed by check-docs.sh
+      # step 1 to count collected tests) and PyYAML (needed by
+      # scripts/render-docs.py to render the changelog for step 3).
+      - run: pip install -e ".[dev]"
+
+      - name: Run check-docs.sh
+        env:
+          # gh CLI is preinstalled on ubuntu-latest runners. Step 4
+          # (upstream PR state check) needs an authenticated token to
+          # query MemPalace/mempalace PR states; the default GITHUB_TOKEN
+          # works for public repo reads.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/check-docs.sh
