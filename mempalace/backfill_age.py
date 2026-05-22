@@ -65,8 +65,7 @@ _PG_IDENT_RE = _re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 def _validate_pg_identifier(name: str, field: str = "table_name") -> str:
     if not isinstance(name, str) or not _PG_IDENT_RE.match(name):
         raise ValueError(
-            f"invalid postgres identifier for {field}: {name!r}; "
-            f"must match [A-Za-z_][A-Za-z0-9_]*"
+            f"invalid postgres identifier for {field}: {name!r}; must match [A-Za-z_][A-Za-z0-9_]*"
         )
     return name
 
