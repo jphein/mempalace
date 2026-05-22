@@ -1,0 +1,66 @@
+# Daemon-routing patch for opencode-plugin-mempalace v1.2.1
+#
+# Why: option-K's plugin calls `mempalace status --palace <dir>/.mempalace/palace`
+# inside isInitialized(), which forces a local-palace lookup and bypasses
+# $PALACE_DAEMON_URL routing. On a daemon-routed setup the function always
+# returns false, so the plugin re-runs `mempalace init --yes <dir>` on every
+# OpenCode start. Wasteful but harmless — init is idempotent against the daemon.
+#
+# Filed upstream as https://github.com/option-K/opencode-plugin-mempalace/issues/1
+#
+# Apply with:
+#   patch -d ~/.npm-global/lib/node_modules/opencode-plugin-mempalace/dist \
+#     < examples/opencode/option-k-plugin-daemon-routing.patch
+#
+# Re-apply after `npm update opencode-plugin-mempalace`.
+#
+--- mempalace-cli.js.orig	2026-05-21 17:00:00.000000000 -0700
++++ mempalace-cli.js	2026-05-21 17:00:00.000000000 -0700
+@@ -1,5 +1,21 @@
+ import execa from 'execa';
+ import path from 'path';
++import { existsSync } from 'fs';
++
++// JP-PATCH 2026-05-21: skip the local-palace heuristics when running against
++// a remote palace-daemon. Detection: $PALACE_DAEMON_URL env var, or the
++// presence of ~/.config/palace-daemon/env (the canonical config file the
++// mempalace-mcp-wrapper.sh sources).
++//
++// Without this patch isInitialized() always returns false on daemon-routed
++// setups (the --palace argument forces a local lookup that bypasses
++// daemon routing), so the plugin re-runs `mempalace init --yes <dir>` on
++// every OpenCode start.
++function isDaemonRouted() {
++    if (process.env.PALACE_DAEMON_URL) return true;
++    const envFile = path.join(process.env.HOME || '', '.config/palace-daemon/env');
++    return existsSync(envFile);
++}
++
+ async function executeMempalace(args, options = {}) {
+     const defaultOptions = {
+         timeout: 5000, // 5 seconds timeout to prevent hanging
+@@ -25,6 +41,12 @@
+ }
+ export async function isInitialized(dir) {
+     try {
++        if (isDaemonRouted()) {
++            // Daemon-routed: presence of a reachable daemon === initialized.
++            // No --palace, no per-project local store check.
++            await executeMempalace(['status']);
++            return true;
++        }
+         const palacePath = path.join(dir, '.mempalace', 'palace');
+         await executeMempalace(['status', '--palace', palacePath]);
+         return true;
+@@ -35,6 +57,12 @@
+ }
+ export async function initialize(dir) {
+     try {
++        if (isDaemonRouted()) {
++            // Daemon-routed: the daemon owns palace state globally. Init is a
++            // no-op from the plugin's perspective.
++            return;
++        }
+         await executeMempalace(['init', '--yes', dir], { input: '\n' });
+     }
+     catch (error) {

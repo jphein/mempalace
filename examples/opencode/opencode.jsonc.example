@@ -1,0 +1,32 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  // Provider/model — set to whatever you actually use; the example uses
+  // bedrock as that's how this fork's author runs it.
+  "provider": {
+    "amazon-bedrock": {
+      "options": {
+        "region": "us-west-1"
+      }
+    }
+  },
+  "model": "amazon-bedrock/us.anthropic.claude-opus-4-7",
+
+  // === MemPalace via palace-daemon ===
+  // Read-side MCP — agents can call mempalace_search / mempalace_kg_query / etc.
+  // The wrapper sources ~/.config/palace-daemon/env (mode 600) before exec'ing
+  // the daemon's stdio bridge, so PALACE_API_KEY never lands in this config.
+  "mcp": {
+    "mempalace": {
+      "type": "local",
+      "command": ["/home/<user>/Projects/palace-daemon/clients/mempalace-mcp-wrapper.sh"],
+      "enabled": true
+    }
+  },
+
+  // Push-side live capture — option-K's npm plugin. After install:
+  //   npm install -g opencode-plugin-mempalace
+  // Optional: pass { "threshold": N } as the second tuple element to override
+  // the default 15-message mining cadence.
+  "plugin": ["opencode-plugin-mempalace"]
+}

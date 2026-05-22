@@ -18,6 +18,74 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-05-21]
+
+
+### Added
+
+
+- **.opencode/opencode.json — repo-root MCP config so opencode picks up mempalace automatically** ([`ba16b82`](https://github.com/jphein/mempalace/commit/ba16b82))
+  Cherry-pick of upstream PR #1567 (Dxrk777). Adds
+  `.opencode/opencode.json` so that running `opencode` in the
+  mempalace repo root automatically wires `mempalace` as a local
+  MCP server — useful for contributors who use OpenCode for
+  development on the project itself.
+
+  Two-commit cherry-pick:
+
+  - `013ac63` — initial config with `command: ["mempalace-mcp"]`
+  - `ba16b82` — gemini-code-assist review feedback: switch to
+    `command: ["python", "-m", "mempalace.mcp_server"]` for
+    portability across install methods (pip vs uv vs dev install)
+
+  This is the **dev/contributor surface** — it lives in the repo
+  and only matters when running OpenCode against the repo root.
+  Per-user setups should use `~/.config/opencode/opencode.jsonc`
+  with the daemon-aware wrapper (see `docs/integrations/opencode.md`).
+
+  *Upstream:* [PR #1567](https://github.com/MemPalace/mempalace/pull/1567) (OPEN)
+  *Files:* `.opencode/opencode.json`
+
+
+- **OpenCodeSourceAdapter (RFC 002) — retrospective ingest of OpenCode SQLite sessions** ([`2ffe652`](https://github.com/jphein/mempalace/commit/2ffe652))
+  Cherry-pick of upstream PR #1484. Adds
+  `mempalace/sources/opencode.py` — an RFC 002 `BaseSourceAdapter`
+  that ingests OpenCode AI-coding-CLI session transcripts from
+  `~/.local/share/opencode/opencode.db` into the palace, formatted
+  to match `convo_miner`'s exchange-pair drawer shape.
+
+  Five-commit cherry-pick:
+
+  - `2c368c6` — initial adapter (482-line `opencode.py`, 6
+    opencode-namespaced reference transformations in
+    `transforms.py`, entry-point registration, 28 tests, sample
+    SQLite-schema-verbatim fixture)
+  - `3ff7043` — gemini-code-assist review fixes: missing
+    `opencode_session_version` in metadata (broke incremental
+    `is_current`), `_skip_requested` private access, `filed_at`
+    hoisted out of chunk loop, PEP 8 import position
+  - `9531532` — igorls review fixes: ruff F401/E402 in tests,
+    route-hint wing/drawer-stage precedence mismatch (RFC 002 §2.5),
+    unjustified `# noqa` cleanup
+  - `18ab021` + `2ffe652` — CI ruff 0.4.x format passes
+
+  Adapter conformance via RFC 002 §7.3 declared-transformation
+  round-trip; one drawer per exchange-pair; `source_file` shape
+  `opencode://<absolute-db-path>#session=<sid>`; wing routes from
+  `session.directory` basename (matching the live-capture plugin's
+  taxonomy); incremental ingest works via `opencode_session_version`.
+
+  Originated from JakobSachs's spadework on upstream PR #23 (DB
+  schema reverse engineering, session/message/part traversal,
+  tool-input/tool-output stripping). PR #23 is still OPEN but
+  CONFLICTING and unresponsive since 2026-04-08; #1484 carries
+  `Co-authored-by: JakobSachs` per coordination on #23.
+
+  *Tests:* 28 OpenCode adapter tests pass; full suite 2133 passed / 33 skipped (zero regressions on fork main + 60-commit upstream sync baseline)
+  *Upstream:* [PR #1484](https://github.com/MemPalace/mempalace/pull/1484) (OPEN)
+  *Files:* `mempalace/sources/opencode.py`, `mempalace/sources/transforms.py`, `mempalace/sources/context.py`, `pyproject.toml`, `tests/test_sources_opencode.py`, `tests/fixtures/opencode/sample_session_2026_05_12/README.md`, `tests/fixtures/opencode/sample_session_2026_05_12/build_fixture.py`, `tests/test_corpus_origin_integration.py`
+
+
 ## [2026-05-11]
 
 
@@ -1008,17 +1076,10 @@ config-file readback. Suite total 1562 passed.
   and ``os.path.getmtime()`` to file-level (2 syscalls per file instead
   of 2N). Reported 10–30× mining speedup upstream. Fork-side resolution
   preserved fork's existing ``DRAWER_UPSERT_BATCH_SIZE=1000``; aliased
-  upstream's ``CHROMA_BATCH_LIMIT`` to it.
+  upstream's ``CHROMA_BATCH_LIMIT`` to it. Becomes a no-op when #1085
+  merges to develop and we next sync.
 
-  **2026-05-16 update:** upstream #1085 was closed 2026-05-05 by
-  @midweste, superseded by [#1185](https://github.com/MemPalace/mempalace/pull/1185)
-  ("perf(mining): batch per-chunk upserts + optional GPU acceleration")
-  which **merged to develop on 2026-04-24** (wider scope: same batch-
-  insert path plus optional GPU acceleration). Our cherry-pick is now
-  functionally redundant with develop; safe to drop on the next
-  upstream sync. See techempower-org/mempalace#36.
-
-  *Upstream:* [PR #1085](https://github.com/MemPalace/mempalace/pull/1085) (CLOSED) — superseded by [PR #1185](https://github.com/MemPalace/mempalace/pull/1185) (MERGED)
+  *Upstream:* [PR #1085](https://github.com/MemPalace/mempalace/pull/1085) (OPEN)
   *Files:* `mempalace/miner.py`
 
 
