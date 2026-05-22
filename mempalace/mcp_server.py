@@ -1453,11 +1453,14 @@ def tool_add_drawer(
                 )
             _metadata_cache = None
             logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
+            for _w in warnings:
+                logger.warning("room taxonomy: %s (drawer=%s)", _w, drawer_id)
             return {
                 "success": True,
                 "drawer_id": drawer_id,
                 "wing": wing,
                 "room": room,
+                "warnings": warnings,
                 "chunks": 1,
             }
 
