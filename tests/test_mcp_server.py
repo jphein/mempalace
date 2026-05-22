@@ -537,6 +537,27 @@ class TestHandleRequest:
         assert "mempalace_add_drawer" in names
         assert "mempalace_kg_add" in names
 
+    def test_resources_list_returns_empty_not_error(self):
+        """MCP clients (OpenCode 1.15.x, others) probe ``resources/list`` on
+        connect. We don't expose any resources — the palace surfaces drawers
+        via ``tools/call`` — but return ``{resources: []}`` rather than
+        ``-32601`` so the client doesn't log an ERROR every session."""
+        from mempalace.mcp_server import handle_request
+
+        resp = handle_request({"method": "resources/list", "id": 7, "params": {}})
+        assert "error" not in resp
+        assert resp["result"] == {"resources": []}
+
+    def test_prompts_list_returns_empty_not_error(self):
+        """Same rationale as ``test_resources_list_returns_empty_not_error``:
+        ``prompts/list`` is an optional MCP method some clients probe on
+        connect; returning an empty list quiets the noise."""
+        from mempalace.mcp_server import handle_request
+
+        resp = handle_request({"method": "prompts/list", "id": 8, "params": {}})
+        assert "error" not in resp
+        assert resp["result"] == {"prompts": []}
+
     def test_null_arguments_does_not_hang(self, monkeypatch, config, palace_path, seeded_kg):
         """Sending arguments: null should return a result, not hang (#394)."""
         _patch_mcp_server(monkeypatch, config, seeded_kg)
