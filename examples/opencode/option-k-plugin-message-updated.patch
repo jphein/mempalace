@@ -1,0 +1,50 @@
+# Patch for opencode-plugin-mempalace v1.2.1 — Fix 2 of 2 (message hook)
+#
+# File: index.js
+# Why: the plugin registers a `'chat.message'` hook to increment a message
+# counter that gates session.idle mining. opencode publishes `message.updated`
+# (and `message.part.updated`, `session.updated`, etc.) but **never**
+# `chat.message` — verified by inspecting the published bus types in
+# ~/.local/share/opencode/log/. With chat.message never firing, the counter
+# stays at 0, `hasPendingMessages` returns false on every session.idle, and
+# the plugin **never actually mines a drawer**. The plugin appears "working"
+# (no errors, MCP connects, LLM responses stream) but writes nothing to the
+# palace. Symptom: drawer count baseline == drawer count after a normal
+# opencode session.
+#
+# This patch moves the increment into the `event:` catch-all so it runs on
+# `message.updated`. The existing 15-message threshold absorbs the per-token
+# streaming chatter (one increment per assistant message update, not per
+# token). The dead `chat.message` hook below is left in place — harmless,
+# and removing it would create a noisier diff that's harder to reapply.
+#
+# Filed upstream as https://github.com/option-K/opencode-plugin-mempalace/issues/2
+#
+# Apply with:
+#   patch -d ~/.npm-global/lib/node_modules/opencode-plugin-mempalace/dist \
+#     < examples/opencode/option-k-plugin-message-updated.patch
+#
+# Re-apply after `npm update opencode-plugin-mempalace`.
+#
+# Companion patch for the daemon-routing bug is at
+# examples/opencode/option-k-plugin-daemon-routing.patch
+#
+--- index.js.orig	2026-05-21 18:00:00.000000000 -0700
++++ index.js	2026-05-21 18:00:00.000000000 -0700
+@@ -61,6 +61,16 @@
+     });
+     return {
+         event: async ({ event }) => {
++            // JP-PATCH 2026-05-21: count opencode's real message events into the
++            // threshold. The plugin's existing 'chat.message' hook (below) is
++            // dead — opencode publishes 'message.updated' not 'chat.message'.
++            // Without this, hasPendingMessages() returns false on every
++            // session.idle and the plugin never mines.
++            if (event.type === 'message.updated') {
++                const sessionID = event.properties?.sessionID || event.properties?.info?.sessionID || event.properties?.info?.id;
++                if (sessionID)
++                    stateManager.incrementAndCheck(sessionID);
++            }
+             if (event.type === 'session.idle' ||
+                 event.type === 'session.deleted' ||
+                 (event.type === 'session.status' && event.properties?.status?.type === 'idle')) {
