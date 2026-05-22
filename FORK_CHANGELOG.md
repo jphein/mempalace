@@ -24,6 +24,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Bundled OpenCode live-capture plugin that bypasses option-K v1.2.1 bugs (filed upstream as #4, #5)** ([`5522623`](https://github.com/jphein/mempalace/commit/5522623))
+  Adds `examples/opencode/live-capture/` — a self-contained
+  OpenCode plugin (JS) + Python helper that POSTs verbatim
+  session transcripts to the daemon's `/silent-save` endpoint on
+  every `session.idle`.
+
+  Background: while documenting the integration recipe
+  (`opencode-integration-recipe` below), end-to-end testing
+  revealed that the upstream option-K
+  [`opencode-plugin-mempalace`](https://www.npmjs.com/package/opencode-plugin-mempalace)
+  v1.2.1 cannot actually push drawers in a daemon-routed setup —
+  two compounding bugs, both filed upstream:
+
+  - [option-K#4](https://github.com/option-K/opencode-plugin-mempalace/issues/4):
+    The plugin subscribes to `chat.message`, which OpenCode never
+    publishes. The message counter never increments, `session.idle`
+    sees `hasPendingMessages() === false`, and **the plugin never
+    mines a drawer**. Verified by inspecting bus types in
+    `~/.local/share/opencode/log/*.log` against the canonical event
+    taxonomy at [opencode.ai/docs/plugins](https://opencode.ai/docs/plugins).
+  - [option-K#5](https://github.com/option-K/opencode-plugin-mempalace/issues/5):
+    Even with #4 patched, `mineSync` calls `mempalace mine <dir>`,
+    which the *remote* daemon evaluates against ITS OWN filesystem.
+    For multi-host setups (palace-daemon on a different machine
+    from OpenCode), the daemon returns 400 because the local
+    path doesn't exist on its filesystem.
+
+  The bundled plugin sidesteps both by:
+
+  1. Subscribing to `session.idle` / `session.deleted` /
+     `session.status[idle]` directly (no message counter).
+  2. Reading OpenCode's local SQLite session DB client-side.
+  3. POSTing the extracted transcript to the daemon's
+     `/silent-save` endpoint (the same endpoint MemPalace's
+     Claude Code stop hook uses).
+
+  The Python helper imports `_extract_session_messages` and
+  `_session_transcript` from `mempalace/sources/opencode.py` so
+  the transcript shape matches `OpenCodeSourceAdapter` exactly.
+
+  Also splits the previously combined option-K patch into two
+  independently-applicable files:
+
+  - `examples/opencode/option-k-plugin-daemon-routing.patch` —
+    Fix 1 (option-K#1, `isInitialized()` daemon detection).
+  - `examples/opencode/option-k-plugin-message-updated.patch` —
+    Fix 2 (option-K#4, `chat.message` → `message.updated`).
+
+  `docs/integrations/opencode.md` now documents both deployment
+  options (bundled plugin for remote-daemon, option-K plugin +
+  patches for local palaces).
+
+  *Files:* `examples/opencode/live-capture/mempalace-live-capture.js`, `examples/opencode/live-capture/capture-session.py`, `examples/opencode/option-k-plugin-daemon-routing.patch`, `examples/opencode/option-k-plugin-message-updated.patch`, `docs/integrations/opencode.md`
+
+
 - **Documented OpenCode integration recipe (read-side MCP + push plugin + retrospective adapter)** ([`60dc9e6`](https://github.com/jphein/mempalace/commit/60dc9e6))
   Adds `docs/integrations/opencode.md` and an `examples/opencode/`
   directory capturing the three-direction OpenCode + MemPalace

@@ -27,6 +27,7 @@ entries:
   - id: opencode-live-capture-plugin
     date: 2026-05-21
     bucket: Added
+    commit: 5522623
     area: CLI
     summary: "Bundled OpenCode live-capture plugin that bypasses option-K v1.2.1 bugs (filed upstream as #4, #5)"
     body: |
