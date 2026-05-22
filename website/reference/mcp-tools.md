@@ -56,6 +56,7 @@ Semantic search. Returns verbatim drawer content with similarity scores.
 | `limit` | integer | No | Max results (default: 5) |
 | `wing` | string | No | Filter by wing |
 | `room` | string | No | Filter by room |
+| `tags` | array of string | No | Only return drawers carrying ALL of these tags (AND logic) |
 
 **Returns:** `{ query, filters, results: [{ drawer_id, text, wing, room, topic, source_file, created_at, similarity, distance, matched_via }] }` — `drawer_id` lets callers feed the hit into `mempalace_get_drawer` (citation popovers, link-out with real target).
 
@@ -97,8 +98,9 @@ File verbatim content into the palace. Identical content (same deterministic dra
 | `content` | string | **Yes** | Verbatim content to store |
 | `source_file` | string | No | Where this came from |
 | `added_by` | string | No | Who is filing (default: "mcp") |
+| `tags` | array of string | No | Cross-cutting labels (lower-cased, spaces → hyphens) |
 
-**Returns:** `{ success, drawer_id, wing, room }`
+**Returns:** `{ success, drawer_id, wing, room, tags }`
 
 ---
 
@@ -142,12 +144,13 @@ Fetch a single drawer by ID — returns full content and metadata.
 
 ### `mempalace_list_drawers`
 
-List drawers with pagination. Optional wing/room filter. Returns IDs, wings, rooms, and content previews.
+List drawers with pagination. Optional wing/room/tag filter. Returns IDs, wings, rooms, tags, and content previews.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `wing` | string | No | Filter by wing |
 | `room` | string | No | Filter by room |
+| `tags` | array of string | No | Only list drawers carrying ALL of these tags |
 | `limit` | integer | No | Max results per page (default 20, max 100) |
 | `offset` | integer | No | Offset for pagination (default 0) |
 
@@ -157,7 +160,7 @@ List drawers with pagination. Optional wing/room filter. Returns IDs, wings, roo
 
 ### `mempalace_update_drawer`
 
-Update an existing drawer's content and/or metadata (wing, room). Fetches the existing drawer first; returns an error if not found.
+Update an existing drawer's content and/or metadata (wing, room, tags). Fetches the existing drawer first; returns an error if not found.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -165,8 +168,23 @@ Update an existing drawer's content and/or metadata (wing, room). Fetches the ex
 | `content` | string | No | New content (omit to keep existing) |
 | `wing` | string | No | New wing (omit to keep existing) |
 | `room` | string | No | New room (omit to keep existing) |
+| `tags` | array of string | No | Replace the drawer's tag list (pass `[]` to clear; omit to leave untouched) |
 
 **Returns:** `{ success, drawer_id, updated_fields }`
+
+---
+
+### `mempalace_list_tags`
+
+List every unique tag in the palace with the number of drawers carrying each. Sorted by count, descending.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `wing` | string | No | Scope the count to a single wing |
+| `room` | string | No | Scope the count to a single room |
+| `min_count` | integer | No | Drop tags below this drawer-count threshold (default 1) |
+
+**Returns:** `{ tags: [{ tag, count }], total_unique_tags, filters }`
 
 ---
 

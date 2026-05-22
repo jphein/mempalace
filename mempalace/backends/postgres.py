@@ -923,6 +923,14 @@ class PostgresCollection(BaseCollection):
         return self._sql.SQL(" AND ").join(clauses), params
 
     def _field_filter_to_sql(self, key: str, value: Any):
+        # JSONB list-membership operators apply to fields that hold an
+        # array (e.g. ``tags``). Detected before the scalar lhs is built
+        # because ``metadata->>%s`` would coerce the array to text.
+        if isinstance(value, dict) and len(value) == 1:
+            inner_op, inner_operand = next(iter(value.items()))
+            if inner_op in ("$contains_all", "$contains_any"):
+                return self._jsonb_array_filter_to_sql(key, inner_op, inner_operand)
+
         if key in ("wing", "room"):
             lhs = self._sql.SQL("{}").format(self._sql.Identifier(key))
             lhs_params = []
@@ -951,6 +959,29 @@ class PostgresCollection(BaseCollection):
                 [*lhs_params, *(_metadata_value(item) for item in operand)],
             )
         raise UnsupportedFilterError(f"unsupported PostgreSQL where field operator: {operator}")
+
+    def _jsonb_array_filter_to_sql(self, key: str, operator: str, operand: Any):
+        """Compile ``$contains_all`` / ``$contains_any`` against a JSONB array field.
+
+        ``$contains_all`` → JSONB ``@>`` containment (every element required).
+        ``$contains_any`` → ``?|`` text-array overlap (any element matches).
+        """
+        if not isinstance(operand, list) or not operand:
+            raise ValueError(f"PostgreSQL where operator {operator} requires a non-empty list")
+        if not all(isinstance(item, str) for item in operand):
+            raise ValueError(f"PostgreSQL where operator {operator} requires string elements")
+        # ``metadata->'tags'`` keeps the JSONB type so ``@>``/``?|`` work.
+        field_expr = self._sql.SQL("metadata->%s")
+        if operator == "$contains_all":
+            return (
+                self._sql.SQL("{} @> %s::jsonb").format(field_expr),
+                [key, json.dumps(operand)],
+            )
+        # $contains_any
+        return (
+            self._sql.SQL("{} ?| %s").format(field_expr),
+            [key, operand],
+        )
 
     @staticmethod
     def _metadata_dict(wing: str, room: str, metadata: Any) -> dict[str, Any]:

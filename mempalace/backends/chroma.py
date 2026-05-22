@@ -31,7 +31,13 @@ logger = logging.getLogger(__name__)
 
 _REQUIRED_OPERATORS = frozenset({"$eq", "$ne", "$in", "$nin", "$and", "$or", "$contains"})
 _OPTIONAL_OPERATORS = frozenset({"$gt", "$gte", "$lt", "$lte"})
-_SUPPORTED_OPERATORS = _REQUIRED_OPERATORS | _OPTIONAL_OPERATORS
+# Tag-array operators are accepted at the where layer so callers can pass
+# the same filter shape to either backend. ChromaDB can't natively filter
+# on JSON arrays in metadata (it only stores scalar values), so these are
+# stripped before reaching the underlying chroma client and applied as a
+# Python-side post-filter by ``ChromaCollection``.
+_TAG_OPERATORS = frozenset({"$contains_all", "$contains_any"})
+_SUPPORTED_OPERATORS = _REQUIRED_OPERATORS | _OPTIONAL_OPERATORS | _TAG_OPERATORS
 
 # A healthy HNSW payload should keep link_lists.bin proportional to
 # data_level0.bin. When link_lists.bin grows orders of magnitude larger than
@@ -156,6 +162,137 @@ def _validate_where(where: Optional[dict]) -> None:
                 stack.append(v)
             elif isinstance(v, list):
                 stack.extend(x for x in v if isinstance(x, dict))
+
+
+def _split_tag_filters(where: Optional[dict]) -> tuple[Optional[dict], list[tuple[str, list[str]]]]:
+    """Strip ``$contains_all``/``$contains_any`` tag filters out of ``where``.
+
+    ChromaDB's metadata index is scalar-only — JSON arrays can't be queried
+    natively — so tag predicates are applied as a Python-side post-filter
+    on the results. Returns ``(cleaned_where, tag_predicates)`` where each
+    predicate is ``(operator, values)``. The cleaned where is safe to pass
+    straight to the underlying chroma client.
+
+    Limitation: only top-level tag predicates and tag predicates inside a
+    top-level ``$and`` are extracted. Tag predicates nested under ``$or``
+    are left untouched so the caller sees a clear UnsupportedFilterError
+    rather than silently-broken semantics.
+    """
+    if not where or not isinstance(where, dict):
+        return where, []
+
+    predicates: list[tuple[str, list[str]]] = []
+
+    def _extract(node):
+        if not isinstance(node, dict):
+            return node
+        if len(node) == 1 and "$and" in node and isinstance(node["$and"], list):
+            new_children = []
+            for child in node["$and"]:
+                extracted = _extract(child)
+                if extracted:
+                    new_children.append(extracted)
+            if not new_children:
+                return None
+            if len(new_children) == 1:
+                return new_children[0]
+            return {"$and": new_children}
+
+        if "tags" in node and isinstance(node["tags"], dict):
+            tag_spec = node["tags"]
+            if len(tag_spec) == 1:
+                inner_op, inner_operand = next(iter(tag_spec.items()))
+                if inner_op in _TAG_OPERATORS:
+                    if not isinstance(inner_operand, list) or not all(
+                        isinstance(t, str) for t in inner_operand
+                    ):
+                        raise UnsupportedFilterError(
+                            f"chroma backend: tag operator {inner_op!r} requires a list of strings"
+                        )
+                    predicates.append((inner_op, list(inner_operand)))
+                    remaining = {k: v for k, v in node.items() if k != "tags"}
+                    return remaining or None
+        return node
+
+    cleaned = _extract(where)
+    return cleaned or None, predicates
+
+
+def _row_matches_tag_predicates(
+    metadata: Optional[dict],
+    predicates: list[tuple[str, list[str]]],
+) -> bool:
+    """Apply tag predicates to a stored metadata dict."""
+    if not predicates:
+        return True
+    if not isinstance(metadata, dict):
+        return False
+    # Imported lazily because mempalace.tags imports nothing from chroma —
+    # putting it at module level would still work, but keeping the chroma
+    # backend importable without the helper makes layering explicit.
+    from ..tags import extract_tags_from_metadata
+
+    stored = set(extract_tags_from_metadata(metadata))
+    for op, values in predicates:
+        if op == "$contains_all":
+            if not all(t in stored for t in values):
+                return False
+        elif op == "$contains_any":
+            if not any(t in stored for t in values):
+                return False
+    return True
+
+
+def _apply_tag_postfilter_query(
+    *,
+    ids: list[list[str]],
+    documents: list[list[str]],
+    metadatas: list[list[dict]],
+    distances: list[list[float]],
+    embeddings: Optional[list[list[list[float]]]],
+    predicates: list[tuple[str, list[str]]],
+    n_results: int,
+) -> tuple[
+    list[list[str]],
+    list[list[str]],
+    list[list[dict]],
+    list[list[float]],
+    Optional[list[list[list[float]]]],
+]:
+    """Drop query hits whose stored metadata doesn't satisfy ``predicates``.
+
+    Preserves per-query outer-list shape; truncates each inner list to
+    ``n_results`` after filtering so callers always see the requested
+    page size (or fewer if too few rows survive).
+    """
+    out_ids: list[list[str]] = []
+    out_docs: list[list[str]] = []
+    out_metas: list[list[dict]] = []
+    out_dists: list[list[float]] = []
+    out_embeds: Optional[list[list[list[float]]]] = [] if embeddings is not None else None
+
+    for q_idx in range(len(ids)):
+        per_ids = ids[q_idx]
+        per_docs = documents[q_idx] if q_idx < len(documents) else []
+        per_metas = metadatas[q_idx] if q_idx < len(metadatas) else []
+        per_dists = distances[q_idx] if q_idx < len(distances) else []
+        per_embeds = embeddings[q_idx] if embeddings is not None and q_idx < len(embeddings) else []
+
+        keep: list[int] = []
+        for i, meta in enumerate(per_metas):
+            if _row_matches_tag_predicates(meta, predicates):
+                keep.append(i)
+                if len(keep) >= n_results:
+                    break
+
+        out_ids.append([per_ids[i] for i in keep])
+        out_docs.append([per_docs[i] for i in keep] if per_docs else [])
+        out_metas.append([per_metas[i] for i in keep] if per_metas else [])
+        out_dists.append([per_dists[i] for i in keep] if per_dists else [])
+        if out_embeds is not None:
+            out_embeds.append([per_embeds[i] for i in keep] if per_embeds else [])
+
+    return out_ids, out_docs, out_metas, out_dists, out_embeds
 
 
 def _segment_appears_healthy(seg_dir: str) -> bool:
@@ -1036,11 +1173,24 @@ class ChromaCollection(BaseCollection):
         if not chosen:
             raise ValueError("query input must be a non-empty list")
 
+        # Tag predicates are stripped here and applied as a post-filter
+        # below — chroma's metadata index is scalar-only.
+        native_where, tag_predicates = _split_tag_filters(where)
+        # Over-fetch when tag post-filtering is active so the caller still
+        # gets ``n_results`` hits after the filter drops non-matches. 4× is
+        # a coarse compromise — fine for the typical low-cardinality tag
+        # query, and the chroma path is the legacy backend anyway.
+        effective_n_results = n_results * 4 if tag_predicates else n_results
+
         spec = _IncludeSpec.resolve(include, default_distances=True)
+        # ``metadatas`` are required to evaluate tag predicates even when
+        # the caller didn't ask for them. Track whether the caller wanted
+        # them so we can drop them from the final shape afterwards.
+        force_metadatas = bool(tag_predicates) and not spec.metadatas
         chroma_include: list[str] = []
         if spec.documents:
             chroma_include.append("documents")
-        if spec.metadatas:
+        if spec.metadatas or force_metadatas:
             chroma_include.append("metadatas")
         if spec.distances:
             chroma_include.append("distances")
@@ -1048,15 +1198,15 @@ class ChromaCollection(BaseCollection):
             chroma_include.append("embeddings")
 
         kwargs: dict[str, Any] = {
-            "n_results": n_results,
+            "n_results": effective_n_results,
             "include": chroma_include,
         }
         if query_texts is not None:
             kwargs["query_texts"] = query_texts
         if query_embeddings is not None:
             kwargs["query_embeddings"] = query_embeddings
-        if where is not None:
-            kwargs["where"] = where
+        if native_where is not None:
+            kwargs["where"] = native_where
         if where_document is not None:
             kwargs["where_document"] = where_document
 
@@ -1094,16 +1244,39 @@ class ChromaCollection(BaseCollection):
         def _coerce_none_metas(outer):
             return [[(m if m is not None else {}) for m in (inner or [])] for inner in outer]
 
+        ids_out = _none_list_to_empty(ids)
+        documents_out = _none_list_to_empty(documents)
+        metadatas_out = _coerce_none_metas(metadatas)
+        distances_out = _none_list_to_empty(distances)
+        embeddings_out = (
+            [list(inner) for inner in embeddings_raw]
+            if spec.embeddings and embeddings_raw is not None
+            else None
+        )
+
+        if tag_predicates:
+            ids_out, documents_out, metadatas_out, distances_out, embeddings_out = (
+                _apply_tag_postfilter_query(
+                    ids=ids_out,
+                    documents=documents_out,
+                    metadatas=metadatas_out,
+                    distances=distances_out,
+                    embeddings=embeddings_out,
+                    predicates=tag_predicates,
+                    n_results=n_results,
+                )
+            )
+
+        # Drop metadatas if we only fetched them to evaluate tag predicates.
+        if force_metadatas:
+            metadatas_out = [[] for _ in ids_out]
+
         return QueryResult(
-            ids=_none_list_to_empty(ids),
-            documents=_none_list_to_empty(documents),
-            metadatas=_coerce_none_metas(metadatas),
-            distances=_none_list_to_empty(distances),
-            embeddings=(
-                [list(inner) for inner in embeddings_raw]
-                if spec.embeddings and embeddings_raw is not None
-                else None
-            ),
+            ids=ids_out,
+            documents=documents_out,
+            metadatas=metadatas_out,
+            distances=distances_out,
+            embeddings=embeddings_out,
         )
 
     def get(
@@ -1119,11 +1292,14 @@ class ChromaCollection(BaseCollection):
         _validate_where(where)
         _validate_where(where_document)
 
+        native_where, tag_predicates = _split_tag_filters(where)
+
         spec = _IncludeSpec.resolve(include, default_distances=False)
+        force_metadatas = bool(tag_predicates) and not spec.metadatas
         chroma_include: list[str] = []
         if spec.documents:
             chroma_include.append("documents")
-        if spec.metadatas:
+        if spec.metadatas or force_metadatas:
             chroma_include.append("metadatas")
         if spec.embeddings:
             chroma_include.append("embeddings")
@@ -1131,25 +1307,32 @@ class ChromaCollection(BaseCollection):
         kwargs: dict[str, Any] = {"include": chroma_include}
         if ids is not None:
             kwargs["ids"] = ids
-        if where is not None:
-            kwargs["where"] = where
+        if native_where is not None:
+            kwargs["where"] = native_where
         if where_document is not None:
             kwargs["where_document"] = where_document
-        if limit is not None:
-            kwargs["limit"] = limit
-        if offset is not None:
-            kwargs["offset"] = offset
+        # When tag predicates are active, the chroma-native limit/offset
+        # are not honored: the post-filter is applied to the full pre-
+        # limit page, then truncated by ``limit``. Skipping the chroma
+        # offset would slice out matching rows before the filter sees
+        # them. This is the legacy-backend tradeoff; postgres pushes the
+        # filter into the index and respects limit/offset natively.
+        if not tag_predicates:
+            if limit is not None:
+                kwargs["limit"] = limit
+            if offset is not None:
+                kwargs["offset"] = offset
 
         raw = self._collection.get(**kwargs)
         out_ids = list(raw.get("ids") or [])
         out_docs = list(raw.get("documents") or []) if spec.documents else []
-        out_metas = list(raw.get("metadatas") or []) if spec.metadatas else []
+        out_metas = list(raw.get("metadatas") or []) if (spec.metadatas or force_metadatas) else []
         out_embeds = raw.get("embeddings") if spec.embeddings else None
 
         # Pad doc/meta lists to match ids so downstream zipping is safe.
         if spec.documents and len(out_docs) < len(out_ids):
             out_docs = out_docs + [""] * (len(out_ids) - len(out_docs))
-        if spec.metadatas and len(out_metas) < len(out_ids):
+        if (spec.metadatas or force_metadatas) and len(out_metas) < len(out_ids):
             out_metas = out_metas + [{}] * (len(out_ids) - len(out_metas))
 
         # Coerce any individual None metadata dict to {} at the backend
@@ -1159,14 +1342,35 @@ class ChromaCollection(BaseCollection):
         # guards across #999 / #1013 compensated. Doing this once here
         # means callers receive a guaranteed list[dict], matching the
         # type contract GetResult.metadatas declares.
-        if spec.metadatas:
+        if spec.metadatas or force_metadatas:
             out_metas = [(m if m is not None else {}) for m in out_metas]
+
+        out_embeds_list = [list(v) for v in out_embeds] if out_embeds is not None else None
+
+        if tag_predicates:
+            keep = [
+                i for i, m in enumerate(out_metas) if _row_matches_tag_predicates(m, tag_predicates)
+            ]
+            # Honor the caller's offset/limit AFTER post-filtering.
+            if offset:
+                keep = keep[offset:]
+            if limit is not None:
+                keep = keep[:limit]
+            out_ids = [out_ids[i] for i in keep]
+            if spec.documents:
+                out_docs = [out_docs[i] for i in keep]
+            if spec.metadatas:
+                out_metas = [out_metas[i] for i in keep]
+            elif force_metadatas:
+                out_metas = []
+            if out_embeds_list is not None:
+                out_embeds_list = [out_embeds_list[i] for i in keep]
 
         return GetResult(
             ids=out_ids,
             documents=out_docs,
             metadatas=out_metas,
-            embeddings=[list(v) for v in out_embeds] if out_embeds is not None else None,
+            embeddings=out_embeds_list,
         )
 
     def delete(self, *, ids=None, where=None):

@@ -389,7 +389,7 @@ def test_cmd_search_calls_search(mock_config_cls):
     mock_config_cls.return_value.palace_path = "/fake/palace"
     mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
     args = argparse.Namespace(
-        palace=None, query="test query", wing="mywing", room="myroom", results=3
+        palace=None, query="test query", wing="mywing", room="myroom", results=3, tags=None
     )
     with patch("mempalace.searcher.search") as mock_search:
         cmd_search(args)
@@ -398,6 +398,7 @@ def test_cmd_search_calls_search(mock_config_cls):
             palace_path="/fake/palace",
             wing="mywing",
             room="myroom",
+            tags=None,
             n_results=3,
         )
 

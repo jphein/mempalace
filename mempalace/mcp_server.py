@@ -1170,6 +1170,7 @@ def tool_search(
     limit: int = 5,
     wing: str = None,
     room: str = None,
+    tags: list = None,
     max_distance: float = 1.5,
     min_similarity: float = None,
     context: str = None,
@@ -1182,6 +1183,9 @@ def tool_search(
         room = _sanitize_optional_name(room, "room")
     except ValueError as e:
         return {"error": str(e)}
+    from .tags import normalise_tags
+
+    normalised_tags = normalise_tags(tags)
     # Backwards compat: convert old similarity scale (higher=stricter) to
     # distance scale (lower=stricter). Similarity 0.8 → distance 0.2.
     dist = (1.0 - min_similarity) if min_similarity is not None else max_distance
@@ -1197,6 +1201,7 @@ def tool_search(
         palace_path=_config.palace_path,
         wing=wing,
         room=room,
+        tags=normalised_tags or None,
         n_results=limit,
         max_distance=dist,
         vector_disabled=_vector_disabled,
@@ -1226,6 +1231,7 @@ def tool_search(
             palace_path=_config.palace_path,
             wing=wing,
             room=room,
+            tags=normalised_tags or None,
             n_results=limit,
             max_distance=dist,
             vector_disabled=_vector_disabled,
@@ -1576,7 +1582,12 @@ def tool_follow_tunnels(wing: str, room: str):
 
 
 def tool_add_drawer(
-    wing: str, room: str, content: str, source_file: str = None, added_by: str = "mcp"
+    wing: str,
+    room: str,
+    content: str,
+    source_file: str = None,
+    added_by: str = "mcp",
+    tags: list = None,
 ):
     """File verbatim content into a wing/room. Checks for duplicates first.
 
@@ -1589,6 +1600,10 @@ def tool_add_drawer(
     ``parent_drawer_id`` — ``tool_get_drawer(drawer_id)`` and
     ``tool_delete_drawer(drawer_id)`` report "not found" on the chunked
     path because no row is stored under the logical group id.
+
+    ``tags`` is an optional list of cross-cutting labels (multi-label
+    additive layer over the strict wing/room hierarchy). See
+    ``mempalace.tags`` for normalisation rules.
     """
     global _metadata_cache
     try:
@@ -1597,6 +1612,10 @@ def tool_add_drawer(
         content = sanitize_content(content)
     except ValueError as e:
         return {"success": False, "error": str(e)}
+
+    from .tags import apply_tags_to_metadata, normalise_tags
+
+    normalised_tags = normalise_tags(tags)
 
     col = _get_collection(create=True)
     if not col:
@@ -1615,6 +1634,7 @@ def tool_add_drawer(
             "added_by": added_by,
             "content_length": len(content),
             "content_preview": content[:200],
+            "tags": normalised_tags,
         },
     )
 
@@ -1633,6 +1653,7 @@ def tool_add_drawer(
         "added_by": added_by,
         "filed_at": datetime.now().isoformat(),
     }
+    apply_tags_to_metadata(base_meta, normalised_tags)
 
     # Idempotency. Three cases to detect a prior committed write:
     # (a) Single-doc path: drawer_id row exists (the only id used).
@@ -1682,6 +1703,7 @@ def tool_add_drawer(
                 "drawer_id": drawer_id,
                 "wing": wing,
                 "room": room,
+                "tags": normalised_tags,
                 "warnings": warnings,
                 "chunks": 1,
             }
@@ -1719,6 +1741,7 @@ def tool_add_drawer(
             "drawer_id": drawer_id,
             "wing": wing,
             "room": room,
+            "tags": normalised_tags,
             "warnings": warnings,
             "chunks": len(chunk_ids),
             "chunk_ids": chunk_ids,
@@ -1800,6 +1823,8 @@ def tool_sync(project_dir: str = None, wing: str = None, apply: bool = False):
 
 def tool_get_drawer(drawer_id: str):
     """Fetch a single drawer by ID. Returns full content and metadata."""
+    from .tags import extract_tags_from_metadata
+
     col = _get_collection()
     if not col:
         return _no_palace()
@@ -1823,14 +1848,23 @@ def tool_get_drawer(drawer_id: str):
             "content": doc,
             "wing": safe_meta.get("wing", ""),
             "room": safe_meta.get("room", ""),
+            "tags": extract_tags_from_metadata(safe_meta),
             "metadata": safe_meta,
         }
     except Exception as e:
         return {"error": str(e)}
 
 
-def tool_list_drawers(wing: str = None, room: str = None, limit: int = 20, offset: int = 0):
-    """List drawers with pagination. Optional wing/room filter."""
+def tool_list_drawers(
+    wing: str = None,
+    room: str = None,
+    tags: list = None,
+    limit: int = 20,
+    offset: int = 0,
+):
+    """List drawers with pagination. Optional wing/room/tag filter."""
+    from .tags import extract_tags_from_metadata, normalise_tags
+
     limit = max(1, min(limit, _MAX_RESULTS))
     offset = max(0, offset)
     try:
@@ -1838,6 +1872,7 @@ def tool_list_drawers(wing: str = None, room: str = None, limit: int = 20, offse
         room = _sanitize_optional_name(room, "room")
     except ValueError as e:
         return {"error": str(e)}
+    normalised_tags = normalise_tags(tags) if tags else []
     col = _get_collection()
     if not col:
         return _no_palace()
@@ -1848,6 +1883,8 @@ def tool_list_drawers(wing: str = None, room: str = None, limit: int = 20, offse
             conditions.append({"wing": wing})
         if room:
             conditions.append({"room": room})
+        if normalised_tags:
+            conditions.append({"tags": {"$contains_all": normalised_tags}})
         if len(conditions) == 1:
             where = conditions[0]
         elif len(conditions) > 1:
@@ -1874,6 +1911,7 @@ def tool_list_drawers(wing: str = None, room: str = None, limit: int = 20, offse
                     "drawer_id": did,
                     "wing": meta.get("wing", ""),
                     "room": meta.get("room", ""),
+                    "tags": extract_tags_from_metadata(meta),
                     "content_preview": doc[:200] + "..." if len(doc) > 200 else doc,
                 }
             )
@@ -1888,12 +1926,27 @@ def tool_list_drawers(wing: str = None, room: str = None, limit: int = 20, offse
         return {"error": str(e)}
 
 
-def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, room: str = None):
-    """Update an existing drawer's content and/or metadata."""
+def tool_update_drawer(
+    drawer_id: str,
+    content: str = None,
+    wing: str = None,
+    room: str = None,
+    tags: list = None,
+):
+    """Update an existing drawer's content and/or metadata.
+
+    ``tags`` semantics:
+        * ``None`` — leave the existing tag list untouched.
+        * ``[]``   — clear all tags.
+        * non-empty list — replace the existing tag list with the
+          normalised input.
+    """
     global _metadata_cache
 
-    if content is None and wing is None and room is None:
+    if content is None and wing is None and room is None and tags is None:
         return {"success": True, "drawer_id": drawer_id, "noop": True}
+
+    from .tags import apply_tags_to_metadata, extract_tags_from_metadata, normalise_tags
 
     col = _get_collection()
     if not col:
@@ -1925,6 +1978,9 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
             except ValueError as e:
                 return {"success": False, "error": str(e)}
 
+        if tags is not None:
+            apply_tags_to_metadata(new_meta, normalise_tags(tags))
+
         _wal_log(
             "update_drawer",
             {
@@ -1933,6 +1989,8 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
                 "old_room": old_meta.get("room", ""),
                 "new_wing": new_meta.get("wing", ""),
                 "new_room": new_meta.get("room", ""),
+                "old_tags": extract_tags_from_metadata(old_meta),
+                "new_tags": extract_tags_from_metadata(new_meta),
                 "content_changed": content is not None,
                 "content_preview": new_doc[:200] if content is not None else None,
             },
@@ -1962,10 +2020,74 @@ def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, ro
             "drawer_id": drawer_id,
             "wing": new_meta.get("wing", ""),
             "room": new_meta.get("room", ""),
+            "tags": extract_tags_from_metadata(new_meta),
             "warnings": warnings,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def tool_list_tags(wing: str = None, room: str = None, min_count: int = 1):
+    """Return every unique tag in the palace with the number of drawers carrying it.
+
+    Results are sorted by count (descending). ``wing`` and ``room`` scope
+    the count to a subset of the palace. ``min_count`` drops tags below
+    the threshold from the result; default 1 keeps any tag with at least
+    one drawer.
+    """
+    from collections import Counter
+
+    from .tags import extract_tags_from_metadata
+
+    try:
+        wing = _sanitize_optional_name(wing, "wing")
+        room = _sanitize_optional_name(room, "room")
+    except ValueError as e:
+        return {"error": str(e)}
+    min_count = max(1, int(min_count))
+
+    col = _get_collection()
+    if not col:
+        return _no_palace()
+    try:
+        where = None
+        if wing and room:
+            where = {"$and": [{"wing": wing}, {"room": room}]}
+        elif wing:
+            where = {"wing": wing}
+        elif room:
+            where = {"room": room}
+
+        counter: Counter = Counter()
+        page_size = 1000
+        offset = 0
+        kwargs = {"include": ["metadatas"], "limit": page_size}
+        if where:
+            kwargs["where"] = where
+        while True:
+            kwargs["offset"] = offset
+            batch = col.get(**kwargs)
+            ids = batch["ids"] or []
+            metas = batch["metadatas"] or []
+            for meta in metas:
+                for tag in extract_tags_from_metadata(meta):
+                    counter[tag] += 1
+            if not ids or len(ids) < page_size:
+                break
+            offset += len(ids)
+
+        items = [
+            {"tag": tag, "count": count}
+            for tag, count in counter.most_common()
+            if count >= min_count
+        ]
+        return {
+            "tags": items,
+            "total_unique_tags": len(items),
+            "filters": {"wing": wing, "room": room, "min_count": min_count},
+        }
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ==================== KNOWLEDGE GRAPH ====================
@@ -2780,6 +2902,11 @@ TOOLS = {
                 },
                 "wing": {"type": "string", "description": "Filter by wing (optional)"},
                 "room": {"type": "string", "description": "Filter by room (optional)"},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Only return drawers carrying ALL of these tags (AND logic). Tags are case-insensitive; spaces become hyphens.",
+                },
                 "max_distance": {
                     "type": "number",
                     "description": "Max cosine distance threshold (0=identical, 2=opposite). Results further than this are dropped. Lower = stricter. Default 1.5. Set to 0 to disable.",
@@ -2833,10 +2960,37 @@ TOOLS = {
                 },
                 "source_file": {"type": "string", "description": "Where this came from (optional)"},
                 "added_by": {"type": "string", "description": "Who is filing this (default: mcp)"},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Cross-cutting labels for the drawer (optional). Normalised to lower-case with spaces → hyphens.",
+                },
             },
             "required": ["wing", "room", "content"],
         },
         "handler": tool_add_drawer,
+    },
+    "mempalace_list_tags": {
+        "description": "List all unique tags in the palace with the number of drawers carrying each. Sorted by count, descending.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "wing": {
+                    "type": "string",
+                    "description": "Scope the count to a single wing (optional)",
+                },
+                "room": {
+                    "type": "string",
+                    "description": "Scope the count to a single room (optional)",
+                },
+                "min_count": {
+                    "type": "integer",
+                    "description": "Drop tags below this drawer-count threshold (default 1).",
+                    "minimum": 1,
+                },
+            },
+        },
+        "handler": tool_list_tags,
     },
     "mempalace_delete_drawer": {
         "description": "Delete a drawer by ID. Irreversible.",
@@ -2879,12 +3033,17 @@ TOOLS = {
         "handler": tool_get_drawer,
     },
     "mempalace_list_drawers": {
-        "description": "List drawers with pagination. Optional wing/room filter. Returns IDs, wings, rooms, content previews, and total matching count for pagination.",
+        "description": "List drawers with pagination. Optional wing/room/tag filter. Returns IDs, wings, rooms, tags, content previews, and total matching count for pagination.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "wing": {"type": "string", "description": "Filter by wing (optional)"},
                 "room": {"type": "string", "description": "Filter by room (optional)"},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Only list drawers carrying ALL of these tags (optional)",
+                },
                 "limit": {
                     "type": "integer",
                     "description": "Max results per page (default 20, max 100)",
@@ -2901,7 +3060,7 @@ TOOLS = {
         "handler": tool_list_drawers,
     },
     "mempalace_update_drawer": {
-        "description": "Update an existing drawer's content and/or metadata (wing, room). Fetches existing drawer first; returns error if not found.",
+        "description": "Update an existing drawer's content and/or metadata (wing, room, tags). Fetches existing drawer first; returns error if not found.",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -2917,6 +3076,11 @@ TOOLS = {
                 "room": {
                     "type": "string",
                     "description": "New room (optional — omit to keep existing)",
+                },
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Replace the drawer's tag list with this set (pass [] to clear; omit to leave untouched).",
                 },
             },
             "required": ["drawer_id"],
