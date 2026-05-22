@@ -75,13 +75,24 @@ def _mempalace_python() -> str:
         return env_python
     # This file lives at <venv>/lib/pythonX.Y/site-packages/mempalace/hooks_cli.py
     # or <project>/mempalace/hooks_cli.py (editable install).
-    venv_bin = Path(__file__).resolve().parents[3] / "bin" / "python"
-    if venv_bin.is_file():
-        return str(venv_bin)
+    #
+    # ``parents[3]`` / ``parents[1]`` would raise IndexError when the package
+    # lives at a shallow filesystem path — Docker containers mounting at
+    # ``/work``, ``/opt/app``, or other minimal-prefix installs don't have 4
+    # (or sometimes even 2) parent directories. Use ``len(parents)`` to
+    # check the depth before indexing; LBYL is the standard Python idiom
+    # for bounded-integer lookups. Per PR #1580 review (gemini-code-assist,
+    # medium priority).
+    parents = Path(__file__).resolve().parents
+    if len(parents) > 3:
+        venv_bin = parents[3] / "bin" / "python"
+        if venv_bin.is_file():
+            return str(venv_bin)
     # Editable install: assumes project root has a venv/ sibling to mempalace/
-    project_venv = Path(__file__).resolve().parents[1] / "venv" / "bin" / "python"
-    if project_venv.is_file():
-        return str(project_venv)
+    if len(parents) > 1:
+        project_venv = parents[1] / "venv" / "bin" / "python"
+        if project_venv.is_file():
+            return str(project_venv)
     return sys.executable
 
 

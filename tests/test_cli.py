@@ -1062,6 +1062,7 @@ def test_mcp_command_prints_setup_guidance(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "MemPalace MCP quick setup:" in captured.out
     assert "claude mcp add mempalace -- mempalace-mcp" in captured.out
+    assert "codex mcp add mempalace -- mempalace-mcp" in captured.out
     assert "\nOptional custom palace:\n" in captured.out
     assert "mempalace-mcp --palace /path/to/palace" in captured.out
     assert "[--palace /path/to/palace]" not in captured.out
@@ -1078,6 +1079,8 @@ def test_mcp_command_uses_custom_palace_path_when_provided(monkeypatch, capsys):
 
     assert "mempalace-mcp --palace" in captured.out
     assert expanded in captured.out
+    assert "claude mcp add mempalace -- mempalace-mcp --palace" in captured.out
+    assert "codex mcp add mempalace -- mempalace-mcp --palace" in captured.out
     assert "Optional custom palace:" not in captured.out
     assert "[--palace /path/to/palace]" not in captured.out
     assert captured.err == ""

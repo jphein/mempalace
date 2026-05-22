@@ -1392,7 +1392,14 @@ class TestWriteTools:
         verbatim, and both hyphen and underscore queries find the result."""
         from mempalace import mcp_server, palace_graph
 
-        monkeypatch.setattr(palace_graph, "_TUNNEL_FILE", str(tmp_path / "tunnels.json"))
+        tunnel_file = tmp_path / "tunnels.json"
+        monkeypatch.setattr(palace_graph, "_get_tunnel_file", lambda *a, **kw: str(tunnel_file))
+        monkeypatch.setattr(
+            palace_graph,
+            "_legacy_tunnel_file",
+            lambda: str(tmp_path / "legacy-tunnels.json"),
+        )
+        monkeypatch.setattr(palace_graph, "_get_collection", lambda *a, **kw: None)
 
         t = mcp_server.tool_create_tunnel(
             source_wing="other-wing",

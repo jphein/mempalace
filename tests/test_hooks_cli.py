@@ -83,6 +83,50 @@ def test_mempalace_python_finds_venv():
     assert result and "python" in os.path.basename(result).lower()
 
 
+def test_mempalace_python_handles_shallow_path_without_crashing(monkeypatch):
+    """Regression: _mempalace_python must not raise IndexError when the
+    package lives at a shallow filesystem path.
+
+    The function used to index ``Path(__file__).resolve().parents[3]`` to
+    find the venv root for the standard ``<venv>/lib/python3.X/site-packages/
+    mempalace/`` install. In editable installs at a shallow path (Docker
+    containers mounting at ``/work``, ``/opt/app``, etc.), ``parents`` has
+    fewer than 4 elements and the bare index would raise ``IndexError``.
+    Affected sites: Docker-based dev, OrbStack-style cross-platform CI,
+    minimal-prefix production installs.
+
+    The fix uses ``len(parents)`` LBYL checks so the function falls through
+    to the editable-install branch (``parents[1]``) and ultimately to
+    ``sys.executable``, instead of crashing.
+    """
+    from pathlib import Path as RealPath
+    from unittest.mock import MagicMock, patch
+
+    # Build a fake parents sequence with only 3 elements (indices 0, 1, 2);
+    # ``parents[3]`` would raise IndexError if accessed. Production code
+    # uses ``len(parents) > 3`` LBYL guard to skip that branch, so the
+    # IndexError should never actually fire — but ``side_effect`` keeps it
+    # defensive against a future regression that drops the length check.
+    def get_item(idx):
+        if idx == 1:
+            return RealPath("/work/mempalace")
+        raise IndexError(idx)
+
+    fake_parents = MagicMock()
+    fake_parents.__len__.return_value = 3
+    fake_parents.__getitem__.side_effect = get_item
+
+    fake_path = MagicMock()
+    fake_path.resolve.return_value.parents = fake_parents
+
+    with patch("mempalace.hooks_cli.Path", return_value=fake_path):
+        # Must not raise; must return SOME string (either editable-venv
+        # fallback path or sys.executable).
+        result = _mempalace_python()
+        assert isinstance(result, str)
+        assert "python" in result.lower()
+
+
 # --- _sanitize_session_id ---
 
 
