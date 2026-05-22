@@ -191,9 +191,9 @@ def test_phase_1_creates_extensions_and_checkpoint_table(capsys):
             "SELECT to_regclass(%s)",
             (CHECKPOINT_TABLE,),
         )
-        assert (
-            cur.fetchone()[0] is not None
-        ), f"{CHECKPOINT_TABLE} should exist after the schema-setup step"
+        assert cur.fetchone()[0] is not None, (
+            f"{CHECKPOINT_TABLE} should exist after the schema-setup step"
+        )
         # Checkpoint recorded
         with psycopg2.connect(POSTGRES_DSN) as conn2:
             assert _get_checkpoint(conn2, "migration_phase_schema") == "done"

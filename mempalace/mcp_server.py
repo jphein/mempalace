@@ -176,6 +176,27 @@ _kg_by_path: dict = {}  # KG instance cache; KnowledgeGraph or KnowledgeGraphAGE
 _kg_cache_lock = threading.Lock()
 _palace_flag_given: bool = bool(_args.palace)
 
+# MCP server idle auto-exit (#1552).  Stale MCP servers from ended Claude
+# Code sessions do not self-terminate, accumulating ChromaDB/HNSW file
+# handles on Windows.  When MEMPALACE_MCP_IDLE_HOURS is set (or defaults
+# to 8 h), a background daemon thread exits the process once no request
+# has been handled for that long.  Set to 0 to disable.
+_MCP_IDLE_HOURS_ENV = "MEMPALACE_MCP_IDLE_HOURS"
+_MCP_IDLE_HOURS_DEFAULT = 8.0
+_last_request_time: float = time.monotonic()
+
+
+def _mcp_idle_timeout_secs() -> float:
+    """Return the configured MCP idle timeout in seconds (0 = disabled)."""
+    raw = os.environ.get(_MCP_IDLE_HOURS_ENV, "")
+    if raw:
+        try:
+            hours = float(raw)
+            return max(0.0, hours) * 3600
+        except ValueError:
+            return 0.0
+    return _MCP_IDLE_HOURS_DEFAULT * 3600
+
 
 def _resolve_kg_path() -> str:
     if _palace_flag_given:
@@ -305,6 +326,15 @@ def _call_kg(op):
 _client_cache = None
 _collection_cache = None
 _postgres_backend_cache = None  # set when _config.backend == "postgres"
+# Last backend connection failure (set in _get_collection_postgres on except).
+# Read by _no_palace() to distinguish "backend unreachable" from "no palace
+# configured", so the CLI can render an actionable hint instead of the
+# misleading "Run: mempalace init <dir>". Cleared on next successful open.
+# Typed as Optional[dict] (not dict | None) for Python 3.9 compatibility —
+# pyproject targets py39, and PEP 604 union syntax in runtime annotations
+# is 3.10+. Wrapping in Optional avoids needing `from __future__ import
+# annotations` at the top of the (large) module.
+_last_backend_error: Optional[dict] = None
 _palace_db_inode = 0  # inode of chroma.sqlite3 at cache time
 _palace_db_mtime = 0.0  # mtime of chroma.sqlite3 at cache time
 
@@ -612,10 +642,14 @@ def _get_collection_postgres(create=False):
     Failure semantics differ from the chroma branch's stale-handle
     retry: postgres connection errors are surfaced clearly (no HNSW
     staleness class to heal), so we log + return None rather than retry.
-    A future enhancement could add connection-pool retry for transient
-    network errors.
+
+    On failure, the exception type+message is captured in the module-level
+    ``_last_backend_error`` slot so ``_no_palace()`` can distinguish a
+    truly-uninitialised palace from a reachable-but-down backend (power-
+    resilience design 2026-05-21).
     """
     global _collection_cache, _postgres_backend_cache, _metadata_cache, _metadata_cache_time
+    global _last_backend_error
     try:
         if _postgres_backend_cache is None:
             from .backends.postgres import PostgresBackend
@@ -638,14 +672,24 @@ def _get_collection_postgres(create=False):
             )
             _metadata_cache = None
             _metadata_cache_time = 0
+        _last_backend_error = None
         return _collection_cache
-    except Exception:
+    except Exception as e:
         logger.exception(
             "_get_collection_postgres failed (palace=%s, create=%s, dsn-set=%s)",
             _config.palace_path,
             create,
             bool(_config.postgres_dsn),
         )
+        _last_backend_error = {
+            "type": type(e).__name__,
+            "message": str(e),
+            "ts": time.time(),
+        }
+        # Drop the cached backend so a re-imported PostgresBackend re-resolves
+        # the DSN cleanly when postgres comes back. Without this, the failed
+        # connection in PostgresBackend's pool keeps being reused.
+        _postgres_backend_cache = None
         return None
 
 
@@ -737,6 +781,36 @@ def _get_collection_chroma(create=False):
 
 
 def _no_palace():
+    """Build a "no palace" response, distinguishing two failure modes.
+
+    * **Backend unreachable** — the configured postgres DSN refused the
+      connection (most commonly because the ``mempalace-db`` container is
+      stopped). The fix is to start the backend, not to re-init the
+      palace. This is the failure mode that bit JP for 3 days during the
+      2026-05-17 power event.
+    * **No palace configured** — the daemon is wired up and the backend
+      responded, but the collection is empty / palace was never built.
+      The fix is to ``mempalace init`` / ``mempalace mine``.
+
+    The module-level ``_last_backend_error`` slot is set by
+    ``_get_collection_postgres`` on connection failure; we inspect it
+    here so the response carries the actual cause.
+    """
+    err = _last_backend_error
+    if err and err.get("type") == "OperationalError":
+        return {
+            "error": "palace.backend_unreachable",
+            "message": f"daemon up, but its postgres backend is unreachable: {err.get('message', 'unknown')}",
+            "hint": "Check: docker ps mempalace-db (and `cd /opt/mediaserver && docker compose start mempalace-db`)",
+        }
+    if err:
+        # Other backend errors — surface the type+message so the user
+        # sees something actionable instead of the misleading init hint.
+        return {
+            "error": "palace.backend_error",
+            "message": f"{err.get('type', 'Error')}: {err.get('message', 'unknown')}",
+            "hint": "Check daemon logs (sudo journalctl -u palace-daemon -n 50)",
+        }
     return {
         "error": "No palace found",
         "hint": "Run: mempalace init <dir> && mempalace mine <dir>",
@@ -1181,6 +1255,167 @@ def tool_traverse_graph(start_room: str, max_hops: int = 2):
     return traverse(start_room, col=col, max_hops=max_hops)
 
 
+def tool_walk_palace(
+    start_wing: str = None,
+    start_room: str = None,
+    start_entity: str = None,
+    depth: int = 2,
+    limit: int = 50,
+):
+    """Agent-facing palace walk via AGE Cypher traversal.
+
+    Phase 6 of the AGE-integration goal. Exposes the "agent walks into the
+    palace" metaphor as a single tool: pass a starting node (wing OR room
+    OR entity) and a depth, get back the navigable subgraph it touches.
+
+    Three traversal modes by starting node:
+
+    - **start_wing="memorypalace"**: enumerate rooms in this wing
+      (depth=1), plus drawers in those rooms (depth=2), plus mentioned
+      entities (depth=3). The "walking into a wing" pattern.
+    - **start_room="problems"**: enumerate drawers in this room across
+      all wings (depth=1), plus their mentioned entities (depth=2). The
+      "walking into a specific room" pattern.
+    - **start_entity="pgvector"**: enumerate drawers mentioning this
+      entity (depth=1), plus the rooms+wings containing them (depth=2).
+      The "find where in the palace X is discussed" pattern (inverse
+      walk — entity → drawer → room → wing).
+
+    Exactly one of (start_wing, start_room, start_entity) must be given.
+
+    Returns a structured walk result with:
+      - ``start``: the input anchor
+      - ``walk``: list of {wing, room, drawer, entity} rows, one per
+        leaf reached
+      - ``stats``: {wings_touched, rooms_touched, drawers_touched,
+        entities_touched}
+
+    Requires MEMPALACE_BACKEND=postgres and the AGE graph populated via
+    kg_writethrough or backfill_age.
+    """
+    # Validate inputs
+    anchors_set = sum(bool(x) for x in (start_wing, start_room, start_entity))
+    if anchors_set != 1:
+        return {
+            "error": "exactly one of start_wing, start_room, start_entity must be provided",
+            "got": {
+                "start_wing": start_wing,
+                "start_room": start_room,
+                "start_entity": start_entity,
+            },
+        }
+    depth = max(1, min(depth, 5))
+    limit = max(1, min(limit, 500))
+
+    # Require postgres + AGE
+    if _config.backend != "postgres":
+        return {"error": "tool_walk_palace requires MEMPALACE_BACKEND=postgres"}
+    if _config.kg_backend != "age":
+        return {"error": "tool_walk_palace requires MEMPALACE_KG_BACKEND=age"}
+    dsn = _config.postgres_dsn
+    if not dsn:
+        return {"error": "MEMPALACE_POSTGRES_DSN not set"}
+
+    try:
+        # _get_kg() returns the cached KnowledgeGraphAGE instance when
+        # kg_backend == "age". Direct ``KnowledgeGraphAGE(dsn)`` would
+        # open a fresh postgres connection on every call — across
+        # repeated tool_walk_palace invocations that's both expensive
+        # and unnecessary. (Gemini PR #101 review.)
+        kg = _get_kg()
+    except Exception as e:
+        return {"error": f"could not connect to AGE: {e}"}
+
+    walk_rows: list[dict] = []
+    # Map result-column-name → stats-key-name so 'entity' goes to 'entities_touched'
+    # (not 'entitys_touched' if we naively pluralized).
+    col_to_stat = {
+        "wing": "wings_touched",
+        "room": "rooms_touched",
+        "drawer": "drawers_touched",
+        "entity": "entities_touched",
+    }
+    stats = {v: set() for v in col_to_stat.values()}
+
+    try:
+        if start_wing:
+            # Wing → Room → Drawer → MENTIONS → Entity
+            cypher_by_depth = {
+                1: """
+                    MATCH (w:Wing {name: $anchor})-[:CONTAINS]->(r:Room)
+                    RETURN w.name AS wing, r.name AS room LIMIT $limit
+                """,
+                2: """
+                    MATCH (w:Wing {name: $anchor})-[:CONTAINS]->(r:Room)-[:CONTAINS]->(d:Drawer)
+                    RETURN w.name AS wing, r.name AS room, d.id AS drawer LIMIT $limit
+                """,
+                3: """
+                    MATCH (w:Wing {name: $anchor})-[:CONTAINS]->(r:Room)-[:CONTAINS]->(d:Drawer)
+                    OPTIONAL MATCH (d)-[m:MENTIONS]->(e:Entity)
+                    RETURN w.name AS wing, r.name AS room, d.id AS drawer, e.name AS entity LIMIT $limit
+                """,
+            }
+            anchor = start_wing
+        elif start_room:
+            # Room (across wings) → Drawer → MENTIONS → Entity
+            cypher_by_depth = {
+                1: """
+                    MATCH (w:Wing)-[:CONTAINS]->(r:Room {name: $anchor})-[:CONTAINS]->(d:Drawer)
+                    RETURN w.name AS wing, r.name AS room, d.id AS drawer LIMIT $limit
+                """,
+                2: """
+                    MATCH (w:Wing)-[:CONTAINS]->(r:Room {name: $anchor})-[:CONTAINS]->(d:Drawer)
+                    OPTIONAL MATCH (d)-[m:MENTIONS]->(e:Entity)
+                    RETURN w.name AS wing, r.name AS room, d.id AS drawer, e.name AS entity LIMIT $limit
+                """,
+            }
+            anchor = start_room
+        else:  # start_entity
+            # Inverse walk: Entity → Drawer → Room → Wing
+            cypher_by_depth = {
+                1: """
+                    MATCH (e:Entity {name: $anchor})<-[m:MENTIONS]-(d:Drawer)
+                    RETURN d.id AS drawer, e.name AS entity LIMIT $limit
+                """,
+                2: """
+                    MATCH (e:Entity {name: $anchor})<-[m:MENTIONS]-(d:Drawer)
+                    OPTIONAL MATCH (w:Wing)-[:CONTAINS]->(r:Room)-[:CONTAINS]->(d)
+                    RETURN w.name AS wing, r.name AS room, d.id AS drawer, e.name AS entity LIMIT $limit
+                """,
+            }
+            anchor = start_entity
+
+        effective_depth = min(depth, max(cypher_by_depth.keys()))
+        cypher = cypher_by_depth[effective_depth]
+
+        rows = kg._run_cypher(cypher, {"anchor": anchor, "limit": limit}, fetch=True)
+        for r in rows:
+            entry: dict = {}
+            # Map columns based on what the chosen cypher returned.
+            # Use aliases from the RETURN clause: wing, room, drawer, entity.
+            # The order matches: wing first, then room, then drawer, then entity
+            # (skipping any not present in the result).
+            for i, key in enumerate(("wing", "room", "drawer", "entity")):
+                if i >= len(r):
+                    break
+                v = kg._unwrap_agtype(r[i])
+                if v is not None:
+                    entry[key] = v
+                    stat_key = col_to_stat.get(key)
+                    if stat_key:
+                        stats[stat_key].add(v)
+            walk_rows.append(entry)
+    finally:
+        kg.close()
+
+    return {
+        "start": {"wing": start_wing, "room": start_room, "entity": start_entity},
+        "depth": depth,
+        "walk": walk_rows,
+        "stats": {k: len(v) for k, v in stats.items()},
+    }
+
+
 def tool_find_tunnels(wing_a: str = None, wing_b: str = None):
     """Find rooms that bridge two wings — the hallways connecting domains."""
     try:
@@ -1217,22 +1452,27 @@ def tool_create_tunnel(
     Example: an API design discussion in project_api connects to the
     database schema in project_database.
     """
+    # sanitize_name and create_tunnel both raise ValueError for invalid or
+    # missing endpoints (empty/non-string names, and create_tunnel's
+    # room-existence checks). Catch both so the real reason is surfaced
+    # instead of escaping and being wrapped as the opaque "Internal tool
+    # error" (#1473), mirroring sibling tools.
     try:
         source_wing = sanitize_name(source_wing, "source_wing")
         source_room = sanitize_name(source_room, "source_room")
         target_wing = sanitize_name(target_wing, "target_wing")
         target_room = sanitize_name(target_room, "target_room")
+        return create_tunnel(
+            source_wing,
+            source_room,
+            target_wing,
+            target_room,
+            label=label,
+            source_drawer_id=source_drawer_id,
+            target_drawer_id=target_drawer_id,
+        )
     except ValueError as e:
         return {"error": str(e)}
-    return create_tunnel(
-        source_wing,
-        source_room,
-        target_wing,
-        target_room,
-        label=label,
-        source_drawer_id=source_drawer_id,
-        target_drawer_id=target_drawer_id,
-    )
 
 
 def tool_list_tunnels(wing: str = None, include_passive: bool = False):
@@ -1277,7 +1517,18 @@ def tool_follow_tunnels(wing: str, room: str):
 def tool_add_drawer(
     wing: str, room: str, content: str, source_file: str = None, added_by: str = "mcp"
 ):
-    """File verbatim content into a wing/room. Checks for duplicates first."""
+    """File verbatim content into a wing/room. Checks for duplicates first.
+
+    Content above ``chunk_size`` is split into bounded per-chunk drawers
+    via a single batched upsert. Each chunk carries ``parent_drawer_id``
+    linkage and ``chunk_index`` metadata so search can rejoin them. The
+    returned ``drawer_id`` is the LOGICAL group handle on the chunked
+    path; physical drawer ids are in ``chunk_ids`` (#1539). To delete
+    or fetch the underlying drawers, iterate ``chunk_ids`` or query by
+    ``parent_drawer_id`` — ``tool_get_drawer(drawer_id)`` and
+    ``tool_delete_drawer(drawer_id)`` report "not found" on the chunked
+    path because no row is stored under the logical group id.
+    """
     global _metadata_cache
     try:
         wing = sanitize_name(wing, "wing")
@@ -1313,9 +1564,31 @@ def tool_add_drawer(
 
     warnings = validate_room(room)
 
-    # Idempotency: if the deterministic ID already exists, return success as a no-op.
+    chunk_size = _config.chunk_size
+    base_meta = {
+        "wing": wing,
+        "room": room,
+        "source_file": source_file or "",
+        "added_by": added_by,
+        "filed_at": datetime.now().isoformat(),
+    }
+
+    # Idempotency. Three cases to detect a prior committed write:
+    # (a) Single-doc path: drawer_id row exists (the only id used).
+    # (b) Chunked path: probe the LAST chunk id — its presence implies
+    #     every earlier chunk also landed, since the batched upsert
+    #     is all-or-nothing.
+    # (c) Legacy pre-#1539 single-row write of oversized content under
+    #     drawer_id: probe drawer_id alongside the last chunk id so a
+    #     re-call with identical oversized content does not duplicate
+    #     the legacy row by adding fresh chunks under different ids.
+    if len(content) <= chunk_size:
+        idempotency_probe_ids = [drawer_id]
+    else:
+        last_chunk_idx = (len(content) - 1) // chunk_size
+        idempotency_probe_ids = [drawer_id, f"{drawer_id}_chunk_{last_chunk_idx:06d}"]
     try:
-        existing = col.get(ids=[drawer_id], include=[])
+        existing = col.get(ids=idempotency_probe_ids, include=[])
         if existing.ids:
             return {
                 "success": True,
@@ -1324,31 +1597,60 @@ def tool_add_drawer(
                 "warnings": warnings,
             }
     except Exception:
-        logger.debug("Idempotency pre-check failed for %s", drawer_id, exc_info=True)
+        logger.debug("Idempotency pre-check failed for %s", idempotency_probe_ids, exc_info=True)
 
     try:
-        col.upsert(
-            ids=[drawer_id],
-            documents=[content],
-            metadatas=[
-                {
-                    "wing": wing,
-                    "room": room,
-                    "source_file": source_file or "",
-                    "chunk_index": 0,
-                    "added_by": added_by,
-                    "filed_at": datetime.now().isoformat(),
-                }
-            ],
-        )
-        inserted = col.get(ids=[drawer_id], include=[])
+        if len(content) <= chunk_size:
+            col.upsert(
+                ids=[drawer_id],
+                documents=[content],
+                metadatas=[{**base_meta, "chunk_index": 0}],
+            )
+            inserted = col.get(ids=[drawer_id], include=[])
+            if not inserted.ids:
+                raise RuntimeError(
+                    "Drawer write was acknowledged but the new ID is not readable. "
+                    "The palace index may be stale; run reconnect or repair."
+                )
+            _metadata_cache = None
+            logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
+            for _w in warnings:
+                logger.warning("room taxonomy: %s (drawer=%s)", _w, drawer_id)
+            return {
+                "success": True,
+                "drawer_id": drawer_id,
+                "wing": wing,
+                "room": room,
+                "warnings": warnings,
+                "chunks": 1,
+            }
+
+        # Oversized content: split into bounded per-chunk drawers so the
+        # embedding model never sees a document above ``chunk_size``.
+        # Single batched ``upsert`` so the embedding pass either commits
+        # every chunk or none — no half-written palace if the embedding
+        # model fails mid-loop (#1539).
+        chunk_ids: list[str] = []
+        chunk_docs: list[str] = []
+        chunk_metas: list[dict] = []
+        for i in range(0, len(content), chunk_size):
+            chunk_idx = i // chunk_size
+            chunk_ids.append(f"{drawer_id}_chunk_{chunk_idx:06d}")
+            chunk_docs.append(content[i : i + chunk_size])
+            chunk_metas.append(
+                {**base_meta, "chunk_index": chunk_idx, "parent_drawer_id": drawer_id}
+            )
+        col.upsert(ids=chunk_ids, documents=chunk_docs, metadatas=chunk_metas)
+        # Probe the LAST chunk id, not the first — its presence confirms
+        # the whole batch landed, not just the leading row.
+        inserted = col.get(ids=[chunk_ids[-1]], include=[])
         if not inserted.ids:
             raise RuntimeError(
                 "Drawer write was acknowledged but the new ID is not readable. "
                 "The palace index may be stale; run reconnect or repair."
             )
         _metadata_cache = None
-        logger.info(f"Filed drawer: {drawer_id} → {wing}/{room}")
+        logger.info(f"Filed drawer: {drawer_id} → {wing}/{room} ({len(chunk_ids)} chunks)")
         for _w in warnings:
             logger.warning("room taxonomy: %s (drawer=%s)", _w, drawer_id)
         return {
@@ -1357,6 +1659,8 @@ def tool_add_drawer(
             "wing": wing,
             "room": room,
             "warnings": warnings,
+            "chunks": len(chunk_ids),
+            "chunk_ids": chunk_ids,
         }
     except Exception as e:
         return {"success": False, "error": str(e), "warnings": warnings}
@@ -1419,7 +1723,11 @@ def tool_sync(project_dir: str = None, wing: str = None, apply: bool = False):
         # below, otherwise MineAlreadyRunning and ValueError fall into the
         # generic "sync failed" branch and break the structured-error tests.
         except MineAlreadyRunning as exc:
-            return {"success": False, "error": f"another mine is in progress: {exc}"}
+            return {
+                "success": False,
+                "error": f"another mine is in progress: {exc}",
+                "error_class": "LockHeldByOtherProcess",
+            }
         except ValueError as exc:
             return {"success": False, "error": str(exc)}
         except Exception as exc:
@@ -1799,7 +2107,7 @@ def tool_diary_write(
         # semantic search quality. For now, store raw AAAK in metadata so it's
         # preserved, and keep the document as-is for embedding (even though
         # compressed AAAK degrades embedding quality).
-        meta = {
+        base_metadata = {
             "wing": wing,
             "room": room,
             "hall": "hall_diary",
@@ -1810,13 +2118,63 @@ def tool_diary_write(
             "date": now.strftime("%Y-%m-%d"),
         }
         if session_id:
-            meta["session_id"] = session_id
-        col.add(
-            ids=[entry_id],
-            documents=[entry],
-            metadatas=[meta],
-        )
-        logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
+            base_metadata["session_id"] = session_id
+
+        chunk_size = _config.chunk_size
+        if len(entry) <= chunk_size:
+            col.add(
+                ids=[entry_id],
+                documents=[entry],
+                metadatas=[{**base_metadata, "chunk_index": 0}],
+            )
+            logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")
+            for _w in warnings:
+                logger.warning("room taxonomy: %s (entry=%s)", _w, entry_id)
+            return {
+                "success": True,
+                "entry_id": entry_id,
+                "agent": agent_name,
+                "topic": topic,
+                "timestamp": now.isoformat(),
+                "warnings": warnings,
+                "chunks": 1,
+            }
+
+        # Oversized entry: split into bounded per-chunk drawers so the
+        # embedding model never sees a document above ``chunk_size``.
+        # Every chunk carries ``parent_entry_id`` so search can rejoin
+        # them and ``chunk_index`` for ordered reconstruction (#1539).
+        # Note on ``entry_id`` in the return value: for the chunked
+        # path the returned ``entry_id`` is the LOGICAL group handle
+        # (no drawer is stored under that exact id). The physical
+        # drawer ids are in ``chunk_ids``. Callers wanting to fetch
+        # by id should iterate ``chunk_ids``; callers wanting to
+        # query by metadata can filter on ``parent_entry_id``.
+        # Use a single batched ``add`` so the embedding pass either
+        # commits all chunks or none — avoids a half-written palace
+        # if the embedding model fails mid-loop. ``col.add`` (not
+        # ``upsert``) is intentional here: ``entry_id`` is timestamp-
+        # based with microsecond precision, so every call generates a
+        # fresh id and a duplicate is by definition a same-microsecond
+        # clash that should surface as an error rather than silently
+        # overwrite the prior entry (cf. ``tool_add_drawer`` whose
+        # content-hash ids are deliberately idempotent and use upsert).
+        chunk_ids: list[str] = []
+        chunk_docs: list[str] = []
+        chunk_metas: list[dict] = []
+        for i in range(0, len(entry), chunk_size):
+            chunk_idx = i // chunk_size
+            chunk_ids.append(f"{entry_id}_chunk_{chunk_idx:06d}")
+            chunk_docs.append(entry[i : i + chunk_size])
+            chunk_metas.append(
+                {
+                    **base_metadata,
+                    "chunk_index": chunk_idx,
+                    "parent_entry_id": entry_id,
+                }
+            )
+        col.add(ids=chunk_ids, documents=chunk_docs, metadatas=chunk_metas)
+        logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic} ({len(chunk_ids)} chunks)")
         for _w in warnings:
             logger.warning("room taxonomy: %s (entry=%s)", _w, entry_id)
         return {
@@ -1826,6 +2184,8 @@ def tool_diary_write(
             "topic": topic,
             "timestamp": now.isoformat(),
             "warnings": warnings,
+            "chunks": len(chunk_ids),
+            "chunk_ids": chunk_ids,
         }
     except Exception as e:
         return {"success": False, "error": str(e), "warnings": warnings}
@@ -2220,6 +2580,37 @@ TOOLS = {
         },
         "handler": tool_traverse_graph,
     },
+    "mempalace_walk_palace": {
+        "description": (
+            "Walk the palace via AGE Cypher traversal — the 'agent walks into the palace' "
+            "primitive. Start at exactly one of {wing, room, entity} and enumerate the "
+            "navigable subgraph at the given depth. "
+            "start_wing='memorypalace' → rooms (d=1), drawers (d=2), entities (d=3). "
+            "start_room='problems' → drawers across wings (d=1), entities (d=2). "
+            "start_entity='pgvector' → drawers mentioning it (d=1), rooms+wings containing them (d=2 — inverse walk). "
+            "Requires MEMPALACE_BACKEND=postgres + the AGE knowledge graph populated via kg_writethrough or backfill_age."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "start_wing": {
+                    "type": "string",
+                    "description": "Wing name to walk from (mutually exclusive with start_room/start_entity)",
+                },
+                "start_room": {"type": "string", "description": "Room name to walk from"},
+                "start_entity": {
+                    "type": "string",
+                    "description": "Entity name to walk from (inverse walk)",
+                },
+                "depth": {"type": "integer", "description": "Walk depth (1..5, default 2)"},
+                "limit": {
+                    "type": "integer",
+                    "description": "Max rows to return (1..500, default 50)",
+                },
+            },
+        },
+        "handler": tool_walk_palace,
+    },
     "mempalace_find_tunnels": {
         "description": "Find rooms that bridge two wings — the hallways connecting different domains. E.g. what topics connect wing_code to wing_team?",
         "input_schema": {
@@ -2567,22 +2958,30 @@ SUPPORTED_PROTOCOL_VERSIONS = [
 ]
 
 
-def _internal_tool_error(req_id, tool_name: str) -> dict:
+def _internal_tool_error(req_id, tool_name: str, exc: BaseException = None) -> dict:
     logger.exception(f"Tool error in {tool_name}")
+    error: dict = {"code": -32000, "message": "Internal tool error"}
+    if exc is not None:
+        error["data"] = {
+            "error_class": type(exc).__name__,
+            "message": str(exc),
+        }
     return {
         "jsonrpc": "2.0",
         "id": req_id,
-        "error": {"code": -32000, "message": "Internal tool error"},
+        "error": error,
     }
 
 
 def handle_request(request):
+    global _last_request_time
     if not isinstance(request, dict):
         return {
             "jsonrpc": "2.0",
             "id": None,
             "error": {"code": -32600, "message": "Invalid Request"},
         }
+    _last_request_time = time.monotonic()
     method = request.get("method") or ""
     params = request.get("params") or {}
     req_id = request.get("id")
@@ -2741,9 +3140,9 @@ def handle_request(request):
                             "message": f"Missing required {word} {quoted} for tool {tool_name}",
                         },
                     }
-            return _internal_tool_error(req_id, tool_name)
-        except Exception:
-            return _internal_tool_error(req_id, tool_name)
+            return _internal_tool_error(req_id, tool_name, e)
+        except Exception as exc:
+            return _internal_tool_error(req_id, tool_name, exc)
 
     # Notifications (missing id) must never get a response
     if req_id is None:
@@ -2918,6 +3317,37 @@ def _maybe_eager_warmup_embedder() -> None:
         )
 
 
+def _start_idle_exit_watchdog() -> None:
+    """Start a daemon thread that exits the process after an idle period.
+
+    When no request has been handled for ``MEMPALACE_MCP_IDLE_HOURS``
+    (default 8 h), the thread terminates the process so that stale MCP
+    servers from ended Claude Code sessions do not accumulate ChromaDB /
+    HNSW file handles on Windows (#1552).
+
+    Set ``MEMPALACE_MCP_IDLE_HOURS=0`` to disable the watchdog.
+    """
+    timeout = _mcp_idle_timeout_secs()
+    if timeout <= 0:
+        return
+    check_interval = min(60.0, timeout / 4)
+
+    def _watchdog() -> None:
+        while True:
+            time.sleep(check_interval)
+            idle = time.monotonic() - _last_request_time
+            if idle >= timeout:
+                logger.info(
+                    "MCP server idle for %.1f h (limit %.1f h); exiting to release file handles.",
+                    idle / 3600,
+                    timeout / 3600,
+                )
+                os._exit(0)
+
+    t = threading.Thread(target=_watchdog, name="mcp-idle-watchdog", daemon=True)
+    t.start()
+
+
 def main():
     """MCP server entry point for the ``mempalace-mcp`` console script.
 
@@ -2972,6 +3402,10 @@ def main():
         # latency. Skipped in daemon-strict mode for the same reason as
         # the capacity probe above.
         _maybe_eager_warmup_embedder()
+        # Idle auto-exit: release ChromaDB file handles from stale servers
+        # that outlived their Claude Code session (#1552). Local-mode only —
+        # daemon-strict mode never opens a local Chroma client.
+        _start_idle_exit_watchdog()
     while True:
         try:
             line = sys.stdin.readline()

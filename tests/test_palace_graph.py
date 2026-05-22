@@ -384,7 +384,7 @@ class TestPostgresFastPath:
 
         # Tripwire: NOT called — postgres fast path doesn't paginate.
         assert get_call_count["n"] == 0, (
-            "col.get was called — postgres fast path didn't run, walk path " "took over instead"
+            "col.get was called — postgres fast path didn't run, walk path took over instead"
         )
 
         # shared_room appears in 2 wings → tunnel node with edges.

@@ -2,9 +2,10 @@
 """
 MemPalace — Give your AI a memory. No API key required.
 
-Two ways to ingest:
-  Projects:      mempalace mine ~/projects/my_app          (code, docs, notes)
-  Conversations: mempalace mine <convo-dir> --mode convos     (Claude Code, Claude.ai, ChatGPT, Slack exports)
+Three ways to ingest:
+  Projects:      mempalace mine ~/projects/my_app                  (code, docs, notes)
+  Conversations: mempalace mine <convo-dir> --mode convos          (Claude Code, Claude.ai, ChatGPT, Slack exports)
+  Documents:     mempalace mine <docs-dir> --mode extract          (PDF, DOCX, PPTX, XLSX, RTF, EPUB — requires mempalace[extract])
 
 Same palace. Same search. Different ingest strategies.
 
@@ -13,6 +14,7 @@ Commands:
     mempalace split <dir>                 Split concatenated mega-files into per-session files
     mempalace mine <dir>                  Mine project files (default)
     mempalace mine <dir> --mode convos    Mine conversation exports
+    mempalace mine <dir> --mode extract   Mine binary office documents (PDF/DOCX/etc.)
     mempalace search "query"              Find anything, exact words
     mempalace mcp                         Show MCP setup command
     mempalace wake-up                     Show L0 + L1 wake-up context
@@ -194,7 +196,16 @@ def _print_daemon_status(data: dict) -> None:
             else:
                 print(f"  WING: {wing:30} {count:>6} drawers")
     elif "error" in data:
+        # Render daemon errors with the same shape as _print_daemon_search:
+        # error → message → hint. Important for "palace.backend_unreachable"
+        # so the user sees "start the postgres container" instead of the
+        # legacy "Run: mempalace init <dir>" hint that was actively misleading
+        # during the 2026-05-17 power-event diagnosis.
         print(f"  daemon reported error: {data['error']}")
+        if "message" in data:
+            print(f"  {data['message']}")
+        if "hint" in data:
+            print(f"  {data['hint']}")
     else:
         # Surface unexpected shapes verbatim.
         print(_json.dumps(data, indent=2))
@@ -776,6 +787,17 @@ def cmd_mine(args):
                 dry_run=args.dry_run,
                 extract_mode=args.extract,
             )
+        elif args.mode == "extract":
+            from .format_miner import mine_formats
+
+            mine_formats(
+                format_dir=args.dir,
+                palace_path=palace_path,
+                wing=args.wing,
+                agent=args.agent,
+                limit=args.limit,
+                dry_run=args.dry_run,
+            )
         else:
             from .miner import mine
 
@@ -788,6 +810,7 @@ def cmd_mine(args):
                 dry_run=args.dry_run,
                 respect_gitignore=not args.no_gitignore,
                 include_ignored=include_ignored,
+                max_chunks_per_file=getattr(args, "max_chunks_per_file", None),
             )
     except MineAlreadyRunning as exc:
         # A live MCP server or another mine is already writing to this
@@ -1243,6 +1266,51 @@ def cmd_purge(args):
 
     remaining = col.count()
     print(f"\n  Purged {match_count:,} drawers. Remaining: {remaining:,}\n")
+
+
+def cmd_replay(args):
+    """Drain ``~/.mempalace/pending/*.jsonl`` by re-issuing each request to the daemon.
+
+    Pending requests accumulate when the Stop / PreCompact hooks fire while
+    the daemon (or its backend) is unreachable — see the 2026-05-21
+    power-resilience design. Drain semantics:
+
+    * Each line is one ``{"dir", "wing", "mode", "ts"}`` mine request.
+    * On 2xx daemon response the line is consumed; on failure the line
+      stays in the file for the next attempt.
+    * Duplicate ``(dir, wing, mode)`` tuples are deduped before transmit
+      so a long outage doesn't replay the same target N times.
+    """
+    if not _daemon_strict():
+        print(
+            "mempalace replay: nothing to do (PALACE_DAEMON_URL not set or strict mode off).",
+            file=sys.stderr,
+        )
+        return 0
+
+    try:
+        from . import pending_queue
+    except Exception as e:
+        print(f"  ERROR: could not import pending_queue: {e}", file=sys.stderr)
+        return 1
+
+    def post(request: dict) -> bool:
+        # _post_daemon_mine_cli doesn't share the hook's pending-queue
+        # re-enqueue path, so skip_queue isn't applicable here; the
+        # CLI variant prints to stderr and returns bool unconditionally.
+        return _post_daemon_mine_cli(request["dir"], request["wing"], request.get("mode", "convos"))
+
+    report = pending_queue.replay(post)
+    if report.is_empty:
+        print("mempalace replay: pending queue is empty.")
+        return 0
+
+    print(
+        f"mempalace replay: attempted={report.attempted} "
+        f"succeeded={report.succeeded} failed={report.failed} "
+        f"files_drained={report.files_drained}"
+    )
+    return 0 if report.failed == 0 else 1
 
 
 def cmd_status(args):
@@ -1906,12 +1974,14 @@ def main():
     p_mine.add_argument("dir", help="Directory to mine")
     p_mine.add_argument(
         "--mode",
-        choices=["projects", "convos", "session"],
+        choices=["projects", "convos", "session", "extract"],
         default="projects",
         help=(
-            "Ingest mode: 'projects' for code/docs (default), 'convos' for chat exports "
-            "(one drawer per exchange), 'session' for one addressable manifest drawer per "
-            "session file (use as an anchor for 'did session X exist?' queries)"
+            "Ingest mode: 'projects' for code/docs (default), 'convos' for chat "
+            "exports (one drawer per exchange), 'session' for one addressable "
+            "manifest drawer per session file (fork-only; anchor for 'did session X "
+            "exist?' queries), 'extract' for office documents (PDF/DOCX/RTF/etc., "
+            "requires mempalace[extract])"
         ),
     )
     p_mine.add_argument("--wing", default=None, help="Wing name (default: directory name)")
@@ -1957,6 +2027,20 @@ def main():
         type=int,
         default=0,
         help="Parallel workers for file processing (default: min(8, cpu_count); 1 = sequential)",
+    )
+    from . import miner as _miner_for_default
+
+    p_mine.add_argument(
+        "--max-chunks-per-file",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            f"Per-file chunk cap; files producing more chunks are skipped with a "
+            f"summary counter. Default {_miner_for_default.MAX_CHUNKS_PER_FILE} "
+            f"(or MEMPALACE_MAX_CHUNKS_PER_FILE). Set 0 to disable. Lower this on "
+            f"Windows if you hit ONNX bad_alloc (#1455)."
+        ),
     )
 
     # sweep
@@ -2255,6 +2339,11 @@ def main():
 
     sub.add_parser("status", help="Show what's been filed")
 
+    sub.add_parser(
+        "replay",
+        help="Drain ~/.mempalace/pending/ by re-issuing queued mine requests to the daemon",
+    )
+
     p_mined = sub.add_parser(
         "mined",
         help="List mined source files grouped by wing (companion to status, which groups by room)",
@@ -2322,6 +2411,7 @@ def main():
         "rooms": cmd_rooms,
         "status": cmd_status,
         "mined": cmd_mined,
+        "replay": cmd_replay,
     }
 
     # Issue #49: announce the routing decision to stderr when daemon_url is

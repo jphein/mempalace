@@ -21,7 +21,6 @@ from .backends import (
     get_backend,
     resolve_backend_for_palace,
 )
-from .backends.chroma import ChromaBackend
 from .config import DEFAULT_COLLECTION_NAME, MempalaceConfig
 
 logger = logging.getLogger("mempalace_mcp")
@@ -495,7 +494,10 @@ def _read_lock_holder(lock_file) -> str:
     """Read the prior holder's identity from the lock-file body, best-effort."""
     try:
         lock_file.seek(_LOCK_SENTINEL_BYTES)
-        content = lock_file.read().strip()
+        content = lock_file.read()
+        if isinstance(content, bytes):
+            content = content.decode("utf-8", errors="replace")
+        content = content.strip()
     except OSError:
         return "another writer (identity not recorded)"
     if not content:
@@ -512,11 +514,12 @@ def _write_lock_holder(lock_file) -> None:
     """
     try:
         ident = f"{os.getpid()} {' '.join(sys.argv[:3])}".strip()
+        ident_bytes = ident.encode("utf-8")
         lock_file.seek(_LOCK_SENTINEL_BYTES)
-        lock_file.truncate(_LOCK_SENTINEL_BYTES + len(ident.encode("utf-8")))
-        lock_file.write(ident)
+        lock_file.truncate(_LOCK_SENTINEL_BYTES + len(ident_bytes))
+        lock_file.write(ident_bytes)
         lock_file.flush()
-    except OSError:
+    except (OSError, UnicodeError):
         pass
 
 
@@ -578,7 +581,7 @@ def mine_palace_lock(palace_path: str):
             os.close(fd)
         except FileExistsError:
             pass
-    lf = open(lock_path, "r+")
+    lf = open(lock_path, "r+b")
     acquired = False
     try:
         # Lock byte 0 explicitly. msvcrt.locking is byte-position dependent;
@@ -639,7 +642,19 @@ def mine_palace_lock(palace_path: str):
 mine_global_lock = mine_palace_lock
 
 
-def file_already_mined(collection, source_file: str, check_mtime: bool = False) -> bool:
+def _metadata_matches_extract_mode(meta: dict, extract_mode: Optional[str]) -> bool:
+    if extract_mode is None:
+        return True
+    stored_mode = meta.get("extract_mode")
+    return stored_mode == extract_mode or (extract_mode == "exchange" and stored_mode is None)
+
+
+def file_already_mined(
+    collection,
+    source_file: str,
+    check_mtime: bool = False,
+    extract_mode: Optional[str] = None,
+) -> bool:
     """Check if a file has already been filed in the palace.
 
     Returns False (so the file gets re-mined) when:
@@ -651,12 +666,43 @@ def file_already_mined(collection, source_file: str, check_mtime: bool = False) 
     When check_mtime=True (used by project miner), also re-mines on content
     change. When check_mtime=False (used by convo miner), transcripts are
     assumed immutable, so only the version gate triggers a rebuild.
+
+    When extract_mode is set (used by convo miner), idempotency is scoped to
+    that extraction mode so exchange-mode and general-mode drawers can coexist
+    for the same source transcript. Legacy drawers without extract_mode are
+    treated as exchange-mode drawers.
     """
     try:
-        results = collection.get(where={"source_file": source_file}, limit=1)
-        if not results.get("ids"):
+        stored_meta = None
+        if extract_mode is None:
+            results = collection.get(where={"source_file": source_file}, limit=1)
+            if not results.get("ids"):
+                return False
+            stored_meta = results.get("metadatas", [{}])[0] or {}
+        else:
+            offset = 0
+            while True:
+                results = collection.get(
+                    where={"source_file": source_file},
+                    limit=1000,
+                    offset=offset,
+                    include=["metadatas"],
+                )
+                ids = results.get("ids") or []
+                metadatas = results.get("metadatas") or []
+                stored_meta = next(
+                    (
+                        meta or {}
+                        for meta in metadatas
+                        if _metadata_matches_extract_mode(meta or {}, extract_mode)
+                    ),
+                    None,
+                )
+                if stored_meta is not None or not ids:
+                    break
+                offset += len(ids)
+        if stored_meta is None:
             return False
-        stored_meta = results.get("metadatas", [{}])[0] or {}
         # Pre-v2 drawers have no version field — treat them as stale.
         stored_version = stored_meta.get("normalize_version", 1)
         if stored_version < NORMALIZE_VERSION:
@@ -701,13 +747,16 @@ def bulk_check_mined(collection) -> dict[str, float]:
     return mined
 
 
-def prefetch_mined_set(collection) -> set[str]:
+def prefetch_mined_set(collection, extract_mode: Optional[str] = None) -> set[str]:
     """Pre-fetch the set of source_files already mined at the current NORMALIZE_VERSION.
 
     Mirrors file_already_mined()'s version-gate semantics (check_mtime=False
     branch) but in one bulk pass instead of one ChromaDB query per file.
     Returns a set of source_file paths whose stored drawers are at or above
     NORMALIZE_VERSION; callers do `if path in result_set: skip`.
+
+    When extract_mode is set, mirrors file_already_mined(..., extract_mode=...)
+    so conversation mines skip per extraction mode rather than per source file.
 
     The convo miner walks thousands of transcript files; per-file
     `collection.get(where={"source_file": X})` costs ~2s on a 150k-drawer
@@ -721,8 +770,11 @@ def prefetch_mined_set(collection) -> set[str]:
         while offset < total:
             batch = collection.get(limit=1000, offset=offset, include=["metadatas"])
             for meta in batch["metadatas"]:
+                meta = meta or {}
                 src = meta.get("source_file")
                 if not src:
+                    continue
+                if not _metadata_matches_extract_mode(meta, extract_mode):
                     continue
                 # Same default as file_already_mined: missing version == 1
                 version = meta.get("normalize_version", 1)
