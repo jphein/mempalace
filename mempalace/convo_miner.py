@@ -25,6 +25,7 @@ from .palace import (
     file_already_mined,
     get_collection,
     mine_lock,
+    mine_palace_lock,
     prefetch_mined_set,
 )
 
@@ -765,14 +766,54 @@ def mine_convos(
         "exchange" — default exchange-pair chunking (Q+A = one unit)
         "general"  — general extractor: decisions, preferences, milestones, problems, emotions
 
+    The real work is in :func:`_mine_convos_impl`; this wrapper holds the
+    per-palace flock around it so two concurrent ``mempalace mine --mode
+    convos`` invocations against the same palace can't pile up. This
+    mirrors the pattern in :func:`mempalace.miner.mine`. The lock is
+    non-blocking: ``MineAlreadyRunning`` propagates to the CLI (which
+    renders a holder-aware message and exits non-zero) or to in-process
+    callers that expect to coexist with another writer.
+
+    Dry-run skips the lock — it never writes to the palace and so cannot
+    corrupt anything, and skipping the lock lets dry-run probes coexist
+    with a live mine.
+
     Chunking parameters (chunk_size, min_chunk_size) are read from
-    MempalaceConfig so `config.json` governs both this path and the
-    project-file miner in `miner.py`. `min_chunk_size` preserves
-    convo_miner's lower default (30 — more permissive than the 50-char
-    project default, so short conversation exchanges are not dropped)
-    when not explicitly set in config.json, so a user who never touches
-    chunking keeps the existing behavior.
+    MempalaceConfig inside :func:`_mine_convos_impl` so `config.json`
+    governs both this path and the project-file miner in `miner.py`.
     """
+    if dry_run:
+        return _mine_convos_impl(
+            convo_dir,
+            palace_path,
+            wing=wing,
+            agent=agent,
+            limit=limit,
+            dry_run=dry_run,
+            extract_mode=extract_mode,
+        )
+
+    with mine_palace_lock(palace_path):
+        return _mine_convos_impl(
+            convo_dir,
+            palace_path,
+            wing=wing,
+            agent=agent,
+            limit=limit,
+            dry_run=dry_run,
+            extract_mode=extract_mode,
+        )
+
+
+def _mine_convos_impl(
+    convo_dir: str,
+    palace_path: str,
+    wing: str = None,
+    agent: str = "mempalace",
+    limit: int = 0,
+    dry_run: bool = False,
+    extract_mode: str = "exchange",
+):
     from .config import MempalaceConfig
 
     palace_config = MempalaceConfig()

@@ -4,13 +4,14 @@ import shutil
 from pathlib import Path
 
 import chromadb
+import pytest
 
 from mempalace.convo_miner import (
     _is_ai_tool_path,
     _resolve_wing,
     mine_convos,
 )
-from mempalace.palace import file_already_mined
+from mempalace.palace import MineAlreadyRunning, file_already_mined
 
 
 def test_convo_mining():
@@ -194,6 +195,107 @@ def test_mine_convos_rebuilds_stale_drawers_after_schema_bump(capsys):
         del col, client
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+def _hold_palace_lock_in_child(palace_path, ready_flag, release_flag):
+    """Acquire mine_palace_lock in a child process and hold until signalled.
+
+    Cannot use threads because mine_palace_lock is intentionally re-entrant
+    within a single thread (so ChromaCollection write methods can compose
+    with miner.mine() without self-deadlock). The convos concurrency
+    guarantee is across processes / threads, so the test has to mirror that.
+    """
+    import os as _os
+    import time as _time
+
+    from mempalace.palace import mine_palace_lock as _mpl
+
+    with _mpl(palace_path):
+        open(ready_flag, "w").close()
+        for _ in range(500):
+            if _os.path.exists(release_flag):
+                return
+            _time.sleep(0.01)
+
+
+def test_mine_convos_refuses_concurrent_run_against_same_palace(tmp_path, monkeypatch):
+    """A second `mine_convos` against a palace currently being mined must
+    raise MineAlreadyRunning, not stack up as a waiter that drives parallel
+    ChromaDB writes. Mirrors the guarantee already given by `miner.mine`
+    (see test_palace_locks.py) for the convos code path.
+    """
+    import multiprocessing
+    import time
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    convo_dir = tmp_path / "convos"
+    convo_dir.mkdir()
+    (convo_dir / "chat.txt").write_text("> q1\nshort answer.\n\n> q2\nanother short answer.\n")
+    palace_path = str(tmp_path / "palace")
+    ready_flag = str(tmp_path / "ready")
+    release_flag = str(tmp_path / "release")
+
+    ctx = multiprocessing.get_context("spawn")
+    holder = ctx.Process(
+        target=_hold_palace_lock_in_child,
+        args=(palace_path, ready_flag, release_flag),
+    )
+    holder.start()
+    try:
+        # Wait for the child to actually hold the lock before we attempt
+        # to acquire from this process.
+        for _ in range(500):
+            if os.path.exists(ready_flag):
+                break
+            time.sleep(0.01)
+        assert os.path.exists(ready_flag), "child never acquired palace lock"
+
+        with pytest.raises(MineAlreadyRunning):
+            mine_convos(str(convo_dir), palace_path, wing="test")
+    finally:
+        open(release_flag, "w").close()
+        holder.join(timeout=10)
+        if holder.is_alive():
+            holder.terminate()
+            holder.join(timeout=5)
+
+
+def test_mine_convos_dry_run_bypasses_palace_lock(tmp_path, monkeypatch):
+    """Dry-run never writes to the palace, so it must coexist with a live
+    mine instead of being blocked by the per-palace flock.
+    """
+    import multiprocessing
+    import time
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    convo_dir = tmp_path / "convos"
+    convo_dir.mkdir()
+    (convo_dir / "chat.txt").write_text("> q1\nshort answer.\n\n> q2\nanother short answer.\n")
+    palace_path = str(tmp_path / "palace")
+    ready_flag = str(tmp_path / "ready_dry")
+    release_flag = str(tmp_path / "release_dry")
+
+    ctx = multiprocessing.get_context("spawn")
+    holder = ctx.Process(
+        target=_hold_palace_lock_in_child,
+        args=(palace_path, ready_flag, release_flag),
+    )
+    holder.start()
+    try:
+        for _ in range(500):
+            if os.path.exists(ready_flag):
+                break
+            time.sleep(0.01)
+        assert os.path.exists(ready_flag), "child never acquired palace lock"
+
+        # Must not raise — dry-run skips the lock entirely.
+        mine_convos(str(convo_dir), palace_path, wing="test", dry_run=True)
+    finally:
+        open(release_flag, "w").close()
+        holder.join(timeout=10)
+        if holder.is_alive():
+            holder.terminate()
+            holder.join(timeout=5)
 
 
 # ── _is_ai_tool_path / _resolve_wing — wing_api auto-routing ───────────

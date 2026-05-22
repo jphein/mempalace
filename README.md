@@ -2,6 +2,23 @@
 
 **TechEmpower's production fork of [MemPalace/mempalace](https://github.com/MemPalace/mempalace)** (transferred from `jphein/mempalace` in May 2026)
 
+> [!CAUTION]
+> # 🚨 CRITICAL SECURITY WARNING: BEWARE OF SCAMS (upstream notice)
+> **MemPalace has NO other official websites.**
+>
+> The **ONLY** official sources are:
+> 1. The upstream **[GitHub repository](https://github.com/MemPalace/mempalace)** and this fork's **[GitHub repository](https://github.com/techempower-org/mempalace)**
+> 2. The **[PyPI package](https://pypi.org/project/mempalace/)**
+> 3. The docs at **[mempalaceofficial.com](https://mempalaceofficial.com)**
+>
+> **ANY other domain** (including `.tech`, `.net`, or other `.com` variants) is an **impostor** and may distribute **malware**. Do not download executables from untrusted sites. Details and timeline: [docs/HISTORY.md](docs/HISTORY.md).
+
+> [!IMPORTANT]
+> **🚨 Claude Code sessions expire in 30 days w/out auto-save hooks wired!** **[Read this →](https://github.com/MemPalace/mempalace/discussions/1388)**
+>
+> Need the shortest recovery/setup path? Use the
+> [Claude Code retention setup checklist](https://mempalaceofficial.com/guide/claude-code-retention.html).
+
 [![version-shield](https://img.shields.io/badge/version-3.3.5-4dc9f6?style=flat-square&labelColor=0a0e14)](https://github.com/techempower-org/mempalace/releases) [![upstream-shield](https://img.shields.io/badge/upstream-3.3.5-7dd8f8?style=flat-square&labelColor=0a0e14)](https://github.com/MemPalace/mempalace/releases)
 [![python-shield](https://img.shields.io/badge/python-3.9+-7dd8f8?style=flat-square&labelColor=0a0e14&logo=python&logoColor=7dd8f8)](https://www.python.org/)
 [![license-shield](https://img.shields.io/badge/license-MIT-b0e8ff?style=flat-square&labelColor=0a0e14)](LICENSE)

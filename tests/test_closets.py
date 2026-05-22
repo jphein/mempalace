@@ -1037,21 +1037,30 @@ class TestDiaryIngest:
 
 class TestTunnels:
     """Tunnels are explicit cross-wing connections stored in
-    ``~/.mempalace/tunnels.json``. Each test points the module-level
-    ``_TUNNEL_FILE`` at a fresh tmp file so tests don't cross-contaminate
-    or touch the user's real tunnels."""
+    ``<palace_path_parent>/tunnels.json``. Each test points the resolver at
+    a fresh tmp file so tests don't cross-contaminate or touch the user's
+    real tunnels."""
 
     def setup_method(self):
         import mempalace.palace_graph as pg
 
-        self._orig = pg._TUNNEL_FILE
+        self._pg = pg
+        self._orig_get = pg._get_tunnel_file
+        self._orig_legacy = pg._legacy_tunnel_file
         self._tmpdir = tempfile.mkdtemp()
-        pg._TUNNEL_FILE = os.path.join(self._tmpdir, "tunnels.json")
+        self._tunnel_path = os.path.join(self._tmpdir, "tunnels.json")
+        pg._get_tunnel_file = lambda *a, **kw: self._tunnel_path
+        pg._legacy_tunnel_file = lambda: self._tunnel_path + ".legacy"
+        # Neutralize the endpoint-existence check added for #1468 so these
+        # legacy tests (which predate validation) don't get rejected when
+        # an earlier test module has bound _get_collection to a real backend.
+        self._orig_get_col = pg._get_collection
+        pg._get_collection = lambda *a, **kw: None
 
     def teardown_method(self):
-        import mempalace.palace_graph as pg
-
-        pg._TUNNEL_FILE = self._orig
+        self._pg._get_tunnel_file = self._orig_get
+        self._pg._legacy_tunnel_file = self._orig_legacy
+        self._pg._get_collection = self._orig_get_col
         import shutil
 
         shutil.rmtree(self._tmpdir, ignore_errors=True)
@@ -1145,7 +1154,7 @@ class TestTunnels:
         import mempalace.palace_graph as pg
 
         # Simulate a crash that left a truncated file behind.
-        with open(pg._TUNNEL_FILE, "w") as f:
+        with open(pg._get_tunnel_file(), "w") as f:
             f.write("{not valid json")
 
         # Load should return [] rather than raising.
@@ -1161,8 +1170,8 @@ class TestTunnels:
         import mempalace.palace_graph as pg
 
         create_tunnel("wing_a", "r1", "wing_b", "r2")
-        assert os.path.exists(pg._TUNNEL_FILE)
-        assert not os.path.exists(pg._TUNNEL_FILE + ".tmp")
+        assert os.path.exists(pg._get_tunnel_file())
+        assert not os.path.exists(pg._get_tunnel_file() + ".tmp")
 
     def test_concurrent_creates_preserve_all_tunnels(self):
         """Regression: two concurrent create_tunnel calls must not clobber

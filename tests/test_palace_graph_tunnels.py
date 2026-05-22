@@ -1,5 +1,6 @@
 """Tests for explicit tunnel helpers in mempalace.palace_graph."""
 
+import logging
 import os
 import stat
 import sys
@@ -12,8 +13,23 @@ with patch.dict("sys.modules", {"chromadb": MagicMock()}):
 
 
 def _use_tmp_tunnel_file(monkeypatch, tmp_path):
+    """Redirect both the tunnel-file resolver and the legacy-file check at the
+    tmp_path so existing tests stay in the configured-path branch and don't
+    accidentally trip the new legacy-file warning branch in _load_tunnels.
+
+    Also neutralizes ``_get_collection`` so the endpoint-existence validation
+    added for #1468 falls through to the "can't verify, allow" branch by
+    default. Tests that exercise the validation path supply their own stub
+    via a subsequent monkeypatch.setattr.
+    """
     tunnel_file = tmp_path / "tunnels.json"
-    monkeypatch.setattr(palace_graph, "_TUNNEL_FILE", str(tunnel_file))
+    monkeypatch.setattr(palace_graph, "_get_tunnel_file", lambda *a, **kw: str(tunnel_file))
+    monkeypatch.setattr(
+        palace_graph,
+        "_legacy_tunnel_file",
+        lambda: str(tmp_path / "legacy-tunnels.json"),
+    )
+    monkeypatch.setattr(palace_graph, "_get_collection", lambda *a, **kw: None)
     return tunnel_file
 
 
@@ -548,6 +564,200 @@ class TestHyphenatedWingNormalization:
 
         assert len(palace_graph.follow_tunnels("mempalace_public", "auth")) == 1
         assert len(palace_graph.follow_tunnels("mempalace-public", "auth")) == 1
+
+
+# =============================================================================
+# Regression: tunnel file follows palace_path config (#1467)
+# =============================================================================
+class TestTunnelFileFollowsConfig:
+    """Bug A: prior to 3.3.6 the tunnel file was hardcoded at
+    ``~/.mempalace/tunnels.json`` regardless of MempalaceConfig.palace_path.
+    Under any profile-isolated $HOME (subagent profiles, sandboxes, multi-tenant
+    hosts) tunnels would write to a different file than drawers, so
+    ``create_tunnel`` would appear to succeed while the tunnel was invisible
+    to every other process touching the configured palace.
+    """
+
+    def test_default_tunnel_file_unchanged(self):
+        """Regression: with default config, tunnel_file resolves to
+        ``~/.mempalace/tunnels.json`` so existing single-user installs are
+        not silently relocated."""
+        from mempalace.config import DEFAULT_PALACE_PATH, MempalaceConfig
+
+        cfg = MempalaceConfig()
+        # Default palace_path is ~/.mempalace/palace, so tunnel is sibling.
+        expected = os.path.join(os.path.dirname(DEFAULT_PALACE_PATH), "tunnels.json")
+        assert cfg.tunnel_file == expected
+        assert palace_graph._get_tunnel_file(cfg) == expected
+
+    def test_tunnel_file_follows_palace_path(self, tmp_path):
+        """Custom palace_path → tunnel sits beside the palace, not at the
+        hardcoded legacy location."""
+        from mempalace.config import MempalaceConfig
+
+        custom_dir = tmp_path / "custom-palace"
+        cfg = MempalaceConfig(config_dir=tmp_path)
+        cfg._file_config["palace_path"] = str(custom_dir)
+        assert cfg.tunnel_file == str(tmp_path / "tunnels.json")
+        assert palace_graph._get_tunnel_file(cfg) == str(tmp_path / "tunnels.json")
+
+    def test_load_tunnels_warns_on_orphaned_legacy_file(self, tmp_path, monkeypatch, caplog):
+        """When the configured tunnel file is missing but a legacy file
+        exists at a different path, _load_tunnels logs a one-line warning
+        naming both paths and returns []. Critically, it does NOT
+        auto-migrate — silent merging risks clobbering newer data."""
+        configured = tmp_path / "configured" / "tunnels.json"
+        legacy = tmp_path / "legacy" / "tunnels.json"
+        legacy.parent.mkdir(parents=True)
+        legacy.write_text(
+            '[{"id":"orphan","source":{"wing":"a","room":"r"},'
+            '"target":{"wing":"b","room":"r"},"label":""}]',
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(palace_graph, "_get_tunnel_file", lambda *a, **kw: str(configured))
+        monkeypatch.setattr(palace_graph, "_legacy_tunnel_file", lambda: str(legacy))
+
+        with caplog.at_level(logging.WARNING, logger="mempalace_graph"):
+            result = palace_graph._load_tunnels()
+
+        assert result == [], "must not auto-migrate from legacy file"
+        assert str(legacy) in caplog.text
+        assert str(configured) in caplog.text
+
+    def test_no_legacy_warning_when_paths_match(self, tmp_path, monkeypatch, caplog):
+        """If configured and legacy resolve to the same path (default install),
+        we must not emit a misleading 'legacy file ignored' warning when the
+        file simply doesn't exist yet."""
+        same = tmp_path / "tunnels.json"
+        monkeypatch.setattr(palace_graph, "_get_tunnel_file", lambda *a, **kw: str(same))
+        monkeypatch.setattr(palace_graph, "_legacy_tunnel_file", lambda: str(same))
+
+        with caplog.at_level(logging.WARNING, logger="mempalace_graph"):
+            assert palace_graph._load_tunnels() == []
+
+        assert "Legacy tunnels file" not in caplog.text
+
+
+# =============================================================================
+# Regression: create_tunnel validates explicit-tunnel endpoints (#1468)
+# =============================================================================
+class _StubCollection:
+    """Minimal chroma-collection stub for endpoint-validation tests."""
+
+    def __init__(self, existing_rooms):
+        # existing_rooms is a set of (wing, room) tuples
+        self.existing_rooms = set(existing_rooms)
+        self.calls = []
+
+    def get(self, where=None, limit=None, include=None):
+        self.calls.append(where)
+        # Parse the {"$and": [{"wing": W}, {"room": R}]} where clause we issue.
+        wing = room = None
+        for clause in (where or {}).get("$and", []):
+            if "wing" in clause:
+                wing = clause["wing"]
+            if "room" in clause:
+                room = clause["room"]
+        if (wing, room) in self.existing_rooms:
+            return {"ids": ["drawer-1"]}
+        return {"ids": []}
+
+
+class TestCreateTunnelEndpointValidation:
+    """Bug B: pre-3.3.6 ``create_tunnel`` only validated wing/room names
+    were non-empty strings, never that the rooms actually existed in the
+    chroma index. Combined with Bug A's read-bubble, callers could
+    successfully create tunnels pointing at phantom endpoints and a
+    follow-up ``list_tunnels`` would self-confirm via the same isolated
+    file. The fix queries chroma for at least one drawer in each endpoint
+    before persisting an explicit tunnel."""
+
+    def test_create_tunnel_rejects_nonexistent_target_room(self, tmp_path, monkeypatch):
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        col = _StubCollection({("wing_code", "auth")})  # only source exists
+        monkeypatch.setattr(palace_graph, "_get_collection", lambda config=None: col)
+
+        with pytest.raises(ValueError) as exc_info:
+            palace_graph.create_tunnel("wing_code", "auth", "wing_people", "phantom")
+        msg = str(exc_info.value)
+        assert "phantom" in msg
+        assert "wing_people" in msg
+        # And nothing was persisted.
+        assert palace_graph.list_tunnels() == []
+
+    def test_create_tunnel_rejects_nonexistent_source_room(self, tmp_path, monkeypatch):
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        col = _StubCollection({("wing_people", "users")})  # only target exists
+        monkeypatch.setattr(palace_graph, "_get_collection", lambda config=None: col)
+
+        with pytest.raises(ValueError) as exc_info:
+            palace_graph.create_tunnel("wing_code", "phantom", "wing_people", "users")
+        msg = str(exc_info.value)
+        assert "phantom" in msg
+        assert "wing_code" in msg
+
+    def test_create_tunnel_succeeds_when_both_rooms_exist(self, tmp_path, monkeypatch):
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        col = _StubCollection({("wing_code", "auth"), ("wing_people", "users")})
+        monkeypatch.setattr(palace_graph, "_get_collection", lambda config=None: col)
+
+        t = palace_graph.create_tunnel(
+            "wing_code", "auth", "wing_people", "users", label="verified"
+        )
+        assert t["label"] == "verified"
+        assert len(palace_graph.list_tunnels()) == 1
+
+    def test_create_tunnel_skips_validation_when_collection_unreachable(
+        self, tmp_path, monkeypatch
+    ):
+        """When chroma is unreachable (palace not yet created, transient
+        failure, tests without a real backend), validation is skipped
+        rather than fail-closed — matches the tolerance pattern used
+        throughout palace_graph._get_collection()."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        monkeypatch.setattr(palace_graph, "_get_collection", lambda config=None: None)
+
+        t = palace_graph.create_tunnel("wing_code", "any", "wing_people", "any", label="cold-start")
+        assert t["label"] == "cold-start"
+
+    def test_create_tunnel_tolerates_collection_query_exception(self, tmp_path, monkeypatch):
+        """Permission errors / temporary chroma faults during the
+        validation query must not block legitimate writes."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+
+        class _AngryCollection:
+            def get(self, **kw):
+                raise RuntimeError("simulated chroma fault")
+
+        monkeypatch.setattr(palace_graph, "_get_collection", lambda config=None: _AngryCollection())
+
+        # Should not raise — fall back to "allow" rather than fail-closed.
+        t = palace_graph.create_tunnel("wing_code", "x", "wing_people", "y", label="best-effort")
+        assert t["label"] == "best-effort"
+
+    def test_compute_topic_tunnels_skips_endpoint_validation(self, tmp_path, monkeypatch):
+        """Topic tunnels use synthetic ``topic:<name>`` room identifiers
+        that don't correspond to real chroma rooms. The endpoint-existence
+        check must skip kind != 'explicit', otherwise auto-derived
+        cross-wing graph edges would all be rejected."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        # Empty collection — would reject if validation ran.
+        col = _StubCollection(set())
+        monkeypatch.setattr(palace_graph, "_get_collection", lambda config=None: col)
+
+        # Two wings share a topic — should produce a topic-tunnel even
+        # though neither "topic:auth" room exists in the stub collection.
+        topics_by_wing = {
+            "wing_code": ["auth", "logging"],
+            "wing_people": ["auth", "schema"],
+        }
+        palace_graph.compute_topic_tunnels(topics_by_wing, min_count=1)
+        tunnels = palace_graph.list_tunnels()
+        assert tunnels, "topic tunnels must persist regardless of room validation"
+        assert all(t.get("kind") == "topic" for t in tunnels)
+        # And the validation query was never invoked for topic tunnels.
+        assert col.calls == []
 
 
 class TestEntityTunnels:
