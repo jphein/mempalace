@@ -62,6 +62,32 @@ class DaemonError(RuntimeError):
     """Raised when a daemon HTTP call fails or returns a JSON-RPC error."""
 
 
+def _print_retired_local_palace_or_default(palace_path: str) -> None:
+    """If the user's default palace is missing AND a RETIRED marker
+    exists, print the marker's content as the not-found message — so
+    agents see "set PALACE_DAEMON_URL" instead of "Run: mempalace init".
+
+    Falls through to the legacy "Run: mempalace init" message in every
+    other case (palace literally absent on a fresh install, etc.).
+    """
+    palace_root = os.path.expanduser("~/.mempalace")
+    marker = os.path.join(palace_root, "RETIRED")
+    default_path = os.path.join(palace_root, "palace")
+    is_default = os.path.abspath(palace_path) == os.path.abspath(default_path)
+    if is_default and os.path.exists(marker):
+        try:
+            with open(marker) as f:
+                note = f.read().rstrip()
+        except OSError:
+            note = "(marker unreadable)"
+        print(f"\n  Local palace at {default_path} is RETIRED.\n")
+        for line in note.splitlines():
+            print(f"  {line}")
+        return
+    print(f"\n  No palace found at {palace_path}")
+    print("  Run: mempalace init <dir> then mempalace mine <dir>")
+
+
 def _daemon_strict() -> bool:
     """True when daemon routing is on and strict mode is enabled.
 
@@ -872,7 +898,7 @@ def cmd_sync(args):
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
 
     if not os.path.isdir(palace_path):
-        print(f"\n  No palace found at {palace_path}")
+        _print_retired_local_palace_or_default(palace_path)
         return
     if not os.path.isfile(os.path.join(palace_path, "chroma.sqlite3")):
         print(f"\n  Palace dir at {palace_path} exists but has no chroma.sqlite3 yet.")
@@ -1197,7 +1223,7 @@ def cmd_purge(args):
     )
 
     if not os.path.isdir(palace_path) or not contains_palace_database(palace_path):
-        print(f"\n  No palace found at {palace_path}")
+        _print_retired_local_palace_or_default(palace_path)
         return
 
     source_file = getattr(args, "source_file", None)
@@ -1351,7 +1377,7 @@ def cmd_mined(args):
     )
 
     if not os.path.isdir(palace_path) or not contains_palace_database(palace_path):
-        print(f"\n  No palace found at {palace_path}")
+        _print_retired_local_palace_or_default(palace_path)
         return
 
     backend = ChromaBackend()
@@ -1535,7 +1561,7 @@ def cmd_repair(args):
     db_path = os.path.join(palace_path, "chroma.sqlite3")
 
     if not os.path.isdir(palace_path):
-        print(f"\n  No palace found at {palace_path}")
+        _print_retired_local_palace_or_default(palace_path)
         return
     if not contains_palace_database(palace_path):
         print(f"\n No palace database found at {db_path}")

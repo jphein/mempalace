@@ -693,6 +693,44 @@ def _get_collection_postgres(create=False):
         return None
 
 
+def _check_local_palace_retired(palace_path: str) -> None:
+    """Refuse to open the default local palace when a RETIRED marker exists.
+
+    Recurring confusion source: an agent / CLI invocation that doesn't set
+    ``PALACE_DAEMON_URL`` silently falls through to the default chroma
+    palace at ``~/.mempalace/palace`` and reports a smaller, stale drawer
+    count instead of erroring. When a user has retired their local
+    palace in favor of a daemon-routed setup, they can drop a
+    ``~/.mempalace/RETIRED`` text file. This check refuses to open ANY
+    palace whose path resolves to the default location while that
+    marker is present, and surfaces the marker's content as the error
+    message.
+
+    Escape hatch: ``MEMPALACE_ALLOW_RETIRED_PALACE=1`` lets forensic
+    reads of the archived palace proceed. Useful when explicitly
+    passing ``--palace <archived-dir>``.
+    """
+    if os.environ.get("MEMPALACE_ALLOW_RETIRED_PALACE", "").strip():
+        return
+    palace_root = os.path.expanduser("~/.mempalace")
+    marker_path = os.path.join(palace_root, "RETIRED")
+    if not os.path.exists(marker_path):
+        return
+    default_palace = os.path.join(palace_root, "palace")
+    if os.path.abspath(palace_path) != os.path.abspath(default_palace):
+        return  # explicit non-default path; let the caller through
+    try:
+        with open(marker_path) as f:
+            note = f.read().strip()
+    except OSError:
+        note = ""
+    raise RuntimeError(
+        f"local palace at {default_palace} is retired (see "
+        f"~/.mempalace/RETIRED).\n\n{note}\n\n"
+        "Set MEMPALACE_ALLOW_RETIRED_PALACE=1 to override (forensic only)."
+    )
+
+
 def _get_collection_chroma(create=False):
     """ChromaDB-backed branch of ``_get_collection``.
 
@@ -702,6 +740,19 @@ def _get_collection_chroma(create=False):
     inline comments below.
     """
     global _client_cache, _collection_cache, _metadata_cache, _metadata_cache_time
+    global _last_backend_error
+    # Honor the ~/.mempalace/RETIRED marker — refuse to silently open a
+    # default-path palace when the user has retired it. Surfaces a clear
+    # error via _no_palace() instead of returning a stale drawer count.
+    try:
+        _check_local_palace_retired(_config.palace_path)
+    except RuntimeError as e:
+        _last_backend_error = {
+            "type": "LocalPalaceRetired",
+            "message": str(e),
+            "ts": time.time(),
+        }
+        return None
     for attempt in range(2):
         try:
             client = _get_client()
@@ -797,6 +848,15 @@ def _no_palace():
     here so the response carries the actual cause.
     """
     err = _last_backend_error
+    if err and err.get("type") == "LocalPalaceRetired":
+        # User has explicitly retired the local palace (RETIRED marker
+        # under ~/.mempalace/). Tell them exactly what to do — usually
+        # set PALACE_DAEMON_URL — rather than the legacy "init" hint.
+        return {
+            "error": "palace.local_retired",
+            "message": err.get("message", "local palace retired"),
+            "hint": "Set PALACE_DAEMON_URL to use the daemon, or MEMPALACE_ALLOW_RETIRED_PALACE=1 for forensic local reads.",
+        }
     if err and err.get("type") == "OperationalError":
         return {
             "error": "palace.backend_unreachable",
