@@ -24,6 +24,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Documented OpenCode integration recipe (read-side MCP + push plugin + retrospective adapter)** ([`60dc9e6`](https://github.com/jphein/mempalace/commit/60dc9e6))
+  Adds `docs/integrations/opencode.md` and an `examples/opencode/`
+  directory capturing the three-direction OpenCode + MemPalace
+  integration recipe for daemon-routed setups:
+
+  - **Read** — `~/.config/opencode/opencode.jsonc` MCP entry pointing
+    at `palace-daemon/clients/mempalace-mcp-wrapper.sh` (sources
+    `~/.config/palace-daemon/env` so the API key never lands in
+    plaintext config).
+  - **Push (live)** — option-K's `opencode-plugin-mempalace` npm
+    package (project-basename wings, default 15-message threshold,
+    session.idle flush, SIGINT/SIGTERM rescue, pre-compaction
+    injection — closest match to MemPalace's Claude Code stop-hook
+    pattern).
+  - **Pull (retrospective)** — the cherry-picked
+    `OpenCodeSourceAdapter` from upstream PR #1484, run via
+    `mempalace mine --source opencode` for one-shot backfill of
+    historical sessions.
+
+  Includes a re-applicable patch
+  (`examples/opencode/option-k-plugin-daemon-routing.patch`) for
+  option-K's plugin v1.2.1 issue #1, where `isInitialized()` passes
+  `--palace <local-dir>/.mempalace/palace` to `mempalace status`,
+  forcing a local-store lookup that bypasses `PALACE_DAEMON_URL`
+  routing. Without the patch the plugin re-runs `mempalace init
+  --yes <dir>` on every OpenCode start (idempotent against the
+  daemon, just wasteful); with the patch init+isInitialized
+  short-circuit when daemon-routed mode is detected.
+
+  Why the recipe lives here rather than upstream: this fork's
+  single-writer-via-palace-daemon shape doesn't match upstream's
+  assumed local-CLI install pattern (Milofax #297, geco #1524, and
+  Dxrk #1567 all assume a local mempalace install). Upstream PRs
+  will eventually subsume parts of this — when they do, the YAML
+  entries become removable; for now the recipe captures what
+  actually works on a daemon-routed box.
+
+  *Files:* `docs/integrations/opencode.md`, `examples/opencode/opencode.jsonc.example`, `examples/opencode/option-k-plugin-daemon-routing.patch`
+
+
 - **.opencode/opencode.json — repo-root MCP config so opencode picks up mempalace automatically** ([`ba16b82`](https://github.com/jphein/mempalace/commit/ba16b82))
   Cherry-pick of upstream PR #1567 (Dxrk777). Adds
   `.opencode/opencode.json` so that running `opencode` in the
