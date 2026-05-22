@@ -39,12 +39,12 @@ The sections above are the fork's inherited mission and principles — same word
 
 ## What This Is
 
-JP's fork of [milla-jovovich/mempalace](https://github.com/milla-jovovich/mempalace) — a local AI memory system using ChromaDB for verbatim storage and semantic search.
+TechEmpower's production fork of [MemPalace/mempalace](https://github.com/MemPalace/mempalace) — a local AI memory system. Transferred from `jphein/mempalace` to `techempower-org/mempalace` in May 2026. Drawer storage is postgres + pgvector behind a palace-daemon at `disks.jphe.in:8085`; the legacy ChromaDB-on-katana palace has been retired (see `~/.mempalace/RETIRED`).
 
-- **Fork**: `jphein/mempalace` (origin) / `milla-jovovich/mempalace` (upstream)
+- **Fork**: `techempower-org/mempalace` (origin) / `MemPalace/mempalace` (upstream)
 - **Version + sync state**: `cat mempalace/__init__.py` for fork version; `git log --oneline upstream/develop ^HEAD | head -5` for unmerged upstream commits. Release/landed-PR history in `FORK_CHANGELOG.md`.
-- **Python**: venv at `./venv/`, editable install with dev deps
-- **Palace data**: `~/.mempalace/palace` (ChromaDB) + `~/.mempalace/config.json`
+- **Python**: venv at `./.venv/` (uv-managed), editable install with dev deps. Activate via `source .venv/bin/activate` or invoke binaries directly (`.venv/bin/python -m pytest`, `.venv/bin/mempalace status`).
+- **Palace data**: production lives in postgres on `disks.jphe.in`; the local `~/.mempalace/palace/` chroma store was retired on the 2026-05-14 pgvector cutover and renamed to `~/.mempalace/palace.retired-pre-pgcutover-2026-05-14/`. Daemon connection via `~/.config/palace-daemon/env` (sourced by the MCP wrapper at `~/Projects/palace-daemon/clients/mempalace-mcp-wrapper.sh`).
 
 ## Key Files
 
@@ -71,7 +71,7 @@ Authoritative sources — don't duplicate inventory in this file. CLAUDE.md stay
 
 - **Historical record of every fork-ahead change** — [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md), rendered from canonical `docs/fork-changes.yaml`.
 - **Open upstream PRs** — `gh pr list --repo MemPalace/mempalace --author jphein` (status table in README's "Fork change queue").
-- **In-flight fork work, todos, coordination promises** — [jphein/mempalace issues](https://github.com/jphein/mempalace/issues). Anything that would feel like a broken promise if forgotten belongs here, not in scratch and not inline in CLAUDE.md.
+- **In-flight fork work, todos, coordination promises** — [techempower-org/mempalace issues](https://github.com/techempower-org/mempalace/issues). Anything that would feel like a broken promise if forgotten belongs here, not in scratch and not inline in CLAUDE.md.
 - **Active session-scoped commitments** — `scratch/promises.md` (in-repo). Pruned aggressively; durable items migrate to issues.
 
 Workflow for landing new fork-ahead changes lives in [Documentation maintenance](#documentation-maintenance) below.
@@ -133,8 +133,8 @@ for current pointers.
 |--------|--------|
 | `FORK_CHANGELOG.md` | rendered from YAML (today) |
 | README fork-change-queue table | hand-maintained for now |
-| `scratch/promises.md` (in-repo) | hand-maintained, kept short — durable items move to `jphein/mempalace` issues |
-| jphein/mempalace issues | hand-filed as work surfaces |
+| `scratch/promises.md` (in-repo) | hand-maintained, kept short — durable items move to `techempower-org/mempalace` issues |
+| techempower-org/mempalace issues | hand-filed as work surfaces |
 
 The renderer's `--target` flag is wired to take `changelog` or `all`;
 `all` is the same as `changelog` until the README/CLAUDE/promises
