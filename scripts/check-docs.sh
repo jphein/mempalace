@@ -45,13 +45,13 @@ failures=0
 
 # ── 1. test count ────────────────────────────────────────────────────────
 step "1/4  test count in README"
-readme_count=$(grep -oE '^[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
+readme_count=$(grep -oE '[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
 if [ -z "$readme_count" ]; then
-    warn "README has no '<N> tests pass on \`main\`' line — skipping"
+    warn "README has no '<N> tests pass on \`main\`' phrase — skipping"
 else
     # Prefer the repo venv's pytest so the check works without an
     # activated environment. Falls back to whatever pytest is on PATH.
-    pytest_bin="$REPO_ROOT/venv/bin/pytest"
+    pytest_bin="$REPO_ROOT/.venv/bin/pytest"
     [ -x "$pytest_bin" ] || pytest_bin="$(command -v pytest 2>/dev/null || true)"
     if [ -z "$pytest_bin" ]; then
         warn "no pytest available — skipping"
@@ -79,7 +79,7 @@ step "2/4  commit hashes referenced in docs resolve"
 docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # Strip cross-repo URLs first so we only check hashes that should resolve
 # in *this* fork. Pattern: anything inside (https://github.com/<other>/<repo>/commit/HASH)
-# where <other>/<repo> is not jphein/mempalace.
+# where <other>/<repo> is not techempower-org/mempalace.
 # For each line, skip the line entirely if it mentions a sibling repo
 # (palace-daemon / multipass-structural-memory-eval) — we can't tell which
 # hashes on that line are fork-mempalace vs cross-repo without parsing
@@ -88,7 +88,7 @@ docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # adjacent to a sibling-repo mention) but no false positives.
 mapfile -t hashes < <(
     for d in "${docs[@]}"; do
-        grep -v -E 'palace-daemon|multipass-structural-memory-eval|/jphein/[a-z-]+/commit/' "$d" 2>/dev/null
+        grep -v -E 'palace-daemon|multipass-structural-memory-eval|/(jphein|techempower-org)/[a-z-]+/commit/' "$d" 2>/dev/null
     done | grep -hoE '`[0-9a-f]{7,40}`' | tr -d '`' | sort -u
 )
 unresolved=0
@@ -106,7 +106,7 @@ fi
 step "3/4  FORK_CHANGELOG.md regenerates clean"
 render_bin="$REPO_ROOT/scripts/render-docs.py"
 if [ -x "$render_bin" ]; then
-    py="$REPO_ROOT/venv/bin/python"
+    py="$REPO_ROOT/.venv/bin/python"
     [ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
     if [ -z "$py" ]; then
         warn "no python interpreter — skipping render check"
@@ -201,7 +201,7 @@ fi
 
 # Check 5 (fork-only YAML commits → CLAUDE.md row inventory) retired
 # 2026-05-11: the CLAUDE.md row inventory it validated was removed in
-# favor of a pointer block to FORK_CHANGELOG.md + jphein/mempalace
+# favor of a pointer block to FORK_CHANGELOG.md + techempower-org/mempalace
 # issues. Check 3 (FORK_CHANGELOG.md ↔ YAML) already guarantees the
 # meaningful sync property — every fork-only YAML commit appears in the
 # rendered FORK_CHANGELOG.md by construction, so a separate CLAUDE.md

@@ -11,9 +11,9 @@
 set -e
 cd "$(dirname "$0")/.."
 
-if [ -x venv/bin/python ]; then
+if [ -x .venv/bin/python ]; then
   # shellcheck disable=SC1091
-  source venv/bin/activate
+  source .venv/bin/activate
 fi
 
 echo "→ ruff check ."

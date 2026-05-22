@@ -1497,7 +1497,8 @@ entries:
       merges. Amends fork-ahead row 17.
     tests: "1548/1548 (was 1546/1548 with 2 isolation failures in test_convo_miner)"
     pr: 1024
-    pr_state: OPEN
+    pr_state: MERGED
+    merged_date: 2026-05-15
     files:
       - mempalace/config.py
     supersedes: []
@@ -1763,12 +1764,16 @@ entries:
       and ``os.path.getmtime()`` to file-level (2 syscalls per file instead
       of 2N). Reported 10–30× mining speedup upstream. Fork-side resolution
       preserved fork's existing ``DRAWER_UPSERT_BATCH_SIZE=1000``; aliased
-      upstream's ``CHROMA_BATCH_LIMIT`` to it. Becomes a no-op when #1085
-      merges to develop and we next sync.
+      upstream's ``CHROMA_BATCH_LIMIT`` to it. **2026-05-16:** #1085 was
+      closed by @midweste, superseded by merged upstream
+      [#1185](https://github.com/MemPalace/mempalace/pull/1185) (wider
+      scope: same batching + optional GPU acceleration). The fork-side
+      cherry-pick is now a no-op against develop; drop on next sync.
     pr: 1085
-    pr_state: OPEN
+    pr_state: CLOSED
     files:
       - mempalace/miner.py
+    supersedes: []
 
   - id: deploy-script
     date: 2026-04-26
@@ -1885,6 +1890,7 @@ merged_upstream:
     - "Trim entries from this list once they're more than ~30 days old."
     - "See CHANGELOG.md (upstream) for the full released history."
   entries:
+    - { pr: 1024, title: "Configurable chunk_size / chunk_overlap / min_chunk_size", merged: 2026-05-15 }
     - { pr: 1173, title: "quarantine_stale_hnsw on make_client + cold-start gate + integrity sniff", merged: 2026-04-26 }
     - { pr: 1177, title: "`.blob_seq_ids_migrated` marker guard (closes #1090)", merged: 2026-04-26 }
     - { pr: 1198, title: "_tokenize None-document guard in BM25 reranker", merged: 2026-04-26 }
