@@ -208,13 +208,25 @@ CLOSET_DISTANCE_CAP = 1.5  # cosine dist > 1.5 = too weak to use as signal
 def build_where_filter(
     wing: str = None,
     room: str = None,
+    tags: list = None,
 ) -> dict:
-    """Build ChromaDB where filter for wing/room filtering."""
+    """Build ChromaDB-style where filter for wing/room/tag filtering.
+
+    ``tags`` requires drawers to carry EVERY listed tag (AND logic). On the
+    postgres backend the filter is pushed down via the ``$contains_all``
+    JSONB operator; for chroma it's stripped here and applied as a
+    post-filter by the caller (see ``search_memories``).
+    """
+    from .tags import normalise_tags
+
     parts: list[dict] = []
     if wing:
         parts.append({"wing": wing})
     if room:
         parts.append({"room": room})
+    normalised_tags = normalise_tags(tags) if tags else []
+    if normalised_tags:
+        parts.append({"tags": {"$contains_all": normalised_tags}})
 
     if not parts:
         return {}
@@ -342,6 +354,7 @@ def search(
     palace_path: str,
     wing: str = None,
     room: str = None,
+    tags: list = None,
     n_results: int = 5,
 ):
     """
@@ -382,7 +395,9 @@ def search(
         print("  Run: mempalace init <dir> then mempalace mine <dir>")
         raise SearchError(f"No palace found at {palace_path}") from e
 
-    result = search_memories(query, palace_path, wing=wing, room=room, n_results=n_results)
+    result = search_memories(
+        query, palace_path, wing=wing, room=room, tags=tags, n_results=n_results
+    )
     if "error" in result and not result.get("results"):
         # Preserve the palace path in the printed error so the user sees
         # which palace the search tried to open (a common source of
@@ -599,6 +614,7 @@ def _bm25_only_via_sqlite(
     palace_path: str,
     wing: str = None,
     room: str = None,
+    tags: list = None,
     n_results: int = 5,
     max_candidates: int = 500,
     _include_internal: bool = False,
@@ -747,7 +763,7 @@ def _bm25_only_via_sqlite(
         if not candidate_ids:
             return {
                 "query": query,
-                "filters": {"wing": wing, "room": room},
+                "filters": {"wing": wing, "room": room, "tags": list(tags) if tags else None},
                 "total_before_filter": 0,
                 "results": [],
                 "fallback": "bm25_only_via_sqlite",
@@ -776,12 +792,17 @@ def _bm25_only_via_sqlite(
 
     # Apply wing/room filters in Python (FTS5 candidates may include
     # entries from other wings).
+    from .tags import metadata_matches_all_tags, normalise_tags
+
+    normalised_tags = normalise_tags(tags) if tags else []
     candidates = []
     for d in drawers.values():
         meta = d["metadata"]
         if wing and meta.get("wing") != wing:
             continue
         if room and meta.get("room") != room:
+            continue
+        if normalised_tags and not metadata_matches_all_tags(meta, normalised_tags):
             continue
         full_source = meta.get("source_file", "") or ""
         candidates.append(
@@ -825,7 +846,7 @@ def _bm25_only_via_sqlite(
 
     return {
         "query": query,
-        "filters": {"wing": wing, "room": room},
+        "filters": {"wing": wing, "room": room, "tags": normalised_tags or None},
         "total_before_filter": len(candidates),
         "results": hits,
         "fallback": "bm25_only_via_sqlite",
@@ -1506,6 +1527,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     palace_path: str,
     wing: str = None,
     room: str = None,
+    tags: list = None,
     n_results: int = 5,
     max_distance: float = 0.0,
     vector_disabled: bool = False,
@@ -1564,6 +1586,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
             palace_path,
             wing=wing,
             room=room,
+            tags=tags,
             n_results=n_results,
             collection_name=collection_name,
         )
@@ -1585,7 +1608,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     # it one layer up so the same warning surface stays live.)
     _warn_if_legacy_metric(drawers_col)
 
-    where = build_where_filter(wing, room)
+    where = build_where_filter(wing, room, tags=tags)
 
     # Hybrid retrieval: always query drawers directly (the floor), then use
     # closet hits to boost rankings. Closets are a ranking SIGNAL, never a

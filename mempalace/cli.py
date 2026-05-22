@@ -1020,12 +1020,15 @@ def cmd_sync(args):
 
 def cmd_search(args):
     want_json = getattr(args, "json", False)
+    tags = list(args.tags) if getattr(args, "tags", None) else None
     if _daemon_strict() and not args.palace:
         arguments = {"query": args.query, "max_results": args.results}
         if args.wing:
             arguments["wing"] = args.wing
         if args.room:
             arguments["room"] = args.room
+        if tags:
+            arguments["tags"] = tags
         try:
             data = _call_daemon_tool("mempalace_search", arguments)
         except DaemonError as e:
@@ -1059,6 +1062,7 @@ def cmd_search(args):
             palace_path=palace_path,
             wing=args.wing,
             room=args.room,
+            tags=tags,
             n_results=args.results,
             search_memories=search_memories,
         )
@@ -1070,6 +1074,7 @@ def cmd_search(args):
             palace_path=palace_path,
             wing=args.wing,
             room=args.room,
+            tags=tags,
             n_results=args.results,
         )
     except SearchError:
@@ -1084,6 +1089,7 @@ def _emit_local_search_json(
     room: str,
     n_results: int,
     search_memories,
+    tags: list = None,
 ) -> None:
     """JSON search against a local palace — mirrors the MCP
     ``tool_search`` response shape. ``search_memories`` is injected so
@@ -1113,7 +1119,9 @@ def _emit_local_search_json(
         )
         sys.exit(2)
 
-    result = search_memories(query, palace_path, wing=wing, room=room, n_results=n_results)
+    result = search_memories(
+        query, palace_path, wing=wing, room=room, tags=tags, n_results=n_results
+    )
     result.setdefault("query", query)
     _emit_json(result)
     if "error" in result and not result.get("results"):
@@ -2381,6 +2389,17 @@ def main():
     p_search.add_argument("query", help="What to search for")
     p_search.add_argument("--wing", default=None, help="Limit to one project")
     p_search.add_argument("--room", default=None, help="Limit to one room")
+    p_search.add_argument(
+        "--tag",
+        action="append",
+        dest="tags",
+        default=None,
+        metavar="TAG",
+        help=(
+            "Only return drawers carrying this tag. May be repeated; "
+            "multiple --tag flags AND together (drawer must have ALL of them)."
+        ),
+    )
     p_search.add_argument("--results", type=int, default=5, help="Number of results")
 
     # compress
