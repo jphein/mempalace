@@ -72,6 +72,7 @@ from .backends.chroma import (  # noqa: E402
     hnsw_capacity_status,
 )
 from .query_sanitizer import sanitize_query  # noqa: E402
+from .write_sanitizer import sanitize_write_content, sanitize_write_name  # noqa: E402
 from .searcher import search_memories  # noqa: E402
 from .palace_graph import (  # noqa: E402
     traverse,
@@ -1606,10 +1607,25 @@ def tool_add_drawer(
     ``mempalace.tags`` for normalisation rules.
     """
     global _metadata_cache
+    # Observation-grade write sanitizer (#40) runs first: strips control
+    # chars, normalizes whitespace, caps at 1 MiB. The strict layer below
+    # then enforces the existing wing/room shape and the 100K hard limit.
+    wing_pass = sanitize_write_name(wing, "wing")
+    if wing_pass["error"]:
+        return {"success": False, "error": wing_pass["error"]}
+    room_pass = sanitize_write_name(room, "room")
+    if room_pass["error"]:
+        return {"success": False, "error": room_pass["error"]}
+    content_pass = sanitize_write_content(content)
+    if content_pass["error"]:
+        return {"success": False, "error": content_pass["error"]}
+    sanitize_flags = sorted(
+        set(wing_pass["flags"]) | set(room_pass["flags"]) | set(content_pass["flags"])
+    )
     try:
-        wing = sanitize_name(wing, "wing")
-        room = sanitize_name(room, "room")
-        content = sanitize_content(content)
+        wing = sanitize_name(wing_pass["cleaned"], "wing")
+        room = sanitize_name(room_pass["cleaned"], "room")
+        content = sanitize_content(content_pass["cleaned"])
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
@@ -1677,6 +1693,7 @@ def tool_add_drawer(
                 "reason": "already_exists",
                 "drawer_id": drawer_id,
                 "warnings": warnings,
+                "sanitize_flags": sanitize_flags,
             }
     except Exception:
         logger.debug("Idempotency pre-check failed for %s", idempotency_probe_ids, exc_info=True)
@@ -1705,6 +1722,7 @@ def tool_add_drawer(
                 "room": room,
                 "tags": normalised_tags,
                 "warnings": warnings,
+                "sanitize_flags": sanitize_flags,
                 "chunks": 1,
             }
 
@@ -1743,6 +1761,7 @@ def tool_add_drawer(
             "room": room,
             "tags": normalised_tags,
             "warnings": warnings,
+            "sanitize_flags": sanitize_flags,
             "chunks": len(chunk_ids),
             "chunk_ids": chunk_ids,
         }
@@ -1959,24 +1978,41 @@ def tool_update_drawer(
         old_meta = _safe_meta(existing["metadatas"][0])
         old_doc = existing["documents"][0]
 
+        # Observation-grade write sanitizer (#40) — see tool_add_drawer for rationale.
+        update_sanitize_flags: list[str] = []
+
         new_doc = old_doc
         if content is not None:
+            content_pass = sanitize_write_content(content)
+            if content_pass["error"]:
+                return {"success": False, "error": content_pass["error"]}
+            update_sanitize_flags.extend(content_pass["flags"])
             try:
-                new_doc = sanitize_content(content)
+                new_doc = sanitize_content(content_pass["cleaned"])
             except ValueError as e:
                 return {"success": False, "error": str(e)}
 
         new_meta = dict(old_meta)
         if wing is not None:
+            wing_pass = sanitize_write_name(wing, "wing")
+            if wing_pass["error"]:
+                return {"success": False, "error": wing_pass["error"]}
+            update_sanitize_flags.extend(wing_pass["flags"])
             try:
-                new_meta["wing"] = sanitize_name(wing, "wing")
+                new_meta["wing"] = sanitize_name(wing_pass["cleaned"], "wing")
             except ValueError as e:
                 return {"success": False, "error": str(e)}
         if room is not None:
+            room_pass = sanitize_write_name(room, "room")
+            if room_pass["error"]:
+                return {"success": False, "error": room_pass["error"]}
+            update_sanitize_flags.extend(room_pass["flags"])
             try:
-                new_meta["room"] = sanitize_name(room, "room")
+                new_meta["room"] = sanitize_name(room_pass["cleaned"], "room")
             except ValueError as e:
                 return {"success": False, "error": str(e)}
+
+        update_sanitize_flags = sorted(set(update_sanitize_flags))
 
         if tags is not None:
             apply_tags_to_metadata(new_meta, normalise_tags(tags))
@@ -2022,6 +2058,7 @@ def tool_update_drawer(
             "room": new_meta.get("room", ""),
             "tags": extract_tags_from_metadata(new_meta),
             "warnings": warnings,
+            "sanitize_flags": update_sanitize_flags,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
@@ -2244,15 +2281,34 @@ def tool_diary_write(
     that diary reads are case-insensitive (see #1243). "Claude",
     "claude", and "CLAUDE" all resolve to the same agent.
     """
+    # Observation-grade write sanitizer (#40) runs ahead of the strict
+    # shape checks; see tool_add_drawer for rationale.
+    agent_pass = sanitize_write_name(agent_name, "agent_name")
+    if agent_pass["error"]:
+        return {"success": False, "error": agent_pass["error"]}
+    entry_pass = sanitize_write_content(entry)
+    if entry_pass["error"]:
+        return {"success": False, "error": entry_pass["error"]}
+    topic_pass = sanitize_write_name(topic, "topic")
+    if topic_pass["error"]:
+        return {"success": False, "error": topic_pass["error"]}
+    diary_sanitize_flags = sorted(
+        set(agent_pass["flags"]) | set(entry_pass["flags"]) | set(topic_pass["flags"])
+    )
     try:
-        agent_name = sanitize_name(agent_name, "agent_name").lower()
-        entry = sanitize_content(entry)
-        topic = sanitize_name(topic, "topic")
+        agent_name = sanitize_name(agent_pass["cleaned"], "agent_name").lower()
+        entry = sanitize_content(entry_pass["cleaned"])
+        topic = sanitize_name(topic_pass["cleaned"], "topic")
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
     if wing:
-        wing = sanitize_name(wing)
+        wing_pass = sanitize_write_name(wing, "wing")
+        if wing_pass["error"]:
+            return {"success": False, "error": wing_pass["error"]}
+        if wing_pass["flags"]:
+            diary_sanitize_flags = sorted(set(diary_sanitize_flags) | set(wing_pass["flags"]))
+        wing = sanitize_name(wing_pass["cleaned"])
     else:
         wing = f"wing_{agent_name.replace(' ', '_')}"
     # NB: ``diary`` is not in the canonical 7-room taxonomy. Per #86 it
@@ -2320,6 +2376,7 @@ def tool_diary_write(
                 "topic": topic,
                 "timestamp": now.isoformat(),
                 "warnings": warnings,
+                "sanitize_flags": diary_sanitize_flags,
                 "chunks": 1,
             }
 
@@ -2367,6 +2424,7 @@ def tool_diary_write(
             "topic": topic,
             "timestamp": now.isoformat(),
             "warnings": warnings,
+            "sanitize_flags": diary_sanitize_flags,
             "chunks": len(chunk_ids),
             "chunk_ids": chunk_ids,
         }
