@@ -1,8 +1,8 @@
 """KG write-through hooks for PostgresCollection drawer writes.
 
-Phase 2 of the AGE-integration goal: every drawer write extracts entities
-and adds them to the KG so retrieval can fuse vector + graph signals
-without an offline backfill pass.
+Inline KG enrichment: every drawer write extracts entities and adds
+them to the AGE knowledge graph so retrieval can fuse vector + graph
+signals without an offline backfill pass.
 
 Hook contract (matches PostgresCollection.set_kg_writethrough):
 

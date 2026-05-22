@@ -1,8 +1,8 @@
 """Palace structure (Wing → Room → Drawer) as native AGE graph nodes.
 
-Phase 3 of the AGE-integration goal. Today's ``palace_graph.build_graph``
-aggregates wing/room/tunnel structure from the drawer table via SQL on
-every call. This module mirrors that hierarchy into AGE so:
+Today's ``palace_graph.build_graph`` aggregates wing/room/tunnel
+structure from the drawer table via SQL on every call. This module
+mirrors that hierarchy into AGE so:
 
 1. Cypher MATCH walks the palace structure natively — no SQL aggregation
    per query.
@@ -233,8 +233,8 @@ def walk_wing(kg: KnowledgeGraphAGE, wing_name: str, depth: int = 2, limit: int 
     wing_clean = sanitize_kg_value(wing_name, "wing")
     if depth >= 3:
         # AGE doesn't support edge-type union (`[:A|B]`) in MATCH patterns.
-        # The kg_writethrough hook (Phase 2) writes triples as :RELATION edges
-        # with relation_type='mentions' on the edge properties, so we filter
+        # The kg_writethrough hook writes triples as :RELATION edges with
+        # relation_type='mentions' on the edge properties, so we filter
         # by property rather than label.
         cypher = """
             MATCH (w:Wing {name: $wing})-[:CONTAINS]->(r:Room)-[:CONTAINS]->(d:Drawer)

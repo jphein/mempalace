@@ -292,7 +292,7 @@ class PostgresCollection(BaseCollection):
 
         self._maybe_create_vector_index(inserted_rows=len(rows))
 
-        # ── KG write-through (Phase 2 of /goal: AGE integration) ──
+        # ── KG write-through (AGE-integration inline enrichment) ──
         # If the postgres backend was configured with a KG hook (set via
         # ``set_kg_writethrough(hook)``), call it for each row we just
         # wrote so entities/relations land in the KG alongside the
