@@ -44,6 +44,53 @@ from .llm_client import LLMError, get_provider
 from .version import __version__
 
 
+# ==================== AGENT-SHAPED OUTPUT (issue #44) ====================
+# ``--json`` / ``-j`` flips command output from prose to a stable JSON
+# document on stdout, intended for shell pipelines and non-MCP agents.
+# ``--quiet`` / ``-q`` suppresses decorative chrome (headers, divider
+# lines, the daemon-routing announcement on stderr). When stdout is not
+# a TTY we default to quiet mode so piped output stays clean — explicit
+# ``--quiet`` / ``--json`` still override (see ``_resolve_quiet``).
+#
+# Exit codes (per issue #44):
+#   0  success
+#   1  no results / search returned empty
+#   2  palace unavailable (daemon unreachable, palace missing, etc.)
+#   64 bad args (argparse default for parse errors)
+
+
+def _resolve_quiet(args) -> bool:
+    """True when chrome should be suppressed.
+
+    Quiet is on whenever any of these are true:
+      * ``--quiet`` / ``-q`` was passed
+      * ``--json`` / ``-j`` was passed (JSON output is always machine
+        consumption — chrome would corrupt the document)
+      * ``sys.stdout`` is not a TTY (piped or redirected)
+    """
+    if getattr(args, "json", False):
+        return True
+    if getattr(args, "quiet", False):
+        return True
+    try:
+        return not sys.stdout.isatty()
+    except (AttributeError, ValueError):
+        # ``sys.stdout`` may be replaced by a non-stream in some test
+        # harnesses; treat that as "no TTY" so we err toward clean output.
+        return True
+
+
+def _emit_json(payload: dict) -> None:
+    """Write a JSON document to stdout with a trailing newline.
+
+    Centralised so every JSON-emitting command uses the same formatting
+    (sort_keys=False to preserve insertion order, indent=2 for human
+    readability when the agent prints what it just received).
+    """
+    json.dump(payload, sys.stdout, indent=2, default=str)
+    sys.stdout.write("\n")
+
+
 # ==================== DAEMON ROUTING ====================
 # When ``PALACE_DAEMON_URL`` is set, palace-daemon is the single writer
 # for the canonical palace and high-traffic CLI subcommands route there
@@ -972,6 +1019,7 @@ def cmd_sync(args):
 
 
 def cmd_search(args):
+    want_json = getattr(args, "json", False)
     if _daemon_strict() and not args.palace:
         arguments = {"query": args.query, "max_results": args.results}
         if args.wing:
@@ -980,15 +1028,42 @@ def cmd_search(args):
             arguments["room"] = args.room
         try:
             data = _call_daemon_tool("mempalace_search", arguments)
+        except DaemonError as e:
+            if want_json:
+                _emit_json({"error": str(e), "source": "daemon", "query": args.query})
+            else:
+                print(f"\n  ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
+        if want_json:
+            # Normalise: ensure ``query`` is present so agents can echo
+            # the request back without parsing argv.
+            data.setdefault("query", args.query)
+            _emit_json(data)
+            # Exit 1 when no results so shell scripts can branch on it
+            # (per issue #44's exit-code contract).
+            sys.exit(0 if (data.get("results") or []) else 1)
+        try:
             _print_daemon_search(args.query, data, wing=args.wing, room=args.room)
         except DaemonError as e:
             print(f"\n  ERROR: {e}", file=sys.stderr)
             sys.exit(1)
         return
 
-    from .searcher import search, SearchError
+    from .searcher import SearchError, search, search_memories
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+
+    if want_json:
+        _emit_local_search_json(
+            query=args.query,
+            palace_path=palace_path,
+            wing=args.wing,
+            room=args.room,
+            n_results=args.results,
+            search_memories=search_memories,
+        )
+        return
+
     try:
         search(
             query=args.query,
@@ -999,6 +1074,51 @@ def cmd_search(args):
         )
     except SearchError:
         sys.exit(1)
+
+
+def _emit_local_search_json(
+    *,
+    query: str,
+    palace_path: str,
+    wing: str,
+    room: str,
+    n_results: int,
+    search_memories,
+) -> None:
+    """JSON search against a local palace — mirrors the MCP
+    ``tool_search`` response shape. ``search_memories`` is injected so
+    tests can substitute a fake without monkey-patching the module.
+    """
+    # Mirror the filesystem-first probes from ``searcher.search`` so we
+    # return a clear ``palace_unavailable`` error before the backend
+    # would silently create a chroma.sqlite3 on first open.
+    if not os.path.isdir(palace_path):
+        _emit_json(
+            {
+                "error": "palace_unavailable",
+                "hint": f"No palace found at {palace_path}. Run: mempalace init <dir>",
+                "palace_path": palace_path,
+                "query": query,
+            }
+        )
+        sys.exit(2)
+    if not os.path.isfile(os.path.join(palace_path, "chroma.sqlite3")):
+        _emit_json(
+            {
+                "error": "palace_unavailable",
+                "hint": f"Palace dir at {palace_path} has no chroma.sqlite3 yet. Run: mempalace mine <dir>",
+                "palace_path": palace_path,
+                "query": query,
+            }
+        )
+        sys.exit(2)
+
+    result = search_memories(query, palace_path, wing=wing, room=room, n_results=n_results)
+    result.setdefault("query", query)
+    _emit_json(result)
+    if "error" in result and not result.get("results"):
+        sys.exit(2)
+    sys.exit(0 if (result.get("results") or []) else 1)
 
 
 def cmd_wakeup(args):
@@ -1340,21 +1460,85 @@ def cmd_replay(args):
 
 
 def cmd_status(args):
+    want_json = getattr(args, "json", False)
     if _daemon_strict() and not args.palace:
         # --palace overrides routing: an explicit local-path argument
         # means the user wants to inspect THAT palace, not the daemon.
         try:
             data = _call_daemon_tool("mempalace_status", {})
         except DaemonError as e:
-            print(f"\n  ERROR: {e}", file=sys.stderr)
-            sys.exit(1)
+            if want_json:
+                _emit_json({"error": str(e), "source": "daemon"})
+            else:
+                print(f"\n  ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
+        if want_json:
+            _emit_json(data)
+            return
         _print_daemon_status(data)
         return
 
     from .miner import status
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    if want_json:
+        _emit_local_status_json(palace_path)
+        return
     status(palace_path=palace_path)
+
+
+def _emit_local_status_json(palace_path: str) -> None:
+    """JSON status from a local palace — mirrors the MCP ``tool_status``
+    response shape: ``{total_drawers, wings, rooms}`` plus an ``error``
+    key when the palace is unreachable. Used by ``cmd_status --json``
+    when daemon routing is off (or ``--palace`` was passed).
+    """
+    from collections import defaultdict
+
+    from .miner import _open_collection_or_explain
+
+    # ``_open_collection_or_explain`` prints a human-readable hint to
+    # stdout on failure. Capture it so JSON output stays clean.
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        col = _open_collection_or_explain(palace_path)
+    if col is None:
+        _emit_json(
+            {
+                "error": "palace_unavailable",
+                "hint": buf.getvalue().strip() or f"No palace found at {palace_path}",
+                "palace_path": palace_path,
+            }
+        )
+        sys.exit(2)
+
+    total = col.count()
+    wings: dict = defaultdict(int)
+    rooms: dict = defaultdict(int)
+    batch_size = 5000
+    offset = 0
+    while offset < total:
+        r = col.get(limit=batch_size, offset=offset, include=["metadatas"])
+        batch = r.get("metadatas") or []
+        if not batch:
+            break
+        for m in batch:
+            m = m or {}
+            wings[m.get("wing", "unknown")] += 1
+            rooms[m.get("room", "unknown")] += 1
+        offset += len(batch)
+
+    _emit_json(
+        {
+            "total_drawers": total,
+            "wings": dict(wings),
+            "rooms": dict(rooms),
+            "palace_path": palace_path,
+        }
+    )
 
 
 def cmd_mined(args):
@@ -1376,7 +1560,18 @@ def cmd_mined(args):
         os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     )
 
+    want_json_early = getattr(args, "json", False)
+
     if not os.path.isdir(palace_path) or not contains_palace_database(palace_path):
+        if want_json_early:
+            _emit_json(
+                {
+                    "error": "palace_unavailable",
+                    "hint": f"No palace database at {palace_path}",
+                    "palace_path": palace_path,
+                }
+            )
+            sys.exit(2)
         _print_retired_local_palace_or_default(palace_path)
         return
 
@@ -1389,6 +1584,15 @@ def cmd_mined(args):
             collection_name="mempalace_drawers",
         )
     except Exception as e:
+        if want_json_early:
+            _emit_json(
+                {
+                    "error": "palace_unavailable",
+                    "hint": f"Error reading palace: {e}",
+                    "palace_path": palace_path,
+                }
+            )
+            sys.exit(2)
         print(f"\n  Error reading palace: {e}")
         return
 
@@ -1431,9 +1635,45 @@ def cmd_mined(args):
         if len(batch) < batch_size:
             break
 
+    want_json = getattr(args, "json", False)
+
     if not wing_sources:
+        if want_json:
+            _emit_json(
+                {
+                    "sources_by_wing": {},
+                    "wing_filter": args.wing,
+                    "total_wings": 0,
+                    "total_sources": 0,
+                }
+            )
+            sys.exit(1)
         scope = f" in wing={args.wing}" if args.wing else ""
         print(f"\n  No mined source files found{scope}.\n")
+        return
+
+    if want_json:
+        sources_by_wing: dict = {}
+        total_sources = 0
+        for wing in sorted(wing_sources):
+            sources = sorted(wing_sources[wing].items(), key=lambda x: x[1], reverse=True)
+            shown = sources if args.limit == 0 else sources[: args.limit]
+            sources_by_wing[wing] = {
+                "sources": [{"source_file": src, "drawer_count": count} for src, count in shown],
+                "total_sources": len(sources),
+                "total_drawers": sum(c for _, c in sources),
+                "truncated": bool(args.limit) and len(sources) > args.limit,
+            }
+            total_sources += len(sources)
+        _emit_json(
+            {
+                "sources_by_wing": sources_by_wing,
+                "wing_filter": args.wing,
+                "limit": args.limit,
+                "total_wings": len(wing_sources),
+                "total_sources": total_sources,
+            }
+        )
         return
 
     print(f"\n{'=' * 55}")
@@ -1912,6 +2152,27 @@ def main():
         "--palace",
         default=None,
         help="Where the palace lives (default: from ~/.mempalace/config.json or ~/.mempalace/palace)",
+    )
+    # ── Agent-shaped output (issue #44) ──────────────────────────────
+    # Both flags are global so any subcommand can opt in. They're also
+    # registered on each subparser below so users can write either
+    # ``mempalace --json status`` or the more natural
+    # ``mempalace status --json``.
+    parser.add_argument(
+        "--json",
+        "-j",
+        dest="json",
+        action="store_true",
+        default=False,
+        help="Emit JSON to stdout (implies --quiet; suitable for shell pipelines)",
+    )
+    parser.add_argument(
+        "--quiet",
+        "-q",
+        dest="quiet",
+        action="store_true",
+        default=False,
+        help="Suppress decorative output (headers, progress, routing announcement)",
     )
 
     sub = parser.add_subparsers(dest="command")
@@ -2398,7 +2659,51 @@ def main():
         help="Show at most this many sources per wing (default 50; 0 means show all)",
     )
 
+    # ── Propagate --json/--quiet to every subparser (issue #44) ─────
+    # argparse parses pre-subcommand flags into ``args.json`` /
+    # ``args.quiet`` only if they appear BEFORE the subcommand. To let
+    # users write the natural ``mempalace status --json``, attach the
+    # same flags to each subparser so post-subcommand usage parses too.
+    # Help is suppressed on the per-subparser copies to keep ``--help``
+    # output uncluttered — the canonical docs live on the top-level parser.
+    for _sp in sub.choices.values():
+        # Skip the two-level parents (hook, instructions, rooms) — their
+        # actions are owned by nested sub-parsers and the leaf parsers
+        # don't need JSON output (hook/instructions write their own JSON;
+        # rooms is operator-only). Detect them by the presence of a
+        # registered subparsers action.
+        has_nested = any(isinstance(a, argparse._SubParsersAction) for a in _sp._actions)
+        if has_nested:
+            continue
+        _sp.add_argument(
+            "--json",
+            "-j",
+            dest="json",
+            action="store_true",
+            default=False,
+            help=argparse.SUPPRESS,
+        )
+        _sp.add_argument(
+            "--quiet",
+            "-q",
+            dest="quiet",
+            action="store_true",
+            default=False,
+            help=argparse.SUPPRESS,
+        )
+
     args = parser.parse_args()
+
+    # When ``--json`` / ``--quiet`` was passed at top level, the
+    # subparser-side default would clobber it (argparse stores per-action
+    # defaults). Restore the top-level value if the subparser-side flag
+    # wasn't explicitly set. Cheapest way: check ``sys.argv`` for the
+    # token — explicit flag in argv means the user asked for it.
+    _argv_after_command = sys.argv[1:]
+    if any(t in ("--json", "-j") for t in _argv_after_command):
+        args.json = True
+    if any(t in ("--quiet", "-q") for t in _argv_after_command):
+        args.quiet = True
 
     if not args.command:
         parser.print_help()
@@ -2453,7 +2758,14 @@ def main():
     # Diagnoses the silent split-brain failure mode the issue documents.
     try:
         _cfg = MempalaceConfig()
-        if _cfg.daemon_url and args.command not in (None, "--help"):
+        # Suppress the routing chrome when --json / --quiet is on, or
+        # when stdout isn't a TTY (piped). The announcement is for
+        # interactive humans; agents capturing both streams expect a
+        # clean surface (issue #44).
+        _suppress_routing = (
+            getattr(args, "json", False) or getattr(args, "quiet", False) or _resolve_quiet(args)
+        )
+        if _cfg.daemon_url and args.command not in (None, "--help") and not _suppress_routing:
             _src = "env" if os.environ.get("PALACE_DAEMON_URL", "").strip() else "config"
             if _cfg.daemon_strict:
                 print(

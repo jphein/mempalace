@@ -24,6 +24,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Agent-shaped CLI surface — --json / --quiet for non-MCP integration** ([`25ed900`](https://github.com/techempower-org/mempalace/commit/25ed900))
+  ``mempalace status``, ``mempalace search`` and ``mempalace mined``
+  now accept ``--json`` / ``-j`` and ``--quiet`` / ``-q`` flags
+  (both pre- and post-subcommand). With ``--json`` the command
+  emits a JSON document on stdout whose shape mirrors the matching
+  MCP tool response (``mempalace_search``, ``mempalace_status``),
+  so an agent can switch between MCP and CLI without rewriting
+  parsers. With ``--quiet`` decorative chrome (banner lines,
+  divider rules, the daemon-routing announcement on stderr) is
+  suppressed.
+
+  Auto-detect: when stdout is not a TTY, quiet mode is on by
+  default so piped output (``mempalace status | jq …``) stays
+  clean. Explicit ``--quiet`` / ``--json`` still override the
+  detection.
+
+  Exit codes (per techempower-org/mempalace#44):
+
+  - ``0`` success / at least one result
+  - ``1`` no results (search returned empty; mined found nothing)
+  - ``2`` palace unavailable (daemon unreachable, palace missing,
+    ``chroma.sqlite3`` absent)
+  - ``64`` bad args (argparse default)
+
+  This is the substrate for non-Claude-Code agents (opencode,
+  codex, gemini-cli, aider) that don't have MCP source-adapters
+  yet, plus hooks and slash commands that shell out to the CLI
+  from any harness without native MCP support. Composes with the
+  multi-agent ecosystem integration tracked in #38.
+
+  Tracks techempower-org/mempalace#44.
+
+  *Tests:* 30 tests in tests/test_cli_json.py — TestResolveQuiet (6),
+TestEmitJson (3), TestCmdStatusJson (4), TestCmdSearchJson (5),
+TestCmdMinedJson (3), TestQuietSuppressesChrome (1),
+TestParserAcceptsFlags (8).
+
+  *Files:* `mempalace/cli.py`, `tests/test_cli_json.py`
+
+
 - **Document .sh shim delegation to palace-daemon (counter-position to upstream #1069)** ([`bf0a4d0`](https://github.com/techempower-org/mempalace/commit/bf0a4d0))
   Upstream MemPalace/mempalace#1069 wants the per-event hook
   ``.sh`` wrappers consolidated into shims delegating to
