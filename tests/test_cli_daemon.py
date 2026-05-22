@@ -239,6 +239,39 @@ class TestCmdSearchDaemon:
         assert "graphql" in out
         assert "matching content here" in out
 
+    def test_sends_limit_not_max_results(self):
+        """Regression for #129: CLI must send ``limit`` (MCP tool_search
+        parameter name), not ``max_results`` — the daemon rejects the
+        latter with ``-32602: Unknown parameter 'max_results'``.
+        """
+        from mempalace import cli
+
+        inner = {"results": [], "warnings": []}
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            }
+        ).encode()
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(query="q", wing=None, room=None, results=7, palace=None)
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_search(args)
+
+        arguments = captured["body"]["params"]["arguments"]
+        assert arguments["limit"] == 7
+        assert "max_results" not in arguments
+
     def test_local_path_when_daemon_unset(self):
         from mempalace import cli
 

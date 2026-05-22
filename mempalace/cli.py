@@ -1022,7 +1022,7 @@ def cmd_search(args):
     want_json = getattr(args, "json", False)
     tags = list(args.tags) if getattr(args, "tags", None) else None
     if _daemon_strict() and not args.palace:
-        arguments = {"query": args.query, "max_results": args.results}
+        arguments = {"query": args.query, "limit": args.results}
         if args.wing:
             arguments["wing"] = args.wing
         if args.room:
