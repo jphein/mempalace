@@ -79,7 +79,7 @@ step "2/4  commit hashes referenced in docs resolve"
 docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # Strip cross-repo URLs first so we only check hashes that should resolve
 # in *this* fork. Pattern: anything inside (https://github.com/<other>/<repo>/commit/HASH)
-# where <other>/<repo> is not jphein/mempalace.
+# where <other>/<repo> is not techempower-org/mempalace.
 # For each line, skip the line entirely if it mentions a sibling repo
 # (palace-daemon / multipass-structural-memory-eval) — we can't tell which
 # hashes on that line are fork-mempalace vs cross-repo without parsing
@@ -88,7 +88,7 @@ docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # adjacent to a sibling-repo mention) but no false positives.
 mapfile -t hashes < <(
     for d in "${docs[@]}"; do
-        grep -v -E 'palace-daemon|multipass-structural-memory-eval|/jphein/[a-z-]+/commit/' "$d" 2>/dev/null
+        grep -v -E 'palace-daemon|multipass-structural-memory-eval|/(jphein|techempower-org)/[a-z-]+/commit/' "$d" 2>/dev/null
     done | grep -hoE '`[0-9a-f]{7,40}`' | tr -d '`' | sort -u
 )
 unresolved=0
@@ -201,7 +201,7 @@ fi
 
 # Check 5 (fork-only YAML commits → CLAUDE.md row inventory) retired
 # 2026-05-11: the CLAUDE.md row inventory it validated was removed in
-# favor of a pointer block to FORK_CHANGELOG.md + jphein/mempalace
+# favor of a pointer block to FORK_CHANGELOG.md + techempower-org/mempalace
 # issues. Check 3 (FORK_CHANGELOG.md ↔ YAML) already guarantees the
 # meaningful sync property — every fork-only YAML commit appears in the
 # rendered FORK_CHANGELOG.md by construction, so a separate CLAUDE.md

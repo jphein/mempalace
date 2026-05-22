@@ -1,4 +1,4 @@
-# Fork Changelog (jphein/mempalace)
+# Fork Changelog (techempower-org/mempalace)
 
 Fork-ahead changes that aren't yet in upstream `MemPalace/mempalace`.
 Upstream's release history lives in [`CHANGELOG.md`](CHANGELOG.md);
@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **Honor ~/.mempalace/RETIRED marker — refuse default palace, surface retire message** ([`798cf14`](https://github.com/jphein/mempalace/commit/798cf14))
+- **Honor ~/.mempalace/RETIRED marker — refuse default palace, surface retire message** ([`798cf14`](https://github.com/techempower-org/mempalace/commit/798cf14))
   Recurring confusion source on this fork: any code path that opens
   mempalace without ``PALACE_DAEMON_URL`` set silently falls
   through to the default chroma palace at ``~/.mempalace/palace``
@@ -66,7 +66,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **Empty repo .opencode/opencode.json mcp block — disabled flag wasn't being respected** ([`7133eee`](https://github.com/jphein/mempalace/commit/7133eee))
+- **Empty repo .opencode/opencode.json mcp block — disabled flag wasn't being respected** ([`7133eee`](https://github.com/techempower-org/mempalace/commit/7133eee))
   ``.opencode/opencode.json`` from upstream PR #1567 spawns a
   local ``mempalace.mcp_server`` when opencode launches in the
   repo root. On daemon-routed setups this creates **two MCP
@@ -85,7 +85,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `.opencode/opencode.json`
 
 
-- **Drop \$comment from .opencode/opencode.json — schema rejects unknown root keys** ([`637bb01`](https://github.com/jphein/mempalace/commit/637bb01))
+- **Drop \$comment from .opencode/opencode.json — schema rejects unknown root keys** ([`637bb01`](https://github.com/techempower-org/mempalace/commit/637bb01))
   Commit ``47018e5`` (PR #108) added a ``\$comment`` field to
   ``.opencode/opencode.json`` explaining why the repo-level MCP
   entry defaulted to ``enabled: false``. Opencode's strict
@@ -104,7 +104,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `.opencode/opencode.json`
 
 
-- **Disable repo-level MCP entry by default + venv-python fallback** ([`47018e5`](https://github.com/jphein/mempalace/commit/47018e5))
+- **Disable repo-level MCP entry by default + venv-python fallback** ([`47018e5`](https://github.com/techempower-org/mempalace/commit/47018e5))
   First attempt at the daemon-routed-vs-local-spawn double-server
   problem from upstream PR #1567's ``.opencode/opencode.json``.
   Set ``enabled: false`` on the repo entry; switched the spawn
@@ -127,7 +127,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **Bundled OpenCode live-capture plugin that bypasses option-K v1.2.1 bugs (filed upstream as #4, #5)** ([`5522623`](https://github.com/jphein/mempalace/commit/5522623))
+- **Bundled OpenCode live-capture plugin that bypasses option-K v1.2.1 bugs (filed upstream as #4, #5)** ([`5522623`](https://github.com/techempower-org/mempalace/commit/5522623))
   Adds `examples/opencode/live-capture/` — a self-contained
   OpenCode plugin (JS) + Python helper that POSTs verbatim
   session transcripts to the daemon's `/silent-save` endpoint on
@@ -182,7 +182,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `examples/opencode/live-capture/mempalace-live-capture.js`, `examples/opencode/live-capture/capture-session.py`, `examples/opencode/option-k-plugin-daemon-routing.patch`, `examples/opencode/option-k-plugin-message-updated.patch`, `docs/integrations/opencode.md`
 
 
-- **Documented OpenCode integration recipe (read-side MCP + push plugin + retrospective adapter)** ([`60dc9e6`](https://github.com/jphein/mempalace/commit/60dc9e6))
+- **Documented OpenCode integration recipe (read-side MCP + push plugin + retrospective adapter)** ([`60dc9e6`](https://github.com/techempower-org/mempalace/commit/60dc9e6))
   Adds `docs/integrations/opencode.md` and an `examples/opencode/`
   directory capturing the three-direction OpenCode + MemPalace
   integration recipe for daemon-routed setups:
@@ -222,7 +222,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `docs/integrations/opencode.md`, `examples/opencode/opencode.jsonc.example`, `examples/opencode/option-k-plugin-daemon-routing.patch`
 
 
-- **.opencode/opencode.json — repo-root MCP config so opencode picks up mempalace automatically** ([`ba16b82`](https://github.com/jphein/mempalace/commit/ba16b82))
+- **.opencode/opencode.json — repo-root MCP config so opencode picks up mempalace automatically** ([`ba16b82`](https://github.com/techempower-org/mempalace/commit/ba16b82))
   Cherry-pick of upstream PR #1567 (Dxrk777). Adds
   `.opencode/opencode.json` so that running `opencode` in the
   mempalace repo root automatically wires `mempalace` as a local
@@ -245,7 +245,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `.opencode/opencode.json`
 
 
-- **OpenCodeSourceAdapter (RFC 002) — retrospective ingest of OpenCode SQLite sessions** ([`2ffe652`](https://github.com/jphein/mempalace/commit/2ffe652))
+- **OpenCodeSourceAdapter (RFC 002) — retrospective ingest of OpenCode SQLite sessions** ([`2ffe652`](https://github.com/techempower-org/mempalace/commit/2ffe652))
   Cherry-pick of upstream PR #1484. Adds
   `mempalace/sources/opencode.py` — an RFC 002 `BaseSourceAdapter`
   that ingests OpenCode AI-coding-CLI session transcripts from
@@ -284,7 +284,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/sources/opencode.py`, `mempalace/sources/transforms.py`, `mempalace/sources/context.py`, `pyproject.toml`, `tests/test_sources_opencode.py`, `tests/fixtures/opencode/sample_session_2026_05_12/README.md`, `tests/fixtures/opencode/sample_session_2026_05_12/build_fixture.py`, `tests/test_corpus_origin_integration.py`
 
 
-- **Pending-writes journal + replay so daemon outages stop being silent** ([`0c34464`](https://github.com/jphein/mempalace/commit/0c34464))
+- **Pending-writes journal + replay so daemon outages stop being silent** ([`0c34464`](https://github.com/techempower-org/mempalace/commit/0c34464))
   Closes a silent-data-loss gap exposed by the 2026-05-17 power
   event: when ``PALACE_DAEMON_URL`` is set and the daemon's
   backend is unreachable, the hook write path (``_post_daemon_mine``)
@@ -315,7 +315,7 @@ enqueue side effect.
 ### Fixed
 
 
-- **Stub resources/list + prompts/list so MCP clients stop ERROR-logging on connect** ([`6ca0670`](https://github.com/jphein/mempalace/commit/6ca0670))
+- **Stub resources/list + prompts/list so MCP clients stop ERROR-logging on connect** ([`6ca0670`](https://github.com/techempower-org/mempalace/commit/6ca0670))
   OpenCode 1.15.x and other MCP clients probe ``resources/list``
   and ``prompts/list`` on connect to discover server
   capabilities. mempalace's MCP server only exposes ``tools/*``;
@@ -334,7 +334,7 @@ empty-list shape and absence of ERROR.
   *Files:* `mempalace/mcp_server.py`, `tests/test_mcp_server.py`
 
 
-- **MCP server distinguishes 'backend unreachable' from 'no palace found'** ([`0c34464`](https://github.com/jphein/mempalace/commit/0c34464))
+- **MCP server distinguishes 'backend unreachable' from 'no palace found'** ([`0c34464`](https://github.com/techempower-org/mempalace/commit/0c34464))
   The CLI's misleading ``Run: mempalace init <dir>`` hint was
   the diagnostic blocker during the 2026-05-17 outage: the daemon
   was up, postgres was down, and every search returned "No palace
@@ -369,7 +369,7 @@ on failure, error cleared on successful reopen).
 ### Added
 
 
-- **mempalace_walk_palace MCP tool — agent walks the palace via AGE Cypher** ([`8022ecb`](https://github.com/jphein/mempalace/commit/8022ecb))
+- **mempalace_walk_palace MCP tool — agent walks the palace via AGE Cypher** ([`8022ecb`](https://github.com/techempower-org/mempalace/commit/8022ecb))
   Phase 6 of the AGE-integration plan. Exposes the "agent walks into
   the palace finding wings, rooms, drawers" metaphor as a single MCP
   tool over the unified palace+entity graph (Wing → Room → Drawer →
@@ -397,7 +397,7 @@ on failure, error cleared on successful reopen).
   *Files:* `mempalace/mcp_server.py`
 
 
-- **Backfill AGE graph from existing drawer table — restartable, checkpointed** ([`b3f0206`](https://github.com/jphein/mempalace/commit/b3f0206))
+- **Backfill AGE graph from existing drawer table — restartable, checkpointed** ([`b3f0206`](https://github.com/techempower-org/mempalace/commit/b3f0206))
   Phase 4 of the AGE-integration plan. New module
   `mempalace/backfill_age.py` with CLI entry point that reads the
   drawer table once and builds the full Wing/Room/Drawer/MENTIONS
@@ -431,7 +431,7 @@ on failure, error cleared on successful reopen).
   *Files:* `mempalace/backfill_age.py`, `mempalace/knowledge_graph_age.py`
 
 
-- **Wing/Room/Drawer hierarchy as native AGE nodes; Cypher MATCH walks palace structure** ([`ff583c0`](https://github.com/jphein/mempalace/commit/ff583c0))
+- **Wing/Room/Drawer hierarchy as native AGE nodes; Cypher MATCH walks palace structure** ([`ff583c0`](https://github.com/techempower-org/mempalace/commit/ff583c0))
   Phase 3 of the AGE-integration plan. Mirrors `mempalace.palace_graph`'s
   SQL-aggregation pattern into AGE so Cypher MATCH walks the palace
   structure natively — no SQL aggregation per query.
@@ -467,7 +467,7 @@ on failure, error cleared on successful reopen).
   *Files:* `mempalace/palace_graph_age.py`
 
 
-- **Write-through middleware on PostgresCollection — entities populate AGE on every drawer write** ([`3321d83`](https://github.com/jphein/mempalace/commit/3321d83))
+- **Write-through middleware on PostgresCollection — entities populate AGE on every drawer write** ([`3321d83`](https://github.com/techempower-org/mempalace/commit/3321d83))
   Phase 2 of the AGE-integration plan. Adds a write-through hook on
   `PostgresCollection.add`/`upsert` that extracts entities from the
   document and creates `(Drawer)-[:MENTIONS]->(Entity)` edges in
@@ -505,7 +505,7 @@ on failure, error cleared on successful reopen).
   *Files:* `mempalace/backends/postgres.py`, `mempalace/kg_writethrough.py`
 
 
-- **KnowledgeGraphAGE API parity with SQLite KG: add_entity, invalidate, query_entity, query_relationship, timeline, seed_from_entity_facts** ([`ff7187d`](https://github.com/jphein/mempalace/commit/ff7187d))
+- **KnowledgeGraphAGE API parity with SQLite KG: add_entity, invalidate, query_entity, query_relationship, timeline, seed_from_entity_facts** ([`ff7187d`](https://github.com/techempower-org/mempalace/commit/ff7187d))
   Phase 1 of the AGE-integration plan. Brings `KnowledgeGraphAGE` to
   API parity with `mempalace.knowledge_graph.KnowledgeGraph` (the
   SQLite backend). Previously only `add_triple`, `query_triples`,
@@ -555,7 +555,7 @@ on failure, error cleared on successful reopen).
 ### Added
 
 
-- **KnowledgeGraphAGE skeleton — Apache AGE graph bootstrap over psycopg2** ([`a3ee623`](https://github.com/jphein/mempalace/commit/a3ee623))
+- **KnowledgeGraphAGE skeleton — Apache AGE graph bootstrap over psycopg2** ([`a3ee623`](https://github.com/techempower-org/mempalace/commit/a3ee623))
   First commit toward the Apache AGE-backed knowledge graph layer
   that the migration plan calls for. Skeleton class
   `KnowledgeGraphAGE` in `mempalace/knowledge_graph_age.py` opens a
@@ -608,7 +608,7 @@ set against the homelab mempalace-db at disks.jphe.in:5433).
   *Files:* `mempalace/knowledge_graph_age.py`, `tests/test_knowledge_graph_age.py`
 
 
-- **CI: gate postgres-backend tests against a pgvector service container** ([`da0bdbb`](https://github.com/jphein/mempalace/commit/da0bdbb))
+- **CI: gate postgres-backend tests against a pgvector service container** ([`da0bdbb`](https://github.com/techempower-org/mempalace/commit/da0bdbb))
   Adds a `test-postgres` job to `.github/workflows/ci.yml` that
   runs in parallel with the existing `test-linux` / `test-windows`
   / `test-macos` / `lint` matrix. Service container is the public
@@ -640,7 +640,7 @@ set against the homelab mempalace-db at disks.jphe.in:5433).
   *Files:* `.github/workflows/ci.yml`
 
 
-- **PostgreSQL backend via #665 cherry-pick + fork-side adaptations + smoke tests** ([`5e90c72`](https://github.com/jphein/mempalace/commit/5e90c72))
+- **PostgreSQL backend via #665 cherry-pick + fork-side adaptations + smoke tests** ([`5e90c72`](https://github.com/techempower-org/mempalace/commit/5e90c72))
   Cherry-pick of skuznetsov's upstream PR
   [#665](https://github.com/MemPalace/mempalace/pull/665) — adds a
   PostgreSQL backend built on the merged #995 / RFC 001
@@ -724,7 +724,7 @@ regressions in non-postgres paths.
 ### Changed
 
 
-- **README pivots to the four-layer model + Auto Dream as vindication of the verbatim-vs-derivative axis** ([`55b36ca`](https://github.com/jphein/mempalace/commit/55b36ca))
+- **README pivots to the four-layer model + Auto Dream as vindication of the verbatim-vs-derivative axis** ([`55b36ca`](https://github.com/techempower-org/mempalace/commit/55b36ca))
   Substantial README rewrite (+137/-100) reflecting three things
   that landed between the previous refresh (`a67be3f`, the
   2026-05-10 develop sync) and now:
@@ -782,7 +782,7 @@ regressions in non-postgres paths.
 ### Fixed
 
 
-- **Defense-in-depth metadata sanitizer at the chromadb-client chokepoint** ([`f499814`](https://github.com/jphein/mempalace/commit/f499814))
+- **Defense-in-depth metadata sanitizer at the chromadb-client chokepoint** ([`f499814`](https://github.com/techempower-org/mempalace/commit/f499814))
   Companion to the repair.py sanitizers in #1458 / `949cb20`
   (which fixed `_extract_drawers` and `_rebuild_one_collection`).
   A 151,478-drawer rebuild against the canonical palace still
@@ -818,7 +818,7 @@ regressions in non-postgres paths.
   *Files:* `mempalace/backends/chroma.py`
 
 
-- **Coerce empty + None metadata to sentinel in both rebuild paths** ([`949cb20`](https://github.com/jphein/mempalace/commit/949cb20))
+- **Coerce empty + None metadata to sentinel in both rebuild paths** ([`949cb20`](https://github.com/techempower-org/mempalace/commit/949cb20))
   ChromaDB 1.5.x rejects both None and empty-dict entries in the
   `metadatas` list (raises `ValueError: Expected metadata to be a
   non-empty dict`). Two functions in `mempalace/repair.py` construct
@@ -855,7 +855,7 @@ regressions in non-postgres paths.
   *Files:* `mempalace/repair.py`
 
 
-- **Route Stop/PreCompact hooks through palace-daemon/clients/hook.py** ([`42ded2e`](https://github.com/jphein/mempalace/commit/42ded2e))
+- **Route Stop/PreCompact hooks through palace-daemon/clients/hook.py** ([`42ded2e`](https://github.com/techempower-org/mempalace/commit/42ded2e))
   Replaces the bash wrapper invocation pattern in
   `.claude-plugin/hooks/hooks.json` with a single Python entrypoint
   via the daemon's hook client. Both Stop and PreCompact now invoke
@@ -892,7 +892,7 @@ regressions in non-postgres paths.
 ### Performance
 
 
-- **Bulk pre-fetch already-mined set instead of N WHERE queries in mine_convos** ([`248854a`](https://github.com/jphein/mempalace/commit/248854a))
+- **Bulk pre-fetch already-mined set instead of N WHERE queries in mine_convos** ([`248854a`](https://github.com/techempower-org/mempalace/commit/248854a))
   Replaces the N+1 `col.get(where={"source_file": <path>}, ...)`
   per-conversation pattern in `mempalace/convo_miner.py:mine_convos`
   with a single bulk pre-fetch — `col.get(where={"source_file":
@@ -923,7 +923,7 @@ regressions in non-postgres paths.
 ### Added
 
 
-- **daemon-route `mempalace status` / `search` / `mine` when PALACE_DAEMON_URL is set** ([`22ef562`](https://github.com/jphein/mempalace/commit/22ef562))
+- **daemon-route `mempalace status` / `search` / `mine` when PALACE_DAEMON_URL is set** ([`22ef562`](https://github.com/techempower-org/mempalace/commit/22ef562))
   Companion to the `mcp_server` routing in commit `41359ba`. Closes
   the last desktop-side path that opened a local chromadb client.
 
@@ -969,7 +969,7 @@ when env var is unset. Suite 1591 passed (1577 + 14 new).
   *Files:* `mempalace/cli.py`, `tests/test_cli_daemon.py`
 
 
-- **daemon-route `mcp_server.py` via the `handle_request` JSON-RPC chokepoint** ([`41359ba`](https://github.com/jphein/mempalace/commit/41359ba))
+- **daemon-route `mcp_server.py` via the `handle_request` JSON-RPC chokepoint** ([`41359ba`](https://github.com/techempower-org/mempalace/commit/41359ba))
   Mirrors the `PALACE_DAEMON_URL` gate that `hooks_cli.py` shipped
   on 2026-04-24 (the daemon-strict fix for the HNSW drift
   incident). Closes the last in-process write path inside
@@ -1024,7 +1024,7 @@ from the canonical palace. Suite 1577 passed.
 ### Added
 
 
-- **mempalace mined + purge --source-file (mining management surface)** ([`2e6ced9`](https://github.com/jphein/mempalace/commit/2e6ced9))
+- **mempalace mined + purge --source-file (mining management surface)** ([`2e6ced9`](https://github.com/techempower-org/mempalace/commit/2e6ced9))
   Closes the "removing manually mined data" half of JP's
   mining-management ask. Adding is already covered by the existing
   ``mempalace mine <dir>``; this PR adds the symmetric remove +
@@ -1052,7 +1052,7 @@ from the canonical palace. Suite 1577 passed.
   *Files:* `mempalace/cli.py`, `tests/test_cli.py`
 
 
-- **`hook_verbatim_mode` config flag preserves system tags + full tool I/O during transcript ingest** ([`ef98961`](https://github.com/jphein/mempalace/commit/ef98961))
+- **`hook_verbatim_mode` config flag preserves system tags + full tool I/O during transcript ingest** ([`ef98961`](https://github.com/techempower-org/mempalace/commit/ef98961))
   `normalize()` defaults match upstream — system tags, hook chrome,
   Read/Edit/Write tool results, long Bash output, and large
   Grep/Glob match lists are stripped or truncated so chunk
@@ -1099,7 +1099,7 @@ config-file readback. Suite total 1562 passed.
 ### Changed
 
 
-- **Drop wing_ prefix from transcript-derived wings to converge with operator mines** ([`86d4700`](https://github.com/jphein/mempalace/commit/86d4700))
+- **Drop wing_ prefix from transcript-derived wings to converge with operator mines** ([`86d4700`](https://github.com/techempower-org/mempalace/commit/86d4700))
   The fork-only ``_wing_from_transcript_path`` returned
   ``wing_<project>`` for hook-derived wings, but operator-mined
   content from ``mempalace mine ~/Projects/X`` lands in a bare-name
@@ -1127,7 +1127,7 @@ config-file readback. Suite total 1562 passed.
   *Files:* `mempalace/hooks_cli.py`, `tests/test_hooks_cli.py`
 
 
-- **Retire mempalace_session_recovery collection + read tool** ([`0b945e1`](https://github.com/jphein/mempalace/commit/0b945e1))
+- **Retire mempalace_session_recovery collection + read tool** ([`0b945e1`](https://github.com/techempower-org/mempalace/commit/0b945e1))
   Follow-up to drop-checkpoint-write-path. With nothing writing
   to the recovery collection anymore (hooks moved to verbatim-only
   on the parent branch), the read paths and migration code that
@@ -1163,7 +1163,7 @@ config-file readback. Suite total 1562 passed.
   *Files:* `mempalace/palace.py`, `mempalace/mcp_server.py`, `mempalace/migrate.py`, `mempalace/cli.py`, `website/reference/mcp-tools.md`, `tests/test_session_recovery.py`, `tests/test_migrate.py`, `tests/test_mcp_server.py`
 
 
-- **Drop hook-side checkpoint diary writes — verbatim-only architecture** ([`69768fc`](https://github.com/jphein/mempalace/commit/69768fc))
+- **Drop hook-side checkpoint diary writes — verbatim-only architecture** ([`69768fc`](https://github.com/techempower-org/mempalace/commit/69768fc))
   The Stop hook used to do two things on each fire: (a) write a
   1KB checkpoint summary diary entry into the dedicated
   ``mempalace_session_recovery`` collection AND (b) auto-mine the
@@ -1206,7 +1206,7 @@ config-file readback. Suite total 1562 passed.
 ### Fixed
 
 
-- **Preserve dashed project names in transcript-derived wings** ([`d76134d`](https://github.com/jphein/mempalace/commit/d76134d))
+- **Preserve dashed project names in transcript-derived wings** ([`d76134d`](https://github.com/techempower-org/mempalace/commit/d76134d))
   Two findings from Copilot review on jphein/mempalace#9 that
   surfaced a real bug: the previous primary regex's
   ``encoded.rsplit('-', 1)[-1]`` rule collapsed
@@ -1232,7 +1232,7 @@ config-file readback. Suite total 1562 passed.
   *Files:* `mempalace/hooks_cli.py`, `tests/test_hooks_cli.py`
 
 
-- **Restore transcript ingest via daemon /mine when PALACE_DAEMON_URL is set** ([`09d2ca6`](https://github.com/jphein/mempalace/commit/09d2ca6))
+- **Restore transcript ingest via daemon /mine when PALACE_DAEMON_URL is set** ([`09d2ca6`](https://github.com/techempower-org/mempalace/commit/09d2ca6))
   Daemon-strict mode (introduced 2026-04-24 in commits ``8c90c0f``
   + ``0e97b19`` to fix the HNSW drift incident) skipped all three
   local mining paths when ``PALACE_DAEMON_URL`` was set, on the
@@ -1274,7 +1274,7 @@ config-file readback. Suite total 1562 passed.
 ### Fixed
 
 
-- **`cfg.init()` no longer materializes chunking defaults into `config.json`** ([`6ce37c0`](https://github.com/jphein/mempalace/commit/6ce37c0))
+- **`cfg.init()` no longer materializes chunking defaults into `config.json`** ([`6ce37c0`](https://github.com/techempower-org/mempalace/commit/6ce37c0))
   `cfg.init()` was unconditionally writing ``chunk_size: 800``,
   ``chunk_overlap: 100``, and ``min_chunk_size: 50`` into
   ``config.json`` on first run. The values match ``miner.py``'s
@@ -1312,7 +1312,7 @@ config-file readback. Suite total 1562 passed.
   merges. Amends fork-ahead row 17.
 
   *Tests:* 1548/1548 (was 1546/1548 with 2 isolation failures in test_convo_miner)
-  *Upstream:* [PR #1024](https://github.com/MemPalace/mempalace/pull/1024) (OPEN)
+  *Upstream:* [PR #1024](https://github.com/MemPalace/mempalace/pull/1024) (MERGED)
   *Files:* `mempalace/config.py`
 
 
@@ -1322,7 +1322,7 @@ config-file readback. Suite total 1562 passed.
 ### Changed
 
 
-- **Retire the `kind=` filter — structural split made it inert** ([`7ba28dc`](https://github.com/jphein/mempalace/commit/7ba28dc))
+- **Retire the `kind=` filter — structural split made it inert** ([`7ba28dc`](https://github.com/techempower-org/mempalace/commit/7ba28dc))
   Phases A–E of the checkpoint collection split (2026-04-25 → 2026-04-26)
   moved every Stop-hook auto-save checkpoint drawer to the dedicated
   ``mempalace_session_recovery`` collection. Empirical check on the
@@ -1343,7 +1343,7 @@ config-file readback. Suite total 1562 passed.
   *Files:* `mempalace/searcher.py`, `mempalace/mcp_server.py`, `mempalace/palace.py`, `mempalace/migrate.py`, `mempalace/layers.py`, `tests/test_searcher.py`
 
 
-- **Hoist CLOSET_RANK_BOOSTS to module level + record VecRecall ablation finding** ([`3cb03f3`](https://github.com/jphein/mempalace/commit/3cb03f3))
+- **Hoist CLOSET_RANK_BOOSTS to module level + record VecRecall ablation finding** ([`3cb03f3`](https://github.com/techempower-org/mempalace/commit/3cb03f3))
   Two-step refactor + measurement. First (commit ``f558d3c``):
   hoist ``CLOSET_RANK_BOOSTS = [0.40, 0.25, 0.15, 0.08, 0.04]`` and
   ``CLOSET_DISTANCE_CAP`` from inside ``search_memories`` to module
@@ -1372,7 +1372,7 @@ config-file readback. Suite total 1562 passed.
 ### Fixed
 
 
-- **Strip embedded API key from .claude-plugin/ manifests; rely on env inheritance** ([`9f91e18`](https://github.com/jphein/mempalace/commit/9f91e18))
+- **Strip embedded API key from .claude-plugin/ manifests; rely on env inheritance** ([`9f91e18`](https://github.com/techempower-org/mempalace/commit/9f91e18))
   ``.claude-plugin/.mcp.json`` and ``.claude-plugin/hooks/hooks.json``
   shipped with a real (rotated) API key embedded as a literal in the
   manifest's ``env`` block, plus my homelab daemon URL. Both are
@@ -1401,7 +1401,7 @@ config-file readback. Suite total 1562 passed.
 ### Added
 
 
-- **Canonical YAML manifest + renderer for fork-ahead docs** ([`5a01aec`](https://github.com/jphein/mempalace/commit/5a01aec))
+- **Canonical YAML manifest + renderer for fork-ahead docs** ([`5a01aec`](https://github.com/techempower-org/mempalace/commit/5a01aec))
   The fork-ahead narrative previously lived (and drifted) across four
   hand-edited files: README's fork-change-queue table, CLAUDE.md's row
   inventory, FORK_CHANGELOG.md, and the promises tracker. New
@@ -1418,7 +1418,7 @@ config-file readback. Suite total 1562 passed.
   *Files:* `docs/fork-changes.yaml`, `scripts/render-docs.py`, `scripts/check-docs.sh`, `FORK_CHANGELOG.md`, `CLAUDE.md`
 
 
-- **Phase D migration + PreCompact recovery write** ([`42817d7`](https://github.com/jphein/mempalace/commit/42817d7))
+- **Phase D migration + PreCompact recovery write** ([`42817d7`](https://github.com/techempower-org/mempalace/commit/42817d7))
   ``migrate_checkpoints_to_recovery(palace_path, batch_size=1000)`` walks
   the main collection in pages, filters drawers with topic in
   ``_CHECKPOINT_TOPICS`` in Python (avoids the chromadb 1.5.x ``$in``/``$nin``
@@ -1437,7 +1437,7 @@ config-file readback. Suite total 1562 passed.
   *Files:* `mempalace/migrate.py`, `mempalace/cli.py`, `mempalace/hooks_cli.py`, `tests/test_migrate.py`
 
 
-- **Surface drawer_id in search/diary/recovery payloads** ([`9a8bb77`](https://github.com/jphein/mempalace/commit/9a8bb77))
+- **Surface drawer_id in search/diary/recovery payloads** ([`9a8bb77`](https://github.com/techempower-org/mempalace/commit/9a8bb77))
   ChromaDB's primary key was always returned by ``query()`` and ``get()``
   but never plumbed into result-building loops; consumers (e.g.
   familiar.realm.watch's citation-popover loop) couldn't link a hit
@@ -1452,7 +1452,7 @@ config-file readback. Suite total 1562 passed.
   *Files:* `mempalace/searcher.py`, `mempalace/mcp_server.py`, `website/reference/mcp-tools.md`
 
 
-- **scripts/deploy.sh — one-command Syncthing-aware redeploy** ([`8252025`](https://github.com/jphein/mempalace/commit/8252025))
+- **scripts/deploy.sh — one-command Syncthing-aware redeploy** ([`8252025`](https://github.com/techempower-org/mempalace/commit/8252025))
   Single command does the right shape: push fork main → wait for
   Syncthing to reach ``/mnt/raid/projects/memorypalace`` on the deploy
   host → ``systemctl --user restart palace-daemon`` → poll ``/health`` →
@@ -1466,7 +1466,7 @@ config-file readback. Suite total 1562 passed.
 ### Changed
 
 
-- **Cherry-pick #1094 — coerce None metadatas at chromadb boundary** ([`43d728d`](https://github.com/jphein/mempalace/commit/43d728d))
+- **Cherry-pick #1094 — coerce None metadatas at chromadb boundary** ([`43d728d`](https://github.com/techempower-org/mempalace/commit/43d728d))
   Fork main was carrying the per-site ``meta = meta or {}`` guards
   from #999 in eight read paths but didn't have the boundary
   coercion that closes the issue once for all callers. The typed
@@ -1486,7 +1486,7 @@ config-file readback. Suite total 1562 passed.
   *Files:* `mempalace/backends/chroma.py`, `tests/test_backends.py`
 
 
-- **Cherry-pick #1087 rewrite — collection.delete(where=) instead of nuke-and-rebuild** ([`366a9ad`](https://github.com/jphein/mempalace/commit/366a9ad))
+- **Cherry-pick #1087 rewrite — collection.delete(where=) instead of nuke-and-rebuild** ([`366a9ad`](https://github.com/techempower-org/mempalace/commit/366a9ad))
   Fork main had been carrying ``cmd_purge``'s nuke-and-rebuild
   shape (extract survivors, ``shutil.rmtree``, recreate, re-insert).
   Cherry-picked the post-review rewrite from PR #1087's branch:
@@ -1506,7 +1506,7 @@ config-file readback. Suite total 1562 passed.
 ### Fixed
 
 
-- **Integrity gate prevents quarantine_stale_hnsw from destroying healthy indexes** ([`645ba20`](https://github.com/jphein/mempalace/commit/645ba20))
+- **Integrity gate prevents quarantine_stale_hnsw from destroying healthy indexes** ([`645ba20`](https://github.com/techempower-org/mempalace/commit/645ba20))
   Previous behavior fired whenever ``sqlite_mtime - hnsw_mtime`` exceeded
   the (lowered, in #1173) 300s threshold. ChromaDB 1.5.x flushes HNSW
   asynchronously and a clean shutdown does not force-flush, so the
@@ -1530,7 +1530,7 @@ config-file readback. Suite total 1562 passed.
 ### Performance
 
 
-- **Cherry-pick #1085 — batch ChromaDB inserts in miner (10–30× faster)** ([`6be6fff`](https://github.com/jphein/mempalace/commit/6be6fff))
+- **Cherry-pick #1085 — batch ChromaDB inserts in miner (10–30× faster)** ([`6be6fff`](https://github.com/techempower-org/mempalace/commit/6be6fff))
   Cherry-picked from upstream PR
   [#1085](https://github.com/MemPalace/mempalace/pull/1085) (@midweste,
   OPEN as of 2026-04-26). New ``_build_drawer()`` helper + ``add_drawers()``
@@ -1539,10 +1539,13 @@ config-file readback. Suite total 1562 passed.
   and ``os.path.getmtime()`` to file-level (2 syscalls per file instead
   of 2N). Reported 10–30× mining speedup upstream. Fork-side resolution
   preserved fork's existing ``DRAWER_UPSERT_BATCH_SIZE=1000``; aliased
-  upstream's ``CHROMA_BATCH_LIMIT`` to it. Becomes a no-op when #1085
-  merges to develop and we next sync.
+  upstream's ``CHROMA_BATCH_LIMIT`` to it. **2026-05-16:** #1085 was
+  closed by @midweste, superseded by merged upstream
+  [#1185](https://github.com/MemPalace/mempalace/pull/1185) (wider
+  scope: same batching + optional GPU acceleration). The fork-side
+  cherry-pick is now a no-op against develop; drop on next sync.
 
-  *Upstream:* [PR #1085](https://github.com/MemPalace/mempalace/pull/1085) (OPEN)
+  *Upstream:* [PR #1085](https://github.com/MemPalace/mempalace/pull/1085) (CLOSED)
   *Files:* `mempalace/miner.py`
 
 
@@ -1552,7 +1555,7 @@ config-file readback. Suite total 1562 passed.
 ### Added
 
 
-- **Phases A–C of the checkpoint collection split** ([`e266365`](https://github.com/jphein/mempalace/commit/e266365))
+- **Phases A–C of the checkpoint collection split** ([`e266365`](https://github.com/techempower-org/mempalace/commit/e266365))
   New ``mempalace_session_recovery`` collection adapter
   (``_SESSION_RECOVERY_COLLECTION`` + ``get_session_recovery_collection``
   in ``palace.py``); ``tool_diary_write`` routes ``topic in _CHECKPOINT_TOPICS``
@@ -1570,7 +1573,7 @@ config-file readback. Suite total 1562 passed.
 ### Fixed
 
 
-- **Gate quarantine_stale_hnsw to once-per-palace-per-process** ([`70c4bc6`](https://github.com/jphein/mempalace/commit/70c4bc6))
+- **Gate quarantine_stale_hnsw to once-per-palace-per-process** ([`70c4bc6`](https://github.com/techempower-org/mempalace/commit/70c4bc6))
   ``make_client()`` previously invoked ``quarantine_stale_hnsw`` on every
   reconnect; under steady write load the proactive check kept firing,
   racking up ``.drift-*`` directories every 10–30 minutes. New
@@ -1585,7 +1588,7 @@ config-file readback. Suite total 1562 passed.
   *Files:* `mempalace/backends/chroma.py`, `tests/test_backends.py`, `tests/conftest.py`
 
 
-- **palace_graph.build_graph skips None metadata** ([`5fd15db`](https://github.com/jphein/mempalace/commit/5fd15db))
+- **palace_graph.build_graph skips None metadata** ([`5fd15db`](https://github.com/techempower-org/mempalace/commit/5fd15db))
   ``palace_graph.py:95`` was calling ``meta.get("room", "")`` unconditionally;
   ChromaDB returns ``None`` for legacy/partial-write drawers, taking out
   every consumer of ``build_graph`` (graph_stats, find_tunnels, traverse,
@@ -1597,7 +1600,7 @@ config-file readback. Suite total 1562 passed.
   *Files:* `mempalace/palace_graph.py`
 
 
-- **kind= filter on search_memories excludes Stop-hook checkpoints (transitional)** ([`f9f5cc4`](https://github.com/jphein/mempalace/commit/f9f5cc4))
+- **kind= filter on search_memories excludes Stop-hook checkpoints (transitional)** ([`f9f5cc4`](https://github.com/techempower-org/mempalace/commit/f9f5cc4))
   Three values: ``"content"`` (default, excludes), ``"checkpoint"``
   (recovery/audit only), ``"all"`` (no filter). Two same-day architecture
   corrections: (a) the where-clause filter (``topic $nin [...]``) tripped
@@ -1625,6 +1628,7 @@ config-file readback. Suite total 1562 passed.
 *See CHANGELOG.md (upstream) for the full released history.*
 
 
+- [PR #1024](https://github.com/MemPalace/mempalace/pull/1024) — Configurable chunk_size / chunk_overlap / min_chunk_size — 2026-05-15
 - [PR #1173](https://github.com/MemPalace/mempalace/pull/1173) — quarantine_stale_hnsw on make_client + cold-start gate + integrity sniff — 2026-04-26
 - [PR #1177](https://github.com/MemPalace/mempalace/pull/1177) — `.blob_seq_ids_migrated` marker guard (closes #1090) — 2026-04-26
 - [PR #1198](https://github.com/MemPalace/mempalace/pull/1198) — _tokenize None-document guard in BM25 reranker — 2026-04-26

@@ -39,7 +39,7 @@ YAML_PATH = REPO_ROOT / "docs" / "fork-changes.yaml"
 
 CHANGELOG_PATH = REPO_ROOT / "FORK_CHANGELOG.md"
 CHANGELOG_HEADER = """\
-# Fork Changelog (jphein/mempalace)
+# Fork Changelog (techempower-org/mempalace)
 
 Fork-ahead changes that aren't yet in upstream `MemPalace/mempalace`.
 Upstream's release history lives in [`CHANGELOG.md`](CHANGELOG.md);
@@ -74,7 +74,7 @@ def load_manifest(path: Path = YAML_PATH) -> dict:
 
 def commit_link(sha: str) -> str:
     """Render a 7-char SHA as a markdown link to the fork commit."""
-    return f"[`{sha}`](https://github.com/jphein/mempalace/commit/{sha})"
+    return f"[`{sha}`](https://github.com/techempower-org/mempalace/commit/{sha})"
 
 
 def render_entry(entry: dict[str, Any]) -> str:
