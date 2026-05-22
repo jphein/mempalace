@@ -24,6 +24,198 @@
 
 entries:
 
+  - id: opencode-live-capture-plugin
+    date: 2026-05-21
+    bucket: Added
+    commit: 5522623
+    area: CLI
+    summary: "Bundled OpenCode live-capture plugin that bypasses option-K v1.2.1 bugs (filed upstream as #4, #5)"
+    body: |
+      Adds `examples/opencode/live-capture/` — a self-contained
+      OpenCode plugin (JS) + Python helper that POSTs verbatim
+      session transcripts to the daemon's `/silent-save` endpoint on
+      every `session.idle`.
+
+      Background: while documenting the integration recipe
+      (`opencode-integration-recipe` below), end-to-end testing
+      revealed that the upstream option-K
+      [`opencode-plugin-mempalace`](https://www.npmjs.com/package/opencode-plugin-mempalace)
+      v1.2.1 cannot actually push drawers in a daemon-routed setup —
+      two compounding bugs, both filed upstream:
+
+      - [option-K#4](https://github.com/option-K/opencode-plugin-mempalace/issues/4):
+        The plugin subscribes to `chat.message`, which OpenCode never
+        publishes. The message counter never increments, `session.idle`
+        sees `hasPendingMessages() === false`, and **the plugin never
+        mines a drawer**. Verified by inspecting bus types in
+        `~/.local/share/opencode/log/*.log` against the canonical event
+        taxonomy at [opencode.ai/docs/plugins](https://opencode.ai/docs/plugins).
+      - [option-K#5](https://github.com/option-K/opencode-plugin-mempalace/issues/5):
+        Even with #4 patched, `mineSync` calls `mempalace mine <dir>`,
+        which the *remote* daemon evaluates against ITS OWN filesystem.
+        For multi-host setups (palace-daemon on a different machine
+        from OpenCode), the daemon returns 400 because the local
+        path doesn't exist on its filesystem.
+
+      The bundled plugin sidesteps both by:
+
+      1. Subscribing to `session.idle` / `session.deleted` /
+         `session.status[idle]` directly (no message counter).
+      2. Reading OpenCode's local SQLite session DB client-side.
+      3. POSTing the extracted transcript to the daemon's
+         `/silent-save` endpoint (the same endpoint MemPalace's
+         Claude Code stop hook uses).
+
+      The Python helper imports `_extract_session_messages` and
+      `_session_transcript` from `mempalace/sources/opencode.py` so
+      the transcript shape matches `OpenCodeSourceAdapter` exactly.
+
+      Also splits the previously combined option-K patch into two
+      independently-applicable files:
+
+      - `examples/opencode/option-k-plugin-daemon-routing.patch` —
+        Fix 1 (option-K#1, `isInitialized()` daemon detection).
+      - `examples/opencode/option-k-plugin-message-updated.patch` —
+        Fix 2 (option-K#4, `chat.message` → `message.updated`).
+
+      `docs/integrations/opencode.md` now documents both deployment
+      options (bundled plugin for remote-daemon, option-K plugin +
+      patches for local palaces).
+    files:
+      - examples/opencode/live-capture/mempalace-live-capture.js
+      - examples/opencode/live-capture/capture-session.py
+      - examples/opencode/option-k-plugin-daemon-routing.patch
+      - examples/opencode/option-k-plugin-message-updated.patch
+      - docs/integrations/opencode.md
+
+  - id: opencode-integration-recipe
+    date: 2026-05-21
+    bucket: Added
+    commit: 60dc9e6
+    area: Docs
+    summary: "Documented OpenCode integration recipe (read-side MCP + push plugin + retrospective adapter)"
+    body: |
+      Adds `docs/integrations/opencode.md` and an `examples/opencode/`
+      directory capturing the three-direction OpenCode + MemPalace
+      integration recipe for daemon-routed setups:
+
+      - **Read** — `~/.config/opencode/opencode.jsonc` MCP entry pointing
+        at `palace-daemon/clients/mempalace-mcp-wrapper.sh` (sources
+        `~/.config/palace-daemon/env` so the API key never lands in
+        plaintext config).
+      - **Push (live)** — option-K's `opencode-plugin-mempalace` npm
+        package (project-basename wings, default 15-message threshold,
+        session.idle flush, SIGINT/SIGTERM rescue, pre-compaction
+        injection — closest match to MemPalace's Claude Code stop-hook
+        pattern).
+      - **Pull (retrospective)** — the cherry-picked
+        `OpenCodeSourceAdapter` from upstream PR #1484, run via
+        `mempalace mine --source opencode` for one-shot backfill of
+        historical sessions.
+
+      Includes a re-applicable patch
+      (`examples/opencode/option-k-plugin-daemon-routing.patch`) for
+      option-K's plugin v1.2.1 issue #1, where `isInitialized()` passes
+      `--palace <local-dir>/.mempalace/palace` to `mempalace status`,
+      forcing a local-store lookup that bypasses `PALACE_DAEMON_URL`
+      routing. Without the patch the plugin re-runs `mempalace init
+      --yes <dir>` on every OpenCode start (idempotent against the
+      daemon, just wasteful); with the patch init+isInitialized
+      short-circuit when daemon-routed mode is detected.
+
+      Why the recipe lives here rather than upstream: this fork's
+      single-writer-via-palace-daemon shape doesn't match upstream's
+      assumed local-CLI install pattern (Milofax #297, geco #1524, and
+      Dxrk #1567 all assume a local mempalace install). Upstream PRs
+      will eventually subsume parts of this — when they do, the YAML
+      entries become removable; for now the recipe captures what
+      actually works on a daemon-routed box.
+    files:
+      - docs/integrations/opencode.md
+      - examples/opencode/opencode.jsonc.example
+      - examples/opencode/option-k-plugin-daemon-routing.patch
+
+  - id: opencode-mcp-config-cherry-pick-1567
+    date: 2026-05-21
+    bucket: Added
+    commit: ba16b82
+    area: CLI
+    summary: ".opencode/opencode.json — repo-root MCP config so opencode picks up mempalace automatically"
+    body: |
+      Cherry-pick of upstream PR #1567 (Dxrk777). Adds
+      `.opencode/opencode.json` so that running `opencode` in the
+      mempalace repo root automatically wires `mempalace` as a local
+      MCP server — useful for contributors who use OpenCode for
+      development on the project itself.
+
+      Two-commit cherry-pick:
+
+      - `013ac63` — initial config with `command: ["mempalace-mcp"]`
+      - `ba16b82` — gemini-code-assist review feedback: switch to
+        `command: ["python", "-m", "mempalace.mcp_server"]` for
+        portability across install methods (pip vs uv vs dev install)
+
+      This is the **dev/contributor surface** — it lives in the repo
+      and only matters when running OpenCode against the repo root.
+      Per-user setups should use `~/.config/opencode/opencode.jsonc`
+      with the daemon-aware wrapper (see `docs/integrations/opencode.md`).
+    pr: 1567
+    pr_state: OPEN
+    files:
+      - .opencode/opencode.json
+
+  - id: opencode-source-adapter-cherry-pick-1484
+    date: 2026-05-21
+    bucket: Added
+    commit: 2ffe652
+    area: CLI
+    summary: "OpenCodeSourceAdapter (RFC 002) — retrospective ingest of OpenCode SQLite sessions"
+    body: |
+      Cherry-pick of upstream PR #1484. Adds
+      `mempalace/sources/opencode.py` — an RFC 002 `BaseSourceAdapter`
+      that ingests OpenCode AI-coding-CLI session transcripts from
+      `~/.local/share/opencode/opencode.db` into the palace, formatted
+      to match `convo_miner`'s exchange-pair drawer shape.
+
+      Five-commit cherry-pick:
+
+      - `2c368c6` — initial adapter (482-line `opencode.py`, 6
+        opencode-namespaced reference transformations in
+        `transforms.py`, entry-point registration, 28 tests, sample
+        SQLite-schema-verbatim fixture)
+      - `3ff7043` — gemini-code-assist review fixes: missing
+        `opencode_session_version` in metadata (broke incremental
+        `is_current`), `_skip_requested` private access, `filed_at`
+        hoisted out of chunk loop, PEP 8 import position
+      - `9531532` — igorls review fixes: ruff F401/E402 in tests,
+        route-hint wing/drawer-stage precedence mismatch (RFC 002 §2.5),
+        unjustified `# noqa` cleanup
+      - `18ab021` + `2ffe652` — CI ruff 0.4.x format passes
+
+      Adapter conformance via RFC 002 §7.3 declared-transformation
+      round-trip; one drawer per exchange-pair; `source_file` shape
+      `opencode://<absolute-db-path>#session=<sid>`; wing routes from
+      `session.directory` basename (matching the live-capture plugin's
+      taxonomy); incremental ingest works via `opencode_session_version`.
+
+      Originated from JakobSachs's spadework on upstream PR #23 (DB
+      schema reverse engineering, session/message/part traversal,
+      tool-input/tool-output stripping). PR #23 is still OPEN but
+      CONFLICTING and unresponsive since 2026-04-08; #1484 carries
+      `Co-authored-by: JakobSachs` per coordination on #23.
+    tests: "28 OpenCode adapter tests pass; full suite 2133 passed / 33 skipped (zero regressions on fork main + 60-commit upstream sync baseline)"
+    pr: 1484
+    pr_state: OPEN
+    files:
+      - mempalace/sources/opencode.py
+      - mempalace/sources/transforms.py
+      - mempalace/sources/context.py
+      - pyproject.toml
+      - tests/test_sources_opencode.py
+      - tests/fixtures/opencode/sample_session_2026_05_12/README.md
+      - tests/fixtures/opencode/sample_session_2026_05_12/build_fixture.py
+      - tests/test_corpus_origin_integration.py
+
   - id: mempalace-walk-palace-mcp-tool
     date: 2026-05-17
     bucket: Added
