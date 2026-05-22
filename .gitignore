@@ -6,7 +6,9 @@ __pycache__/
 .pytest_cache/
 mempal.yaml
 .a5c/
-.claude/
+# Project-scoped Claude Code commands are committed; everything else under .claude/ stays out.
+.claude/*
+!.claude/commands/
 .codex/
 .codex
 
