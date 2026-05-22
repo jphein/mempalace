@@ -194,9 +194,7 @@ def render_readme_queue(manifest: dict) -> str:
         if pr:
             state = entry.get("pr_state", "")
             state_str = f" ({state})" if state else ""
-            pr_cell = (
-                f"[#{pr}](https://github.com/MemPalace/mempalace/pull/{pr}){state_str}"
-            )
+            pr_cell = f"[#{pr}](https://github.com/MemPalace/mempalace/pull/{pr}){state_str}"
         else:
             pr_cell = "—"
         commit = entry.get("commit", "")
