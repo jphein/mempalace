@@ -14,6 +14,21 @@ Per-phase checkpoint in ``mempalace.backend_meta`` so a re-run resumes
 from the last completed phase. Designed to be safe to invoke multiple
 times against the same source/target pair.
 
+Drawer ingest reads drawers directly from ``<palace>/chroma.sqlite3``,
+not through the ``chromadb`` Python client. ChromaDB 1.5.x SIGSEGVs on
+palaces with stale HNSW state and pins ``hnswlib`` as a native
+dependency that may be unbuildable on the migration host. Pure-sqlite
+ingest sidesteps both problems: the on-disk format of ``collections``,
+``segments``, ``embeddings``, and ``embedding_metadata`` is stable
+across chromadb 1.x releases, while the HNSW binary layout is not.
+Embeddings are recomputed by ``PostgresBackend`` from the original
+document text using the same ``DefaultEmbeddingFunction`` chromadb
+itself uses — deterministic per (model, text), so re-embedding
+matches the source vectors. The trade-off is migration runtime
+(re-embedding takes minutes for a six-figure drawer count); the
+upside is that the migration runs even when chromadb is broken or
+absent.
+
 Tracks Phase 3 of `docs/superpowers/plans/2026-05-10-pgvector-age-migration-impl.md`.
 3.1 (this commit) ships the CLI scaffold + phase 0; phases 1–6 land in
 subsequent commits.
@@ -22,9 +37,10 @@ subsequent commits.
 from __future__ import annotations
 
 import os
+import sqlite3
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
 
 def run_migration(
@@ -199,59 +215,67 @@ def phase_2_drawers(
 ) -> None:
     """Stream drawers from every collection in the ChromaDB palace into Postgres.
 
-    Iterates each collection, pages through it ``batch_size`` rows at a
-    time, and writes each batch through ``PostgresBackend.upsert()``.
-    Upsert is idempotent (ON CONFLICT (id) DO UPDATE), so re-running the
-    phase against the same source is safe and converges to the same state.
+    Reads documents and metadata directly from ``<chroma_path>/chroma.sqlite3``
+    via ``sqlite3``; never opens a ``chromadb.PersistentClient``. The
+    metadata segment is the source of truth for drawer identity in chroma's
+    on-disk layout: every drawer that's been written has a row in the
+    ``embeddings`` table (keyed by segment id) and one or more rows in
+    ``embedding_metadata`` (including the synthetic ``chroma:document``
+    key that holds the verbatim document text).
+
+    Embeddings are recomputed by ``PostgresBackend`` from the document text
+    rather than copied from chroma's HNSW binary, which has no stable
+    public format. The model is deterministic for fixed (text, model)
+    inputs, so re-embedding matches the source vectors.
+
+    Iterates each collection, pages ``batch_size`` rows at a time, and
+    writes each batch through ``PostgresBackend.upsert()``. Upsert is
+    idempotent (ON CONFLICT (id) DO UPDATE), so re-running the phase
+    against the same source is safe and converges to the same state.
 
     Progress checkpoints are written per-collection and per-batch under
     ``migration_drawer_progress::<collection_name>`` keys so a resumed
     run can skip already-copied collections entirely (if marked done)
     and pages within an in-flight collection (the upsert handles that
     case naturally without a finer-grained checkpoint).
-
-    Embedding dimension is taken as-is from ChromaDB; if the source and
-    target dimensions disagree the postgres backend rejects the row at
-    insert time — better to surface there than to silently truncate.
     """
-    import chromadb
     import psycopg2
     from .backends.base import PalaceRef
     from .backends.postgres import PostgresBackend
-    from .backends.chroma import ChromaBackend
 
-    # ChromaDB 1.5.x SIGSEGVs when opening palaces with stale HNSW segments
-    # or invalid index_metadata files (see issues #1121, #1132, #1263,
-    # #1266; recovery work in chroma-core/chroma#6949). mempalace.backends
-    # .chroma._prepare_palace_for_open runs three preflight steps that
-    # quarantine the bad state before chromadb's open. Without it,
-    # chromadb.PersistentClient(path=...) on a long-lived palace will crash.
-    # Idempotent; the daemon calls this before every open too.
-    ChromaBackend._prepare_palace_for_open(chroma_path)
+    sqlite_path = Path(chroma_path) / "chroma.sqlite3"
+    if not sqlite_path.is_file():
+        print(
+            f"[drawers] no chroma.sqlite3 at {sqlite_path}; "
+            "nothing to copy (empty or non-chroma palace)"
+        )
+        return
 
-    client = chromadb.PersistentClient(path=chroma_path)
-    backend = PostgresBackend(dsn=postgres_dsn)
-    # PalaceRef identifies the source palace for backend's per-palace
-    # caches. Use the chroma path as the canonical id (filesystem-rooted
-    # palace); namespace is unused for the local migration.
-    palace_ref = PalaceRef(id=chroma_path, local_path=chroma_path)
-    collections = list(client.list_collections())
+    collections = list(_iter_chroma_collections_via_sqlite(sqlite_path))
 
     if not collections:
         print("[drawers] source palace has no collections; nothing to copy")
         return
 
+    backend = PostgresBackend(dsn=postgres_dsn)
+    # PalaceRef identifies the source palace for backend's per-palace
+    # caches. Use the chroma path as the canonical id (filesystem-rooted
+    # palace); namespace is unused for the local migration.
+    palace_ref = PalaceRef(id=chroma_path, local_path=chroma_path)
+
     with psycopg2.connect(postgres_dsn) as conn:
-        for col_handle in collections:
-            name = col_handle.name if hasattr(col_handle, "name") else str(col_handle)
+        for col_id, name, _dim in collections:
             done_key = f"migration_drawer_done::{name}"
             if _get_checkpoint(conn, done_key) == "done":
                 print(f"[drawers] skipping {name!r} (checkpoint says done)")
                 continue
 
-            col = client.get_collection(name)
-            total = col.count()
+            total = _count_drawers_in_collection(sqlite_path, col_id)
             print(f"[drawers] copying {total} drawers from collection {name!r}")
+
+            if total == 0:
+                _set_checkpoint(conn, done_key, "done")
+                continue
 
             # PostgresBackend creates one table per collection name; reuse
             # the chroma collection's name as the postgres table name so
@@ -259,37 +283,20 @@ def phase_2_drawers(
             # API is get_collection(*, palace, collection_name, create=True).
             pg_col = backend.get_collection(palace=palace_ref, collection_name=name, create=True)
 
-            offset = 0
             copied = 0
-            while offset < total:
-                batch = col.get(
-                    include=["embeddings", "documents", "metadatas"],
-                    limit=batch_size,
-                    offset=offset,
-                )
-                ids = batch.get("ids") or []
+            for ids, docs, metas in _iter_drawer_batches_via_sqlite(
+                sqlite_path, col_id, batch_size
+            ):
                 if not ids:
                     break  # safety: empty page means we're done
-                docs = batch.get("documents") or [""] * len(ids)
-                embs = batch.get("embeddings")
-                metas = batch.get("metadatas") or [{}] * len(ids)
-
-                # Normalize embeddings: chromadb returns numpy arrays; the
-                # backend expects list[list[float]]. None embeddings stay
-                # None (will fail at insert if non-null required).
-                if embs is not None:
-                    embs = [list(map(float, e)) if e is not None else None for e in embs]
-                # Normalize metadatas: chromadb may give None for missing.
-                metas = [m if isinstance(m, dict) else {} for m in metas]
 
                 pg_col.upsert(
                     ids=ids,
                     documents=docs,
                     metadatas=metas,
-                    embeddings=embs,
+                    embeddings=None,
                 )
                 copied += len(ids)
-                offset += batch_size
                 _set_checkpoint(
                     conn,
                     f"migration_drawer_progress::{name}",
@@ -300,6 +307,157 @@ def phase_2_drawers(
             _set_checkpoint(conn, done_key, "done")
         _set_checkpoint(conn, "migration_phase_drawers", "done")
     print("[drawers] drawers complete")
+
+
+# ── Raw-sqlite ChromaDB readers ───────────────────────────────────────
+
+
+def _iter_chroma_collections_via_sqlite(
+    sqlite_path: Path,
+) -> Iterator[tuple[str, str, Optional[int]]]:
+    """Yield ``(collection_id, name, dimension)`` tuples from chroma.sqlite3.
+
+    Reads the ``collections`` table directly. The on-disk schema is stable
+    across chromadb 1.x: every collection has a UUID id, a string name,
+    and an optional integer dimension (NULL for collections created before
+    any vectors landed).
+    """
+    with sqlite3.connect(str(sqlite_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        for row in conn.execute("SELECT id, name, dimension FROM collections ORDER BY name"):
+            yield row["id"], row["name"], row["dimension"]
+
+
+def _count_drawers_in_collection(sqlite_path: Path, collection_id: str) -> int:
+    """Return the count of drawers in a collection via its metadata segment.
+
+    A collection in chroma is composed of multiple segments (vector +
+    metadata). The METADATA segment holds the canonical row-per-drawer
+    mapping in the ``embeddings`` table; counting those rows gives the
+    drawer count without opening the HNSW binary or the chromadb client.
+    """
+    with sqlite3.connect(str(sqlite_path)) as conn:
+        seg_ids = _metadata_segment_ids(conn, collection_id)
+        if not seg_ids:
+            return 0
+        placeholders = ",".join("?" for _ in seg_ids)
+        cur = conn.execute(
+            f"SELECT COUNT(*) FROM embeddings WHERE segment_id IN ({placeholders})",
+            seg_ids,
+        )
+        return int(cur.fetchone()[0])
+
+
+def _metadata_segment_ids(conn: sqlite3.Connection, collection_id: str) -> list[str]:
+    """Return the metadata segment id(s) for a collection.
+
+    There's normally exactly one METADATA segment per collection in
+    chroma 1.x, but a list is returned for resilience against multi-segment
+    layouts (e.g. mid-rebuild palaces).
+    """
+    cur = conn.execute(
+        "SELECT id FROM segments WHERE collection = ? AND scope = 'METADATA'",
+        (collection_id,),
+    )
+    return [r[0] for r in cur.fetchall()]
+
+
+def _iter_drawer_batches_via_sqlite(
+    sqlite_path: Path,
+    collection_id: str,
+    batch_size: int,
+) -> Iterator[tuple[list[str], list[str], list[dict]]]:
+    """Yield batches of ``(ids, documents, metadatas)`` from chroma.sqlite3.
+
+    Joins ``embeddings`` against ``embedding_metadata`` to reconstruct each
+    drawer's metadata dict and pull out the synthetic ``chroma:document``
+    key that holds the verbatim document text. Pages by the auto-increment
+    ``embeddings.id`` (deterministic) using a watermark cursor so a batch
+    boundary doesn't accidentally split a drawer's metadata rows.
+
+    Metadata value resolution follows chroma's column layout: only one of
+    ``string_value``, ``int_value``, ``float_value``, ``bool_value`` is
+    non-NULL per row. ``bool_value`` is stored as 0/1 in sqlite — converted
+    back to Python ``bool`` here. Drawers with no documents (rare, but
+    possible for vector-only inserts) yield an empty string for that
+    drawer's document so the postgres backend can still embed.
+    """
+    with sqlite3.connect(str(sqlite_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        seg_ids = _metadata_segment_ids(conn, collection_id)
+        if not seg_ids:
+            return
+
+        placeholders = ",".join("?" for _ in seg_ids)
+        watermark = 0
+        while True:
+            row_cur = conn.execute(
+                f"""
+                SELECT id, embedding_id
+                FROM embeddings
+                WHERE segment_id IN ({placeholders})
+                  AND id > ?
+                ORDER BY id
+                LIMIT ?
+                """,
+                (*seg_ids, watermark, batch_size),
+            )
+            rows = row_cur.fetchall()
+            if not rows:
+                return
+
+            row_ids = [r["id"] for r in rows]
+            ext_ids = [r["embedding_id"] for r in rows]
+            meta_by_row = _fetch_metadata_for_rows(conn, row_ids)
+
+            ids: list[str] = []
+            docs: list[str] = []
+            metas: list[dict] = []
+            for row_id, ext_id in zip(row_ids, ext_ids):
+                raw = meta_by_row.get(row_id, {})
+                doc = raw.pop("chroma:document", "")
+                ids.append(ext_id)
+                docs.append(doc if isinstance(doc, str) else "")
+                metas.append(raw)
+
+            yield ids, docs, metas
+            watermark = row_ids[-1]
+
+
+def _fetch_metadata_for_rows(conn: sqlite3.Connection, row_ids: list[int]) -> dict[int, dict]:
+    """Group ``embedding_metadata`` rows by embedding id.
+
+    Returns ``{embedding_row_id: {key: value, ...}}``. One round-trip per
+    batch instead of N+1 lookups per drawer.
+    """
+    if not row_ids:
+        return {}
+    placeholders = ",".join("?" for _ in row_ids)
+    cur = conn.execute(
+        f"""
+        SELECT id, key, string_value, int_value, float_value, bool_value
+        FROM embedding_metadata
+        WHERE id IN ({placeholders})
+        """,
+        row_ids,
+    )
+    out: dict[int, dict] = {row_id: {} for row_id in row_ids}
+    for row in cur.fetchall():
+        rid, key, sv, iv, fv, bv = row
+        if sv is not None:
+            out[rid][key] = sv
+        elif bv is not None:
+            # bool_value is stored as 0/1; cast back to bool. Order matters:
+            # int_value can also be 0/1, so a key written as a bool must
+            # be detected before the int branch.
+            out[rid][key] = bool(bv)
+        elif iv is not None:
+            out[rid][key] = iv
+        elif fv is not None:
+            out[rid][key] = fv
+        else:
+            out[rid][key] = None
+    return out
 
 
 # ── Phase 5 — Knowledge graph (sqlite → AGE) ─────────────────────────

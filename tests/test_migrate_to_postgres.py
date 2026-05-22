@@ -700,3 +700,324 @@ def test_phase_5_skips_bad_temporal_data(tmp_path, capsys):
         assert len(triples) == 0
     finally:
         age.close()
+
+
+# ── Raw-sqlite drawer reader unit tests (no postgres required) ──────
+
+
+def _build_synthetic_chroma_sqlite(palace_dir, collections):
+    """Build a minimal chroma.sqlite3 with documents and metadata.
+
+    ``collections`` is a list of dicts:
+      {
+        "name": str,
+        "dimension": int | None,
+        "drawers": [
+          {"id": str, "document": str, "metadata": dict},
+          ...
+        ],
+      }
+
+    Schema mirrors the chroma 1.x layout we depend on: ``collections``,
+    ``segments``, ``embeddings``, ``embedding_metadata``. Vectors are
+    deliberately absent — the migration recomputes them, so the synthetic
+    fixture only needs the document text + sidecar metadata.
+    """
+    import sqlite3
+    import uuid
+
+    sqlite_path = palace_dir / "chroma.sqlite3"
+    with sqlite3.connect(str(sqlite_path)) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE databases (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL
+            );
+            CREATE TABLE collections (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                dimension INTEGER,
+                database_id TEXT NOT NULL
+            );
+            CREATE TABLE segments (
+                id TEXT PRIMARY KEY,
+                type TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                collection TEXT NOT NULL
+            );
+            CREATE TABLE embeddings (
+                id INTEGER PRIMARY KEY,
+                segment_id TEXT NOT NULL,
+                embedding_id TEXT NOT NULL,
+                seq_id BLOB NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE (segment_id, embedding_id)
+            );
+            CREATE TABLE embedding_metadata (
+                id INTEGER REFERENCES embeddings(id),
+                key TEXT NOT NULL,
+                string_value TEXT,
+                int_value INTEGER,
+                float_value REAL,
+                bool_value INTEGER,
+                PRIMARY KEY (id, key)
+            );
+            """
+        )
+        db_id = str(uuid.uuid4())
+        conn.execute("INSERT INTO databases (id, name) VALUES (?, ?)", (db_id, "default"))
+
+        next_emb_id = 1
+        for col in collections:
+            col_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO collections (id, name, dimension, database_id) VALUES (?, ?, ?, ?)",
+                (col_id, col["name"], col.get("dimension"), db_id),
+            )
+
+            seg_id = str(uuid.uuid4())
+            conn.execute(
+                "INSERT INTO segments (id, type, scope, collection) VALUES (?, ?, ?, ?)",
+                (seg_id, "urn:chroma:segment/metadata/sqlite", "METADATA", col_id),
+            )
+
+            for drawer in col["drawers"]:
+                conn.execute(
+                    "INSERT INTO embeddings (id, segment_id, embedding_id, seq_id) "
+                    "VALUES (?, ?, ?, ?)",
+                    (next_emb_id, seg_id, drawer["id"], b"\x00"),
+                )
+                conn.execute(
+                    "INSERT INTO embedding_metadata (id, key, string_value) VALUES (?, ?, ?)",
+                    (next_emb_id, "chroma:document", drawer["document"]),
+                )
+                for k, v in drawer["metadata"].items():
+                    if isinstance(v, bool):
+                        conn.execute(
+                            "INSERT INTO embedding_metadata (id, key, bool_value) VALUES (?, ?, ?)",
+                            (next_emb_id, k, 1 if v else 0),
+                        )
+                    elif isinstance(v, int):
+                        conn.execute(
+                            "INSERT INTO embedding_metadata (id, key, int_value) VALUES (?, ?, ?)",
+                            (next_emb_id, k, v),
+                        )
+                    elif isinstance(v, float):
+                        conn.execute(
+                            "INSERT INTO embedding_metadata (id, key, float_value) "
+                            "VALUES (?, ?, ?)",
+                            (next_emb_id, k, v),
+                        )
+                    elif v is None:
+                        conn.execute(
+                            "INSERT INTO embedding_metadata (id, key) VALUES (?, ?)",
+                            (next_emb_id, k),
+                        )
+                    else:
+                        conn.execute(
+                            "INSERT INTO embedding_metadata (id, key, string_value) "
+                            "VALUES (?, ?, ?)",
+                            (next_emb_id, k, str(v)),
+                        )
+                next_emb_id += 1
+        conn.commit()
+    return sqlite_path
+
+
+def test_iter_chroma_collections_via_sqlite_lists_all(tmp_path):
+    """Collections come back sorted by name with their dimensions."""
+    from mempalace.migrate_to_postgres import _iter_chroma_collections_via_sqlite
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    _build_synthetic_chroma_sqlite(
+        palace,
+        [
+            {"name": "zeta", "dimension": 384, "drawers": []},
+            {"name": "alpha", "dimension": 384, "drawers": []},
+        ],
+    )
+
+    cols = list(_iter_chroma_collections_via_sqlite(palace / "chroma.sqlite3"))
+    names = [c[1] for c in cols]
+    assert names == ["alpha", "zeta"]
+    assert all(c[2] == 384 for c in cols)
+
+
+def test_iter_drawer_batches_via_sqlite_yields_documents_and_metadata(tmp_path):
+    """Batches contain external ids, documents, and metadata dicts."""
+    from mempalace.migrate_to_postgres import (
+        _iter_chroma_collections_via_sqlite,
+        _iter_drawer_batches_via_sqlite,
+    )
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    _build_synthetic_chroma_sqlite(
+        palace,
+        [
+            {
+                "name": "mempalace_drawers",
+                "dimension": 384,
+                "drawers": [
+                    {
+                        "id": "d1",
+                        "document": "first doc",
+                        "metadata": {"wing": "test", "idx": 1, "flag": True},
+                    },
+                    {
+                        "id": "d2",
+                        "document": "second doc",
+                        "metadata": {"wing": "test", "idx": 2, "score": 0.5},
+                    },
+                ],
+            }
+        ],
+    )
+
+    sqlite_path = palace / "chroma.sqlite3"
+    (col_id, _name, _dim) = next(_iter_chroma_collections_via_sqlite(sqlite_path))
+    batches = list(_iter_drawer_batches_via_sqlite(sqlite_path, col_id, batch_size=10))
+    assert len(batches) == 1
+    ids, docs, metas = batches[0]
+    assert ids == ["d1", "d2"]
+    assert docs == ["first doc", "second doc"]
+    assert metas[0]["wing"] == "test"
+    assert metas[0]["idx"] == 1
+    assert metas[0]["flag"] is True
+    assert metas[1]["score"] == 0.5
+    # chroma:document should not leak into the metadata dict
+    assert "chroma:document" not in metas[0]
+    assert "chroma:document" not in metas[1]
+
+
+def test_iter_drawer_batches_pagination_via_watermark(tmp_path):
+    """Pages by embeddings.id watermark; covers all rows with small batches."""
+    from mempalace.migrate_to_postgres import (
+        _iter_chroma_collections_via_sqlite,
+        _iter_drawer_batches_via_sqlite,
+    )
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    _build_synthetic_chroma_sqlite(
+        palace,
+        [
+            {
+                "name": "c",
+                "dimension": 384,
+                "drawers": [
+                    {"id": f"d{i}", "document": f"doc {i}", "metadata": {}} for i in range(7)
+                ],
+            }
+        ],
+    )
+
+    sqlite_path = palace / "chroma.sqlite3"
+    (col_id, _name, _dim) = next(_iter_chroma_collections_via_sqlite(sqlite_path))
+    batches = list(_iter_drawer_batches_via_sqlite(sqlite_path, col_id, batch_size=3))
+    sizes = [len(b[0]) for b in batches]
+    assert sizes == [3, 3, 1]
+    all_ids = [i for batch in batches for i in batch[0]]
+    assert all_ids == [f"d{i}" for i in range(7)]
+
+
+def test_iter_drawer_batches_handles_empty_collection(tmp_path):
+    """A collection with zero drawers yields no batches (clean exit)."""
+    from mempalace.migrate_to_postgres import (
+        _iter_chroma_collections_via_sqlite,
+        _iter_drawer_batches_via_sqlite,
+    )
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    _build_synthetic_chroma_sqlite(
+        palace,
+        [{"name": "c", "dimension": 384, "drawers": []}],
+    )
+
+    sqlite_path = palace / "chroma.sqlite3"
+    (col_id, _name, _dim) = next(_iter_chroma_collections_via_sqlite(sqlite_path))
+    batches = list(_iter_drawer_batches_via_sqlite(sqlite_path, col_id, batch_size=10))
+    assert batches == []
+
+
+def test_count_drawers_in_collection(tmp_path):
+    """_count_drawers_in_collection returns the metadata-segment row count."""
+    from mempalace.migrate_to_postgres import (
+        _count_drawers_in_collection,
+        _iter_chroma_collections_via_sqlite,
+    )
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    _build_synthetic_chroma_sqlite(
+        palace,
+        [
+            {
+                "name": "c",
+                "dimension": 384,
+                "drawers": [
+                    {"id": f"d{i}", "document": f"doc {i}", "metadata": {}} for i in range(5)
+                ],
+            }
+        ],
+    )
+
+    sqlite_path = palace / "chroma.sqlite3"
+    (col_id, _name, _dim) = next(_iter_chroma_collections_via_sqlite(sqlite_path))
+    assert _count_drawers_in_collection(sqlite_path, col_id) == 5
+
+
+def test_phase_2_drawers_noops_when_sqlite_missing(tmp_path, capsys):
+    """phase_2_drawers prints and returns when chroma.sqlite3 is absent.
+
+    Empty/non-chroma palaces should not be a fatal error — this path
+    fires e.g. when the migration is re-run after a successful cutover
+    and the source has been archived.
+    """
+    from mempalace.migrate_to_postgres import phase_2_drawers
+
+    empty = tmp_path / "empty-palace"
+    empty.mkdir()
+    # No DSN connection happens — there are no collections to copy. Pass
+    # an obviously-invalid DSN to prove we never try to open postgres.
+    phase_2_drawers(str(empty), "postgresql://invalid:invalid@no-such-host:1/db")
+    out = capsys.readouterr().out
+    assert "no chroma.sqlite3" in out
+
+
+def test_phase_2_drawers_does_not_require_chromadb(tmp_path, monkeypatch, capsys):
+    """phase_2_drawers must not import chromadb during the read path.
+
+    Block ``chromadb`` from the import system entirely and confirm the
+    early-return path still runs cleanly. The actual write path needs a
+    postgres + an embedding function, which are tested separately under
+    the ``@pgmark`` guard.
+    """
+    import builtins
+    import sys as _sys
+
+    real_import = builtins.__import__
+
+    def blocked_import(name, *args, **kwargs):
+        if name == "chromadb" or name.startswith("chromadb."):
+            raise ImportError(f"chromadb is blocked in this test ({name})")
+        return real_import(name, *args, **kwargs)
+
+    # Drop any cached chromadb modules so the next import goes through
+    # our blocker.
+    for mod in list(_sys.modules):
+        if mod == "chromadb" or mod.startswith("chromadb."):
+            del _sys.modules[mod]
+
+    monkeypatch.setattr(builtins, "__import__", blocked_import)
+
+    from mempalace.migrate_to_postgres import phase_2_drawers
+
+    empty = tmp_path / "empty-palace"
+    empty.mkdir()
+    phase_2_drawers(str(empty), "postgresql://invalid:invalid@no-such-host:1/db")
+    out = capsys.readouterr().out
+    assert "no chroma.sqlite3" in out
