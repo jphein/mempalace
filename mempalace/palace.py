@@ -156,9 +156,31 @@ def _open_collection_or_explain(
     """
     emit = out if out is not None else print
 
-    if not os.path.isdir(palace_path):
+    def _emit_palace_missing() -> None:
+        """Emit either the RETIRED marker content (if the default local
+        palace has been retired) or the legacy "No palace found / Run:
+        mempalace init" message. Single source of truth for the four
+        not-found paths below.
+        """
+        palace_root = os.path.expanduser("~/.mempalace")
+        marker = os.path.join(palace_root, "RETIRED")
+        default_path = os.path.join(palace_root, "palace")
+        is_default = os.path.abspath(palace_path) == os.path.abspath(default_path)
+        if is_default and os.path.exists(marker):
+            try:
+                with open(marker) as f:
+                    note = f.read().rstrip()
+            except OSError:
+                note = "(marker unreadable)"
+            emit(f"\n  Local palace at {default_path} is RETIRED.\n")
+            for line in note.splitlines():
+                emit(f"  {line}")
+            return
         emit(f"\n  No palace found at {palace_path}")
         emit("  Run: mempalace init <dir> then mempalace mine <dir>")
+
+    if not os.path.isdir(palace_path):
+        _emit_palace_missing()
         return None
     if not os.path.isfile(os.path.join(palace_path, "chroma.sqlite3")):
         emit(f"\n  Palace dir at {palace_path} exists but has no chroma.sqlite3 yet.")
@@ -171,8 +193,7 @@ def _open_collection_or_explain(
         emit("  Run: mempalace mine <dir>")
         return None
     except PalaceNotFoundError:
-        emit(f"\n  No palace found at {palace_path}")
-        emit("  Run: mempalace init <dir> then mempalace mine <dir>")
+        _emit_palace_missing()
         return None
     except BackendClosedError:
         # Surface this as a programmer error, not a palace-state UX message:
