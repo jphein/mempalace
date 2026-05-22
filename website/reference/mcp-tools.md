@@ -277,6 +277,32 @@ Palace graph overview: nodes, tunnels, edges, connectivity.
 
 ---
 
+### `mempalace_walk_palace`
+
+Agent walks the palace via AGE Cypher — the "wing → room → drawer → entity"
+metaphor exposed as a single MCP call over the unified palace+entity graph.
+Requires the AGE-integration fork features (`MEMPALACE_BACKEND=postgres` and
+`MEMPALACE_KG_BACKEND=age`).
+
+Provide **exactly one** of `start_wing`, `start_room`, or `start_entity` to
+anchor the walk. The traversal expands outward in BFS-style hops:
+
+* From a **wing**: wing → rooms → drawers → entities mentioned in those drawers.
+* From a **room**: room → drawers → entities.
+* From an **entity**: entity → drawers that mention it → rooms/wings.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `start_wing` | string | one of three | Wing name to start from |
+| `start_room` | string | one of three | Room name to start from |
+| `start_entity` | string | one of three | Entity name to start from |
+| `depth` | integer | No | Hops to traverse (1–5, default: 2) |
+| `limit` | integer | No | Max rows per hop (1–500, default: 50) |
+
+**Returns:** `{ rows: [...], stats: { wings_touched, rooms_touched, drawers_touched, entities_touched } }`
+
+---
+
 ### `mempalace_create_tunnel`
 
 Create a cross-wing tunnel linking two palace locations. Use when content in one project relates to another — e.g., an API design in `project_api` connects to a database schema in `project_database`.
