@@ -24,6 +24,39 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Document .sh shim delegation to palace-daemon (counter-position to upstream #1069)** ([`bf0a4d0`](https://github.com/techempower-org/mempalace/commit/bf0a4d0))
+  Upstream MemPalace/mempalace#1069 wants the per-event hook
+  ``.sh`` wrappers consolidated into shims delegating to
+  ``mempalace hook run`` — i.e. all hook logic lives inside the
+  ``mempalace`` Python CLI. This fork went the opposite
+  direction post-2026-05-11: the shims delegate to
+  ``palace-daemon/clients/hook.py`` (a stdlib-only Python
+  script in a sibling repo) which speaks HTTP to a single
+  FastAPI gateway. ``mempalace`` itself is no longer in the
+  hook call path.
+
+  ``docs/fork-decisions/sh-shim-strategy.md`` captures the
+  rationale (back-compat with stale Claude Code sessions,
+  operational simplicity, graceful absence when palace-daemon
+  isn't installed), the delegation diagram, the shim
+  template, and the conditions under which we'd re-converge
+  with upstream #1069.
+
+  ``scripts/mempalace-search.sh`` is a non-hook sample of the
+  same delegation pattern — HTTP GET to ``/search`` against
+  the daemon — included as a copy-paste template for
+  contributors adding new delegating shims.
+
+  No code or runtime change: this entry documents existing
+  shims (``.claude-plugin/hooks/*.sh``,
+  ``.codex-plugin/hooks/*.sh``) that have been delegating to
+  palace-daemon since the 2026-05-11 split-brain fix.
+
+  Tracks techempower-org/mempalace#69.
+
+  *Files:* `docs/fork-decisions/sh-shim-strategy.md`, `scripts/mempalace-search.sh`
+
+
 - **Honor ~/.mempalace/RETIRED marker — refuse default palace, surface retire message** ([`798cf14`](https://github.com/techempower-org/mempalace/commit/798cf14))
   Recurring confusion source on this fork: any code path that opens
   mempalace without ``PALACE_DAEMON_URL`` set silently falls
