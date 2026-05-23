@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **Research doc: uncertainty-aware retrieval analysis (#84)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Research doc: uncertainty-aware retrieval analysis (#84)** ([`1e9bc90`](https://github.com/techempower-org/mempalace/commit/1e9bc90))
   ``docs/research/uncertainty-aware-retrieval.md`` analyses the
   MIT CSAIL paper *Beyond Binary Rewards: Training LMs to Reason
   About Their Uncertainty* (Damani et al., arXiv:2507.16806,

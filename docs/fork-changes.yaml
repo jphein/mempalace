@@ -27,7 +27,7 @@ entries:
   - id: uncertainty-aware-retrieval-research
     date: 2026-05-22
     bucket: Added
-    commit: TBD
+    commit: 1e9bc90
     area: Docs
     summary: "Research doc: uncertainty-aware retrieval analysis (#84)"
     body: |
