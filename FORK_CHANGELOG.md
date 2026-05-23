@@ -18,6 +18,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-05-23]
+
+
+### Performance
+
+
+- **Native rename_wing backend operation + CLI command (#154)** ([`d045f83`](https://github.com/techempower-org/mempalace/commit/d045f83))
+  The ``mempalace_rename_wing`` MCP tool was unusably slow on
+  postgres — the inherited ``update()`` re-embedded every document
+  via ``upsert()``. Fix: ``PostgresCollection.rename_wing()``
+  override with single ``UPDATE SET wing = %s WHERE wing = %s``
+  (atomic, milliseconds for 20K+ drawers). Also adds
+  ``PostgresCollection.update()`` metadata-only fast path,
+  simplifies MCP tool from 40-line loop to 3-line delegation,
+  and adds ``mempalace rename-wing`` CLI subcommand with daemon
+  routing and ``--dry-run`` support.
+
+  *Tests:* 7 — test_backends.py, test_mcp_server.py, test_cli.py
+  *Files:* `mempalace/backends/base.py`, `mempalace/backends/postgres.py`, `mempalace/cli.py`, `mempalace/mcp_server.py`
+
+
 ## [2026-05-22]
 
 
