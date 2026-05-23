@@ -434,7 +434,7 @@ The canonical source is [`docs/fork-changes.yaml`](docs/fork-changes.yaml); [`FO
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | Publish verbatim-vs-derivative axis essay (#47) | — | [`2dc06a5`](https://github.com/techempower-org/mempalace/commit/2dc06a5) |
+| 1 | Publish verbatim-vs-derivative axis essay (#47) | — | [`80c0171`](https://github.com/techempower-org/mempalace/commit/80c0171) |
 | 2 | Agent-shaped CLI surface — --json / --quiet for non-MCP integration | — | [`25ed900`](https://github.com/techempower-org/mempalace/commit/25ed900) |
 | 3 | Document .sh shim delegation to palace-daemon (counter-position to upstream #1069) | — | [`bf0a4d0`](https://github.com/techempower-org/mempalace/commit/bf0a4d0) |
 | 4 | Honor ~/.mempalace/RETIRED marker — refuse default palace, surface retire message | — | [`798cf14`](https://github.com/techempower-org/mempalace/commit/798cf14) |

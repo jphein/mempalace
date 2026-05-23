@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **Publish verbatim-vs-derivative axis essay (#47)** ([`2dc06a5`](https://github.com/techempower-org/mempalace/commit/2dc06a5))
+- **Publish verbatim-vs-derivative axis essay (#47)** ([`80c0171`](https://github.com/techempower-org/mempalace/commit/80c0171))
   ``docs/research/verbatim-vs-derivative-axis.md`` develops the
   foundational architectural call behind MemPalace's storage
   layer — *store verbatim, derive lazily, treat every derivative
