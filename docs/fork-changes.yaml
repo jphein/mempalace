@@ -24,6 +24,22 @@
 
 entries:
 
+  - id: verbatim-derivative-essay
+    date: 2026-05-22
+    bucket: Added
+    commit: TBD
+    area: Docs
+    summary: "Standalone essay: the verbatim-vs-derivative axis (#47)"
+    files:
+      - docs/research/verbatim-vs-derivative-axis.md
+    body: |
+      ``docs/research/verbatim-vs-derivative-axis.md`` — 3300-word
+      essay developing the fork's core architectural claim: store
+      verbatim, derive lazily, derivatives are replaceable. Covers
+      empirical signal (recovery-collection 210x token gap), vendor
+      validation (Anthropic Dreams API), competitive analysis
+      (Mem0/Letta/Cognee/Hindsight), and five named limits. Closes #47.
+
   - id: uncertainty-aware-retrieval-research
     date: 2026-05-22
     bucket: Added
