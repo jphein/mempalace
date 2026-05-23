@@ -914,3 +914,85 @@ class TestEntityTunnels:
         assert len(listed) == 2
         kinds = {t.get("kind") for t in listed}
         assert kinds == {"explicit", "entity"}
+
+
+class TestTunnelDynamicsIntegration:
+    """Tunnel records produced by ``create_tunnel`` must carry the L7
+    dynamics fields (strength, stability, last_activated, access_count).
+    Plus: re-creating a tunnel with the same canonical ID (the dedup path)
+    must PRESERVE accumulated dynamics — otherwise every relabeling event
+    resets the connection weights."""
+
+    def test_new_tunnel_carries_all_dynamics_fields(self, tmp_path, monkeypatch):
+        from mempalace.dynamics import DEFAULT_STABILITY, DEFAULT_STRENGTH
+
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        t = palace_graph.create_tunnel(
+            "wing_a", "room_x", "wing_b", "room_y", label="initial", kind="explicit"
+        )
+        assert t["strength"] == DEFAULT_STRENGTH, (
+            f"new tunnel should carry default strength; got {t}"
+        )
+        assert t["stability"] == DEFAULT_STABILITY, (
+            f"new tunnel should carry default stability; got {t}"
+        )
+        assert t["access_count"] == 0
+        assert "last_activated" in t
+        # last_activated anchored to created_at so decay starts from creation.
+        assert t["last_activated"] == t["created_at"]
+
+    def test_recreate_tunnel_preserves_accumulated_dynamics(self, tmp_path, monkeypatch):
+        """create_tunnel deduplicates on canonical ID. When called twice
+        with the same endpoints, it preserves created_at and adds
+        updated_at. It must ALSO preserve accumulated dynamics — otherwise
+        a label-update event would wipe the connection's L7 state."""
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        first = palace_graph.create_tunnel("wing_a", "room_x", "wing_b", "room_y", label="initial")
+
+        # Simulate user activity bumping the tunnel's dynamics.
+        stored = palace_graph._load_tunnels()
+        for t in stored:
+            if t["id"] == first["id"]:
+                t["strength"] = 2.7
+                t["access_count"] = 12
+                t["stability"] = 1.5
+        palace_graph._save_tunnels(stored)
+
+        # Recreate same tunnel with a new label — should preserve dynamics.
+        second = palace_graph.create_tunnel(
+            "wing_a", "room_x", "wing_b", "room_y", label="updated_label"
+        )
+        assert second["id"] == first["id"]
+        assert second["label"] == "updated_label"
+        assert second["strength"] == 2.7, (
+            f"recreate reset tunnel strength — L7 dynamics undermined; got {second}"
+        )
+        assert second["access_count"] == 12
+        assert second["stability"] == 1.5
+
+    def test_recreate_tunnel_initializes_dynamics_for_legacy_records(self, tmp_path, monkeypatch):
+        """If an existing tunnel record was created before L7 (no dynamics
+        fields), a recreate event should backfill the defaults rather than
+        leave the fields missing."""
+        from mempalace.dynamics import DEFAULT_STABILITY, DEFAULT_STRENGTH
+
+        _use_tmp_tunnel_file(monkeypatch, tmp_path)
+        legacy_tunnel = {
+            "id": palace_graph._canonical_tunnel_id("wing_a", "room_x", "wing_b", "room_y"),
+            "source": {"wing": "wing_a", "room": "room_x"},
+            "target": {"wing": "wing_b", "room": "room_y"},
+            "label": "legacy",
+            "kind": "explicit",
+            "created_at": "2026-04-01T00:00:00+00:00",
+            # NO strength / stability / last_activated / access_count
+        }
+        palace_graph._save_tunnels([legacy_tunnel])
+
+        # Recreate — should add the missing dynamics fields.
+        recreated = palace_graph.create_tunnel(
+            "wing_a", "room_x", "wing_b", "room_y", label="updated"
+        )
+        assert recreated["strength"] == DEFAULT_STRENGTH
+        assert recreated["stability"] == DEFAULT_STABILITY
+        assert recreated["access_count"] == 0
+        assert "last_activated" in recreated
