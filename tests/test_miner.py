@@ -740,6 +740,30 @@ def test_detect_room_filename_beats_content():
     assert _detect("misc/backend.py", content=content) == "backend"
 
 
+def test_room_resolver_applied_in_process_file(tmp_path):
+    """room_resolver callable transforms room names after detect_room."""
+    from mempalace.miner import process_file
+
+    src = tmp_path / "backend" / "app.py"
+    src.parent.mkdir()
+    src.write_text("x " * 100)
+
+    rooms = [{"name": "backend", "keywords": ["backend", "api"]}]
+    resolver = lambda r: "api_layer" if r == "backend" else r  # noqa: E731
+
+    _, room, _ = process_file(
+        filepath=src,
+        project_path=tmp_path,
+        collection=None,
+        wing="test",
+        rooms=rooms,
+        agent="test",
+        dry_run=True,
+        room_resolver=resolver,
+    )
+    assert room == "api_layer"
+
+
 # =============================================================================
 # chunk_text tests
 # =============================================================================

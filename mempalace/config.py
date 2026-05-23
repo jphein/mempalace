@@ -470,6 +470,31 @@ class MempalaceConfig:
         return directory_name.lower().replace(".", "_").replace("-", "_").replace(" ", "_")
 
     @property
+    def room_aliases(self) -> dict:
+        """Mapping of detected/input room names to canonical palace room names.
+
+        Useful for overriding auto-detected room names or unifying variants
+        (e.g., ``ui`` → ``frontend``, ``api`` → ``backend``).
+
+        Config ``room_aliases`` > empty dict.
+        """
+        return self._file_config.get("room_aliases", {})
+
+    def resolve_room(self, room_name: str) -> str:
+        """Resolve a room name to its canonical palace room.
+
+        Checks ``room_aliases`` first, then falls back to the default
+        normalization (lowercase, dashes/spaces → underscores).
+        """
+        aliases = self.room_aliases
+        if room_name in aliases:
+            return aliases[room_name]
+        normalized = room_name.lower()
+        if normalized in aliases:
+            return aliases[normalized]
+        return normalized.replace("-", "_").replace(" ", "_")
+
+    @property
     def people_map(self):
         """Mapping of name variants to canonical names."""
         if self._people_map_file.exists():

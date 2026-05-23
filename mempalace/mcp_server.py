@@ -951,6 +951,14 @@ def _sanitize_optional_name(value: str = None, field_name: str = "name") -> str:
     return sanitize_name(value, field_name)
 
 
+def _resolve_room_alias(value: str = None) -> str:
+    """Sanitize and resolve room aliases via config."""
+    sanitized = _sanitize_optional_name(value, "room")
+    if sanitized is None:
+        return None
+    return _config.resolve_room(sanitized)
+
+
 # ==================== READ TOOLS ====================
 
 
@@ -1181,7 +1189,7 @@ def tool_search(
     limit = max(1, min(limit, _MAX_RESULTS))
     try:
         wing = _sanitize_optional_name(wing, "wing")
-        room = _sanitize_optional_name(room, "room")
+        room = _resolve_room_alias(room)
     except ValueError as e:
         return {"error": str(e)}
     from .tags import normalise_tags
@@ -1572,7 +1580,7 @@ def tool_follow_tunnels(wing: str, room: str):
     """Follow explicit tunnels from a room to see connected drawers in other wings."""
     try:
         wing = sanitize_name(wing, "wing")
-        room = sanitize_name(room, "room")
+        room = sanitize_name(_config.resolve_room(room), "room")
     except ValueError as e:
         return {"error": str(e)}
     col = _get_collection()
@@ -1613,6 +1621,7 @@ def tool_add_drawer(
     wing_pass = sanitize_write_name(wing, "wing")
     if wing_pass["error"]:
         return {"success": False, "error": wing_pass["error"]}
+    room = _config.resolve_room(room) if room else room
     room_pass = sanitize_write_name(room, "room")
     if room_pass["error"]:
         return {"success": False, "error": room_pass["error"]}
@@ -1888,7 +1897,7 @@ def tool_list_drawers(
     offset = max(0, offset)
     try:
         wing = _sanitize_optional_name(wing, "wing")
-        room = _sanitize_optional_name(room, "room")
+        room = _resolve_room_alias(room)
     except ValueError as e:
         return {"error": str(e)}
     normalised_tags = normalise_tags(tags) if tags else []
@@ -2003,6 +2012,7 @@ def tool_update_drawer(
             except ValueError as e:
                 return {"success": False, "error": str(e)}
         if room is not None:
+            room = _config.resolve_room(room)
             room_pass = sanitize_write_name(room, "room")
             if room_pass["error"]:
                 return {"success": False, "error": room_pass["error"]}
@@ -2161,7 +2171,7 @@ def tool_list_tags(wing: str = None, room: str = None, min_count: int = 1):
 
     try:
         wing = _sanitize_optional_name(wing, "wing")
-        room = _sanitize_optional_name(room, "room")
+        room = _resolve_room_alias(room)
     except ValueError as e:
         return {"error": str(e)}
     min_count = max(1, int(min_count))

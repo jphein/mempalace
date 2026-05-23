@@ -1044,6 +1044,7 @@ def process_file(
     chunk_overlap: int = None,
     min_chunk_size: int = None,
     max_chunks_per_file: Optional[int] = None,
+    room_resolver: Optional[callable] = None,
 ) -> tuple:
     """Read, chunk, route, and file one file.
 
@@ -1071,6 +1072,8 @@ def process_file(
         return 0, "general", None
 
     room = detect_room(filepath, content, rooms, project_path)
+    if room_resolver is not None:
+        room = room_resolver(room)
     chunks = chunk_text(
         content,
         source_file,
@@ -1324,6 +1327,7 @@ def _mine_impl(
     cfg_chunk_size = palace_config.chunk_size
     cfg_chunk_overlap = palace_config.chunk_overlap
     cfg_min_chunk_size = palace_config.min_chunk_size
+    room_resolver = palace_config.resolve_room if palace_config.room_aliases else None
 
     wing = wing_override or config["wing"]
     rooms = config.get("rooms", [{"name": "general", "description": "All project files"}])
@@ -1390,6 +1394,7 @@ def _mine_impl(
                     # otherwise a malformed env var would emit its warning
                     # per file.
                     max_chunks_per_file=effective_chunk_cap,
+                    room_resolver=room_resolver,
                 )
             except KeyboardInterrupt:
                 # Re-raise so the outer handler prints the summary; we
