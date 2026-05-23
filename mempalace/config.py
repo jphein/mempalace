@@ -394,6 +394,60 @@ class MempalaceConfig:
         return str(raw).strip().lower() or "sqlite"
 
     @property
+    def auto_query_enabled(self) -> bool:
+        """Whether the auto-query classifier is active.
+
+        Env ``AUTO_QUERY_ENABLED`` > config ``auto_query.enabled`` > False.
+        """
+        env_val = os.environ.get("AUTO_QUERY_ENABLED", "").strip().lower()
+        if env_val:
+            return env_val in ("1", "true", "yes")
+        aq = self._file_config.get("auto_query", {})
+        return bool(aq.get("enabled", False))
+
+    @property
+    def auto_query_mode(self) -> str:
+        """Auto-query mode: off, dry-run, conservative, balanced, aggressive.
+
+        Env ``AUTO_QUERY_MODE`` > config ``auto_query.mode`` > ``"off"``.
+        """
+        env_val = os.environ.get("AUTO_QUERY_MODE", "").strip().lower()
+        if env_val:
+            return env_val
+        aq = self._file_config.get("auto_query", {})
+        return str(aq.get("mode", "off")).strip().lower()
+
+    @property
+    def auto_query_max_per_turn(self) -> int:
+        """Max auto-query invocations per turn.
+
+        Env ``AUTO_QUERY_MAX_PER_TURN`` > config ``auto_query.max_per_turn`` > 1.
+        """
+        env_val = os.environ.get("AUTO_QUERY_MAX_PER_TURN", "").strip()
+        if env_val:
+            coerced = self._try_coerce_int(env_val, minimum=0)
+            if coerced is not None:
+                return coerced
+        aq = self._file_config.get("auto_query", {})
+        coerced = self._try_coerce_int(aq.get("max_per_turn"), minimum=0)
+        return coerced if coerced is not None else 1
+
+    @property
+    def auto_query_max_per_minute(self) -> int:
+        """Max auto-query invocations per minute (rate limit).
+
+        Env ``AUTO_QUERY_MAX_PER_MINUTE`` > config ``auto_query.max_per_minute`` > 6.
+        """
+        env_val = os.environ.get("AUTO_QUERY_MAX_PER_MINUTE", "").strip()
+        if env_val:
+            coerced = self._try_coerce_int(env_val, minimum=1)
+            if coerced is not None:
+                return coerced
+        aq = self._file_config.get("auto_query", {})
+        coerced = self._try_coerce_int(aq.get("max_per_minute"), minimum=1)
+        return coerced if coerced is not None else 6
+
+    @property
     def people_map(self):
         """Mapping of name variants to canonical names."""
         if self._people_map_file.exists():
