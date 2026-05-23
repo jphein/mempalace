@@ -24,6 +24,57 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Research doc: uncertainty-aware retrieval analysis (#84)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  ``docs/research/uncertainty-aware-retrieval.md`` analyses the
+  MIT CSAIL paper *Beyond Binary Rewards: Training LMs to Reason
+  About Their Uncertainty* (Damani et al., arXiv:2507.16806,
+  ICLR 2026) for applicability to mempalace's hybrid search
+  stack.
+
+  Conclusion: **the headline technique (RLCR) does not transfer
+  directly — it is an RL fine-tuning method for generative
+  reasoning LMs, and mempalace's retrieval pipeline is not
+  generative-LM-mediated.** The press-release framing ("teach AI
+  to say I'm not sure") collapses model-generation uncertainty
+  and retrieval-ranking uncertainty; only the first is what the
+  paper addresses.
+
+  Two transferable kernels worth shipping in a follow-up spike:
+
+  1. **Calibrated ``confidence`` field on search hits.** Apply
+     isotonic regression or Platt scaling on top of the existing
+     ``similarity`` score using the n=200 git-derived probe
+     set. Storage cost ~1KB, query cost a few µs, no model
+     training, no new dependencies. Surface as an optional field
+     that absent agents already handle, never as a gate (per the
+     fork's closets-as-signal-not-gate philosophy).
+  2. **Brier-score column in the eval harness.**
+     ``scripts/eval_multi_encoder_rrf.py`` and peers currently
+     report MRR/Recall but not whether the similarity field is
+     calibrated. ~20 LOC to add; every future retrieval change
+     then gets evaluated on calibration alongside rank quality.
+
+  The doc covers: paper summary with verbatim formulas + the
+  Qwen2.5-7B benchmark table; per-source calibration treatment
+  for vector/BM25/AGE-graph candidates; why a confidence
+  threshold should not become a suppression gate;
+  cost-vs-fidelity tradeoffs across three label sources
+  (synthetic probes / human-rated / palace-daemon click-through);
+  explicit non-transfer list (RL training of embeddings,
+  LLM-verbalised confidence per hit, confidence-weighted
+  majority vote); revisit conditions (RAG endpoint shipping,
+  drawer-read telemetry available, hybrid becoming the default
+  candidate strategy).
+
+  Recommendation: defer headline RLCR integration; spike the
+  calibration kernel behind a config flag; ship the Brier-score
+  eval column unconditionally as a permanent value-add.
+
+  Closes techempower-org/mempalace#84.
+
+  *Files:* `docs/research/uncertainty-aware-retrieval.md`
+
+
 - **Agent-shaped CLI surface — --json / --quiet for non-MCP integration** ([`25ed900`](https://github.com/techempower-org/mempalace/commit/25ed900))
   ``mempalace status``, ``mempalace search`` and ``mempalace mined``
   now accept ``--json`` / ``-j`` and ``--quiet`` / ``-q`` flags
