@@ -15,6 +15,7 @@ reachable, the call is skipped and a dry-run decision is logged.
 """
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -208,10 +209,15 @@ def _call_mcp(tool_call, config):
         }
     ).encode("utf-8")
 
+    headers = {"Content-Type": "application/json"}
+    api_key = os.environ.get("PALACE_API_KEY", "").strip()
+    if api_key:
+        headers["X-API-Key"] = api_key
+
     req = urllib.request.Request(
         url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
 
