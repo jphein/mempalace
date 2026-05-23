@@ -21,6 +21,82 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [2026-05-23]
 
 
+### Added
+
+
+- **CLI wiring: mempalace mine --source <adapter> (#57)** ([`5ed9fa7`](https://github.com/techempower-org/mempalace/commit/5ed9fa7))
+  ``mempalace mine --source <name>`` routes through the adapter's
+  ``ingest()`` method. Supports ``--source list`` to enumerate
+  installed adapters, ``--dry-run`` for preview via
+  ``source_summary()``, wing override, and incremental skip checks.
+  Handles ``KeyboardInterrupt`` gracefully with partial-progress
+  reporting.
+
+  *Tests:* 13 — test_cli_source.py
+  *Files:* `mempalace/cli.py`, `tests/test_cli_source.py`
+
+
+- **Warp terminal source adapter (#62)** ([`2e85585`](https://github.com/techempower-org/mempalace/commit/2e85585))
+  ``WarpSourceAdapter`` ingests both command sessions (grouped by
+  ``session_id``) and AI queries from Warp's SQLite database at
+  ``~/.local/state/warp-terminal/warp.sqlite``. Commands are
+  formatted as terminal transcripts with prompt-like prefixes;
+  AI queries are formatted as exchange-pair markdown. Graceful
+  degradation if ``ai_queries`` table is absent.
+
+  *Tests:* 27 — test_sources_warp.py
+  *Files:* `mempalace/sources/warp.py`, `tests/test_sources_warp.py`, `pyproject.toml`
+
+
+- **OpenCode adapter smoke test against real DB (#56)** ([`a9ed72b`](https://github.com/techempower-org/mempalace/commit/a9ed72b))
+  Nine smoke tests validating the OpenCode adapter against the real
+  18MB database (35 sessions, 69 drawers). Verifies shape, content
+  format, wing derivation, source_file stability, metadata flatness,
+  and session uniqueness. Excluded from default CI via ``@slow`` mark.
+
+  *Tests:* 9 — test_opencode_smoke.py (marked @slow)
+  *Files:* `tests/test_opencode_smoke.py`
+
+
+- **Codex, Gemini, and Aider source adapters (#61, #59)** ([`0c23165`](https://github.com/techempower-org/mempalace/commit/0c23165))
+  Three new corpus-origin adapters: ``CodexSourceAdapter`` parses
+  Codex CLI JSONL (``session_meta`` + ``event_msg``),
+  ``GeminiSourceAdapter`` parses Gemini CLI JSONL
+  (``session_metadata`` + ``user``/``gemini``), and
+  ``AiderSourceAdapter`` parses Aider markdown chat history
+  (``# aider chat started at`` headers + ``####`` user turns).
+  All registered as entry points.
+
+  *Tests:* 31 — test_sources_codex.py, test_sources_gemini.py, test_sources_aider.py
+  *Files:* `mempalace/sources/codex.py`, `mempalace/sources/gemini.py`, `mempalace/sources/aider.py`, `tests/test_sources_codex.py`, `tests/test_sources_gemini.py`, `tests/test_sources_aider.py`, `pyproject.toml`
+
+
+- **Filesystem + conversation source adapters (#63)** ([`9a1facf`](https://github.com/techempower-org/mempalace/commit/9a1facf))
+  Thin adapter wrappers around ``miner.scan_project()`` and
+  ``convo_miner.scan_convos()`` implementing the
+  ``BaseSourceAdapter`` interface. ``FilesystemSourceAdapter``
+  yields ``DrawerRecord`` per chunk with route hints;
+  ``ConversationSourceAdapter`` does the same for conversation
+  transcript files.
+
+  *Tests:* 25 — test_sources_filesystem.py, test_sources_conversations.py
+  *Files:* `mempalace/sources/filesystem.py`, `mempalace/sources/conversations.py`, `tests/test_sources_filesystem.py`, `tests/test_sources_conversations.py`
+
+
+### Fixed
+
+
+- **Widen auto-query signal patterns for natural recall phrases** ([`33e780e`](https://github.com/techempower-org/mempalace/commit/33e780e))
+  The ``_EXPLICIT_RE`` pattern in ``auto_query/signals.py`` only
+  matched ``remind me`` — missed ``remember``, ``do we have``,
+  ``what did we``, etc. Added 6 new patterns covering natural
+  recall phrases. Also fixed shell pre-filter ordering bug (turn
+  counter was computed after the filter that referenced it) and
+  bumped hook timeout from 2000ms to 5000ms.
+
+  *Files:* `mempalace/auto_query/signals.py`
+
+
 ### Performance
 
 
