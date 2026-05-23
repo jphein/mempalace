@@ -24,6 +24,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Standalone essay: the verbatim-vs-derivative axis (#47)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  ``docs/research/verbatim-vs-derivative-axis.md`` — 3300-word
+  essay developing the fork's core architectural claim: store
+  verbatim, derive lazily, derivatives are replaceable. Covers
+  empirical signal (recovery-collection 210x token gap), vendor
+  validation (Anthropic Dreams API), competitive analysis
+  (Mem0/Letta/Cognee/Hindsight), and five named limits. Closes #47.
+
+  *Files:* `docs/research/verbatim-vs-derivative-axis.md`
+
+
 - **Research doc: uncertainty-aware retrieval analysis (#84)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
   ``docs/research/uncertainty-aware-retrieval.md`` analyses the
   MIT CSAIL paper *Beyond Binary Rewards* (Damani et al.,
