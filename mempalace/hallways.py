@@ -42,6 +42,8 @@ from datetime import datetime, timezone
 from itertools import combinations
 from typing import Optional
 
+from .dynamics import initialize_dynamics_fields
+
 logger = logging.getLogger("mempalace_hallways")
 
 # Persistence target. Mirrors ``palace_graph._TUNNEL_FILE`` so the storage
@@ -245,6 +247,29 @@ def compute_hallways_for_wing(
         return []
 
     # 3. Materialize hallway records for pairs above the threshold.
+    #    Before building, load existing records so we can PRESERVE L7
+    #    dynamics fields (strength, stability, last_activated, access_count)
+    #    across recomputes. Without this preservation, every mine wipes
+    #    the connection weights accumulated through use — defeating the
+    #    living-connection layer entirely.
+    existing = _load_hallways()
+    existing_dynamics_lookup: dict = {}
+    for h in existing:
+        if h.get("wing") != wing:
+            continue
+        # Canonicalize the lookup key by sorting the entity pair — must
+        # match the symmetric ID generation in _hallway_id (which also
+        # sorts). Without this, a persisted record with reversed entity
+        # order would silently miss the lookup and lose its accumulated
+        # dynamics on every recompute. Per PR #1578 review
+        # (gemini-code-assist, HIGH priority).
+        key = tuple(sorted([h.get("entity_a"), h.get("entity_b")]))
+        # Only copy the fields the dynamics layer cares about; everything
+        # else is recomputed deterministically from the drawer set.
+        existing_dynamics_lookup[key] = {
+            k: h[k] for k in ("strength", "stability", "last_activated", "access_count") if k in h
+        }
+
     created: list[dict] = []
     created_at = datetime.now(timezone.utc).isoformat()
     for key in sorted(pair_counts.keys()):
@@ -256,24 +281,28 @@ def compute_hallways_for_wing(
         room_summary = ", ".join(rooms[:3]) if rooms else "(no room tags)"
         if len(rooms) > 3:
             room_summary += f", +{len(rooms) - 3} more"
-        created.append(
-            {
-                "id": _hallway_id(wing, entity_a, entity_b),
-                "wing": wing,
-                "entity_a": entity_a,
-                "entity_b": entity_b,
-                "co_occurrence_count": count,
-                "rooms": rooms,
-                "label": f"{entity_a} ↔ {entity_b} (co-occur in {count} drawers across {len(rooms) or 'no'} room{'s' if len(rooms) != 1 else ''}: {room_summary})",
-                "created_at": created_at,
-                "created_by": "auto",
-            }
-        )
+        record = {
+            "id": _hallway_id(wing, entity_a, entity_b),
+            "wing": wing,
+            "entity_a": entity_a,
+            "entity_b": entity_b,
+            "co_occurrence_count": count,
+            "rooms": rooms,
+            "label": f"{entity_a} ↔ {entity_b} (co-occur in {count} drawers across {len(rooms) or 'no'} room{'s' if len(rooms) != 1 else ''}: {room_summary})",
+            "created_at": created_at,
+            "created_by": "auto",
+        }
+        # Apply preserved dynamics if this entity pair existed in the
+        # prior wing snapshot. Then initialize any still-missing fields
+        # (the new-pair case + the legacy-record case both land cleanly).
+        preserved = existing_dynamics_lookup.get(key, {})
+        record.update(preserved)
+        initialize_dynamics_fields(record)
+        created.append(record)
 
     # 4. Persist — preserve other-wing records, replace this wing's records.
-    existing = _load_hallways()
-    preserved = [h for h in existing if h.get("wing") != wing]
-    _save_hallways(preserved + created)
+    preserved_other_wings = [h for h in existing if h.get("wing") != wing]
+    _save_hallways(preserved_other_wings + created)
 
     return created
 

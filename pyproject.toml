@@ -30,6 +30,13 @@ dependencies = [
     "chromadb>=1.5.4,<2",
     "pyyaml>=6.0,<7",
     "tomli>=2.0.0; python_version < '3.11'",
+    # Tier 6a content-date extraction uses dateutil for natural-language
+    # date parsing (filename + content body branches). It happens to install
+    # transitively today via chromadb→kubernetes→python-dateutil, but that
+    # chain is not a contract — declared explicitly here to ensure
+    # _extract_content_date keeps working if upstream kubernetes drops the
+    # dependency. Per PR #1584 review (Igor, 2026-05-22).
+    "python-dateutil>=2.8",
 ]
 
 [project.urls]
@@ -53,7 +60,15 @@ postgres = "mempalace.backends.postgres:PostgresBackend"
 opencode = "mempalace.sources.opencode:OpenCodeSourceAdapter"
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff==0.15.9", "psutil>=5.9"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff==0.15.14",
+    "psutil>=5.9",
+    "hypothesis>=6.0",
+    "pre-commit>=3.0",
+    "mypy>=1.0",
+]
 postgres = ["psycopg2-binary>=2.9"]
 spellcheck = ["autocorrect>=2.0"]
 # Hardware acceleration for the ONNX embedding model. Install exactly one:
@@ -81,7 +96,15 @@ extract = [
 ]
 
 [dependency-groups]
-dev = ["pytest>=7.0", "pytest-cov>=4.0", "ruff==0.15.9", "psutil>=5.9"]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff==0.15.14",
+    "psutil>=5.9",
+    "hypothesis>=6.0",
+    "pre-commit>=3.0",
+    "mypy>=1.0",
+]
 
 [build-system]
 requires = ["hatchling"]
