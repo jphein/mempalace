@@ -24,6 +24,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Design doc: scope/collection filter on mempalace_search (#76)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  ``docs/designs/scope-collection-filter.md`` evaluates the four
+  design alternatives raised in
+  techempower-org/mempalace#76 for whether ``mempalace_search``
+  should expose a cross-collection filter now that the storage
+  layer (postgres + pgvector + chroma) supports
+  multi-collection-per-palace as a first-class capability:
+
+  1. **Status quo, document.** ``mempalace_search`` stays
+     drawers-only. Cheapest; ratifies the post-PR-#8 reality.
+  2. **``collections=`` parameter.** Generalises the retired
+     ``kind=`` filter; ranks across collections via RRF.
+  3. **Per-collection sibling tools** (``mempalace_search_<X>``).
+     Most additive; **echoes the recovery-collection failure mode
+     where writes shipped before the read tool did.**
+  4. **Federated default.** Single tool reads all collections,
+     fused via RRF. Highest implementation cost; calibration
+     regressions are silent.
+
+  Recommendation: **Option 1 today, Option 2 the day a second
+  MCP-visible collection earns its read surface.** PR #8 retired
+  ``mempalace_session_recovery``; this fork now exposes exactly
+  one MCP-visible collection (``mempalace_drawers``). Resurrecting
+  a cross-collection parameter today is a future-need overshoot.
+  Option 2's API delta (``collections: list[str] | None = None``,
+  default ``["mempalace_drawers"]``) is forward-compatible and
+  stays non-breaking when triggered. Option 3 is deferred
+  indefinitely — the recovery-collection split is the case study
+  for why writes-before-reads goes wrong.
+
+  Includes a trade-offs matrix across complexity, performance,
+  UX, backwards compat, and the
+  "echoes a known failure mode" axis; impact analysis on
+  palace-daemon ``/search``, SME's
+  ``MemPalaceDaemonAdapter``, and the MCP tool surface; explicit
+  trigger conditions for revisiting Option 1 → Option 2.
+
+  Closes techempower-org/mempalace#76.
+
+  *Files:* `docs/designs/scope-collection-filter.md`
+
+
 - **Agent-shaped CLI surface — --json / --quiet for non-MCP integration** ([`25ed900`](https://github.com/techempower-org/mempalace/commit/25ed900))
   ``mempalace status``, ``mempalace search`` and ``mempalace mined``
   now accept ``--json`` / ``-j`` and ``--quiet`` / ``-q`` flags
