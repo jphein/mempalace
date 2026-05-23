@@ -13,7 +13,6 @@ Shared dataclasses live here so all sub-modules import from one place.
 """
 
 import dataclasses
-from typing import Optional
 
 __all__ = [
     "Signal",

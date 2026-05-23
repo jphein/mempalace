@@ -4,9 +4,7 @@ import json
 import os
 import stat
 
-import pytest
-
-from mempalace.auto_query import Decision, Signal, SignalSet
+from mempalace.auto_query import Decision
 from mempalace.auto_query.decisions import (
     _LOG_NAME,
     _serialize_decision,
