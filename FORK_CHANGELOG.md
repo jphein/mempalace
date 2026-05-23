@@ -24,6 +24,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Publish verbatim-vs-derivative axis essay (#47)** ([`2dc06a5`](https://github.com/techempower-org/mempalace/commit/2dc06a5))
+  ``docs/research/verbatim-vs-derivative-axis.md`` develops the
+  foundational architectural call behind MemPalace's storage
+  layer — *store verbatim, derive lazily, treat every derivative
+  as replaceable* — into a standalone reference piece distinct
+  from the README's compressed thesis section.
+
+  Seven sections: the architectural choice; why derive-on-write
+  accumulates failure modes (lost nuance, classifier ceiling,
+  irreversibility, locked-in derivation assumptions); the
+  empirical 2026-04-25 → 2026-05-05 recovery-collection episode
+  that closed a 210× token gap via structural change at the
+  write layer; Anthropic's Managed Agents Dreams API (beta
+  header ``dreaming-2026-04-21``) as vendor-API ratification;
+  operational implications (backup, audit, model-upgrade
+  resilience, privacy); five named exceptions where the axis
+  does NOT apply (explicit shelving, per-domain redaction,
+  regulated-data classes, adversarial inputs, high-cardinality
+  machine output); and a three-piece conclusion (structural,
+  empirical, convergence).
+
+  Cited from README's "What's next" section as the longer-form
+  development of the verbatim-vs-derivative axis the README
+  compresses into Principle 1.
+
+  Closes techempower-org/mempalace#47.
+
+  *Files:* `docs/research/verbatim-vs-derivative-axis.md`
+
+
 - **Agent-shaped CLI surface — --json / --quiet for non-MCP integration** ([`25ed900`](https://github.com/techempower-org/mempalace/commit/25ed900))
   ``mempalace status``, ``mempalace search`` and ``mempalace mined``
   now accept ``--json`` / ``-j`` and ``--quiet`` / ``-q`` flags
