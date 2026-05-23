@@ -77,13 +77,15 @@ def main(argv=None):
     args = parser.parse_args(argv)
     config = MempalaceConfig()
 
+    project_wing = config.resolve_wing(args.wing) if args.wing else ""
+
     known_wings = _fetch_wings(config)
 
     result = run_auto_query(
         prompt=args.prompt,
         session_id=args.session_id,
         turn=args.turn,
-        project_wing=args.wing,
+        project_wing=project_wing,
         known_wings=known_wings,
         has_recent_drawers=args.recent_drawers,
         config=config,

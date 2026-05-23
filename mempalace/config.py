@@ -448,6 +448,28 @@ class MempalaceConfig:
         return coerced if coerced is not None else 6
 
     @property
+    def wing_aliases(self) -> dict:
+        """Mapping of directory basenames to canonical palace wing names.
+
+        Useful when a project directory name differs from its palace wing
+        (e.g., ``familiar.realm.watch`` → ``familiar_realm_watch``).
+
+        Config ``wing_aliases`` > empty dict.
+        """
+        return self._file_config.get("wing_aliases", {})
+
+    def resolve_wing(self, directory_name: str) -> str:
+        """Resolve a project directory name to its canonical palace wing.
+
+        Checks ``wing_aliases`` first, then falls back to the default
+        normalization (lowercase, dots/dashes/spaces → underscores).
+        """
+        aliases = self.wing_aliases
+        if directory_name in aliases:
+            return aliases[directory_name]
+        return directory_name.lower().replace(".", "_").replace("-", "_").replace(" ", "_")
+
+    @property
     def people_map(self):
         """Mapping of name variants to canonical names."""
         if self._people_map_file.exists():
