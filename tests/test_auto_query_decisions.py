@@ -20,8 +20,15 @@ def _make_decision(**overrides):
         ts="2026-05-22T12:00:00Z",
         session_id="sess-001",
         turn=1,
-        signals={"entity": [], "temporal": [], "resumption": False, "explicit": False,
-                 "total_score": 4, "project_wing": "wing_mempalace", "query_text": ""},
+        signals={
+            "entity": [],
+            "temporal": [],
+            "resumption": False,
+            "explicit": False,
+            "total_score": 4,
+            "project_wing": "wing_mempalace",
+            "query_text": "",
+        },
         score=4,
         threshold=4,
         mode="balanced",
@@ -74,10 +81,22 @@ class TestJsonRoundtrip:
         )
         append_decision(d, log_dir=str(tmp_path))
         row = read_decisions(log_dir=str(tmp_path))[0]
-        for field in ("ts", "session_id", "turn", "signals", "score",
-                       "threshold", "mode", "decision", "reason",
-                       "tool", "args", "latency_ms", "result_drawers",
-                       "injection_tokens"):
+        for field in (
+            "ts",
+            "session_id",
+            "turn",
+            "signals",
+            "score",
+            "threshold",
+            "mode",
+            "decision",
+            "reason",
+            "tool",
+            "args",
+            "latency_ms",
+            "result_drawers",
+            "injection_tokens",
+        ):
             assert field in row, f"missing field: {field}"
 
     def test_set_in_signals_serializes_to_list(self, tmp_path):
