@@ -24,6 +24,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **Research doc: uncertainty-aware retrieval analysis (#84)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  ``docs/research/uncertainty-aware-retrieval.md`` analyses the
+  MIT CSAIL paper *Beyond Binary Rewards* (Damani et al.,
+  arXiv:2507.16806) for applicability to mempalace's hybrid
+  search stack. The headline technique (RLCR) does not transfer
+  directly; two transferable kernels proposed: calibrated
+  ``confidence`` field via isotonic regression, and Brier-score
+  eval column in the harness. Closes #84.
+
+  *Files:* `docs/research/uncertainty-aware-retrieval.md`
+
+
 - **Design doc: scope/collection filter on mempalace_search (#76)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
   ``docs/designs/scope-collection-filter.md`` evaluates the four
   design alternatives raised in
