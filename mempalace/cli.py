@@ -780,7 +780,149 @@ def _maybe_run_mine_after_init(args, cfg) -> None:
         sys.exit(1)
 
 
+def _mine_via_adapter(args) -> None:
+    """Route ``mempalace mine --source <adapter>`` through the adapter plugin contract.
+
+    Constructs a :class:`PalaceContext`, calls :meth:`BaseSourceAdapter.ingest`,
+    and upserts every yielded :class:`DrawerRecord` into the palace. This is
+    the CLI-side glue between the source-adapter subsystem and the existing
+    mine command — ``cmd_mine`` delegates here when ``--source`` is present.
+    """
+    from .config import normalize_wing_name
+    from .sources import (
+        DrawerRecord,
+        PalaceContext,
+        SourceItemMetadata,
+        SourceRef,
+        available_adapters,
+        get_adapter,
+    )
+
+    adapter_name = args.source
+
+    # ``--source list`` is a convenience alias: show installed adapters and exit.
+    if adapter_name == "list":
+        names = available_adapters()
+        if names:
+            print("Installed source adapters:")
+            for name in names:
+                print(f"  {name}")
+        else:
+            print("No source adapters installed.")
+        return
+
+    try:
+        adapter = get_adapter(adapter_name)
+    except KeyError as e:
+        print(f"  ERROR: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    directory = os.path.abspath(os.path.expanduser(args.dir))
+    wing = args.wing or normalize_wing_name(Path(directory).name)
+    agent = getattr(args, "agent", "mempalace")
+    dry_run = getattr(args, "dry_run", False)
+    limit = getattr(args, "limit", 0)
+
+    source = SourceRef(
+        local_path=directory,
+        options={
+            "wing": wing,
+            "agent": agent,
+            "limit": limit,
+        },
+    )
+
+    if dry_run:
+        print(f"\n  DRY RUN: would mine {directory} via adapter '{adapter_name}'")
+        print(f"  Wing: {wing}")
+        summary = adapter.source_summary(source=source)
+        if summary.item_count is not None:
+            print(f"  Items: {summary.item_count}")
+        print(f"  Description: {summary.description}")
+        print()
+        return
+
+    # Build palace context — open the drawer collection and knowledge graph.
+    from .knowledge_graph import KnowledgeGraph
+    from .palace import get_collection
+
+    palace_path = (
+        os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    )
+    try:
+        collection = get_collection(palace_path, create=True)
+    except Exception as e:
+        print(f"  ERROR: cannot open palace at {palace_path}: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    kg_path = os.path.join(palace_path, ".mempalace", "knowledge_graph.sqlite3")
+    os.makedirs(os.path.dirname(kg_path), exist_ok=True)
+    kg = KnowledgeGraph(db_path=kg_path)
+
+    palace_ctx = PalaceContext(
+        drawer_collection=collection,
+        knowledge_graph=kg,
+        palace_path=palace_path,
+        adapter_name=adapter_name,
+        adapter_version=adapter.adapter_version,
+    )
+
+    print(f"\n  Mining {directory} via adapter '{adapter_name}' (v{adapter.adapter_version})")
+    print(f"  Wing: {wing}")
+
+    drawer_count = 0
+    item_count = 0
+
+    try:
+        for result in adapter.ingest(source=source, palace=palace_ctx):
+            if isinstance(result, SourceItemMetadata):
+                item_count += 1
+                # Check incremental: skip if palace already has current version
+                if adapter.is_current(item=result, existing_metadata=None):
+                    palace_ctx.skip_current_item()
+                continue
+
+            if isinstance(result, DrawerRecord):
+                if palace_ctx.is_skip_requested():
+                    continue
+
+                # Apply route hint: prefer adapter-supplied wing/room, fall
+                # back to CLI-specified wing and a default room.
+                meta = dict(result.metadata)
+                hint = result.route_hint
+                meta["wing"] = (hint.wing if hint and hint.wing else wing)
+                meta["room"] = (hint.room if hint and hint.room else "general")
+                meta["agent"] = agent
+                meta["source_file"] = result.source_file
+
+                enriched = DrawerRecord(
+                    content=result.content,
+                    source_file=result.source_file,
+                    chunk_index=result.chunk_index,
+                    metadata=meta,
+                    route_hint=result.route_hint,
+                )
+                palace_ctx.upsert_drawer(enriched)
+                drawer_count += 1
+    except KeyboardInterrupt:
+        print(f"\n  Interrupted. Filed {drawer_count} drawers from {item_count} items.")
+        sys.exit(130)
+    finally:
+        try:
+            kg.close()
+        except Exception:
+            pass
+
+    print(f"  Filed {drawer_count} drawers from {item_count} items.\n")
+
+
 def cmd_mine(args):
+    # --source flag: route through the adapter plugin contract
+    source_adapter = getattr(args, "source", None)
+    if source_adapter:
+        _mine_via_adapter(args)
+        return
+
     if _daemon_strict() and not args.palace:
         # Daemon-strict: route to /mine. The daemon owns the canonical
         # palace and its filesystem layout, and translates client-side
@@ -2398,6 +2540,18 @@ def main():
     )
     p_mine.add_argument(
         "--dry-run", action="store_true", help="Show what would be filed without filing"
+    )
+    p_mine.add_argument(
+        "--source",
+        default=None,
+        metavar="ADAPTER",
+        help=(
+            "Route through a registered source adapter instead of the built-in "
+            "mine pipeline. Available adapters are discovered from the "
+            "'mempalace.sources' entry-point group (e.g. filesystem, conversations, "
+            "opencode, codex, gemini, aider). Use 'mempalace mine --source list' "
+            "to see installed adapters."
+        ),
     )
     p_mine.add_argument(
         "--extract",
