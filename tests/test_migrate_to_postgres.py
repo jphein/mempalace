@@ -9,6 +9,8 @@ import subprocess
 import sys
 from unittest.mock import patch
 
+import importlib.util
+
 import pytest
 
 from mempalace.migrate_to_postgres import _redact_dsn
@@ -970,6 +972,10 @@ def test_count_drawers_in_collection(tmp_path):
     assert _count_drawers_in_collection(sqlite_path, col_id) == 5
 
 
+@pytest.mark.skipif(
+    not importlib.util.find_spec("psycopg2"),
+    reason="psycopg2 not installed (postgres extras required)",
+)
 def test_phase_2_drawers_noops_when_sqlite_missing(tmp_path, capsys):
     """phase_2_drawers prints and returns when chroma.sqlite3 is absent.
 
@@ -988,6 +994,10 @@ def test_phase_2_drawers_noops_when_sqlite_missing(tmp_path, capsys):
     assert "no chroma.sqlite3" in out
 
 
+@pytest.mark.skipif(
+    not importlib.util.find_spec("psycopg2"),
+    reason="psycopg2 not installed (postgres extras required)",
+)
 def test_phase_2_drawers_does_not_require_chromadb(tmp_path, monkeypatch, capsys):
     """phase_2_drawers must not import chromadb during the read path.
 
