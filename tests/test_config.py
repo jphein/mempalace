@@ -602,3 +602,44 @@ def test_miner_constants_alias_config_defaults():
     assert CHUNK_SIZE == DEFAULT_CHUNK_SIZE == 800
     assert CHUNK_OVERLAP == DEFAULT_CHUNK_OVERLAP == 100
     assert MIN_CHUNK_SIZE == DEFAULT_MIN_CHUNK_SIZE == 50
+
+
+# ── resolve_wing / resolve_room ──────────────────────────────────────
+
+
+def test_resolve_wing_alias_hit(tmp_path):
+    with open(tmp_path / "config.json", "w") as f:
+        json.dump({"wing_aliases": {"familiar.realm.watch": "familiar_realm_watch"}}, f)
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.resolve_wing("familiar.realm.watch") == "familiar_realm_watch"
+
+
+def test_resolve_wing_normalization_fallback(tmp_path):
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.resolve_wing("My-Project.Name") == "my_project_name"
+
+
+def test_resolve_room_alias_hit(tmp_path):
+    with open(tmp_path / "config.json", "w") as f:
+        json.dump({"room_aliases": {"ui": "frontend", "api": "backend"}}, f)
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.resolve_room("ui") == "frontend"
+    assert cfg.resolve_room("api") == "backend"
+
+
+def test_resolve_room_case_insensitive_alias(tmp_path):
+    with open(tmp_path / "config.json", "w") as f:
+        json.dump({"room_aliases": {"ui": "frontend"}}, f)
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.resolve_room("UI") == "frontend"
+
+
+def test_resolve_room_normalization_fallback(tmp_path):
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.resolve_room("my-room name") == "my_room_name"
+
+
+def test_resolve_room_no_aliases(tmp_path):
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.resolve_room("frontend") == "frontend"
+    assert cfg.room_aliases == {}
