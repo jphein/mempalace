@@ -299,6 +299,42 @@ class BaseCollection(ABC):
             embeddings=embeddings,
         )
 
+    def rename_wing(
+        self, *, from_wing: str, to_wing: str, batch_size: int = 500
+    ) -> dict:
+        """Rename all drawers from one wing to another.
+
+        Default implementation iterates in batches using metadata-only
+        ``update()`` calls.  Backends with native bulk-update support
+        (e.g. PostgreSQL) should override with an atomic implementation.
+
+        Returns ``{"renamed": int, "errors": int}``.
+        """
+        renamed = 0
+        errors = 0
+        while True:
+            batch = self.get(
+                where={"wing": from_wing},
+                include=["metadatas"],
+                limit=batch_size,
+                offset=0,
+            )
+            if not batch.ids:
+                break
+            new_metas = []
+            for meta in batch.metadatas:
+                m = dict(meta)
+                m["wing"] = to_wing
+                new_metas.append(m)
+            try:
+                self.update(ids=batch.ids, metadatas=new_metas)
+                renamed += len(batch.ids)
+            except Exception:
+                errors += len(batch.ids)
+            if len(batch.ids) < batch_size:
+                break
+        return {"renamed": renamed, "errors": errors}
+
 
 # ---------------------------------------------------------------------------
 # Backend contract

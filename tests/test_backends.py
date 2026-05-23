@@ -782,6 +782,56 @@ def test_base_collection_update_default_rejects_mismatched_lengths():
         BaseCollection.update(collection, ids=["1", "2"], metadatas=[{"k": 9}])
 
 
+def test_base_collection_rename_wing_default(tmp_path):
+    """The ABC default rename_wing() moves drawers between wings via update()."""
+    palace_path = tmp_path / "palace"
+    backend = ChromaBackend()
+    col = backend.get_collection(
+        palace=PalaceRef(id=str(palace_path), local_path=str(palace_path)),
+        collection_name="mempalace_drawers",
+        create=True,
+    )
+    col.add(
+        ids=["d1", "d2", "d3"],
+        documents=["doc one", "doc two", "doc three"],
+        metadatas=[
+            {"wing": "old_wing", "room": "r1"},
+            {"wing": "old_wing", "room": "r2"},
+            {"wing": "other_wing", "room": "r1"},
+        ],
+    )
+
+    result = col.rename_wing(from_wing="old_wing", to_wing="new_wing")
+
+    assert result["renamed"] == 2
+    assert result["errors"] == 0
+
+    remaining_old = col.get(where={"wing": "old_wing"}, include=["metadatas"])
+    assert len(remaining_old.ids) == 0
+
+    renamed = col.get(where={"wing": "new_wing"}, include=["metadatas"])
+    assert len(renamed.ids) == 2
+    assert set(renamed.ids) == {"d1", "d2"}
+
+    untouched = col.get(where={"wing": "other_wing"}, include=["metadatas"])
+    assert len(untouched.ids) == 1
+    assert untouched.ids[0] == "d3"
+
+
+def test_base_collection_rename_wing_empty_source(tmp_path):
+    """rename_wing() with no matching drawers returns zero renamed, no errors."""
+    palace_path = tmp_path / "palace"
+    backend = ChromaBackend()
+    col = backend.get_collection(
+        palace=PalaceRef(id=str(palace_path), local_path=str(palace_path)),
+        collection_name="mempalace_drawers",
+        create=True,
+    )
+    result = col.rename_wing(from_wing="nonexistent", to_wing="target")
+    assert result["renamed"] == 0
+    assert result["errors"] == 0
+
+
 def test_chroma_backend_accepts_palace_ref_kwarg(tmp_path):
     palace_path = tmp_path / "palace"
     backend = ChromaBackend()

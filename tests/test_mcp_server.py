@@ -1589,6 +1589,33 @@ class TestWriteTools:
         assert "not found" in deleted_logical["error"].lower()
 
 
+    def test_tool_rename_wing(self, monkeypatch, config, palace_path, kg):
+        _patch_mcp_server(monkeypatch, config, kg)
+        _client, _col = _get_collection(palace_path, create=True)
+        del _client
+        from mempalace.mcp_server import tool_add_drawer, tool_rename_wing
+
+        tool_add_drawer(wing="src_wing", room="r1", content="drawer alpha in source wing")
+        tool_add_drawer(wing="src_wing", room="r2", content="drawer beta in source wing")
+        tool_add_drawer(wing="keep_wing", room="r1", content="drawer gamma stays put")
+
+        result = tool_rename_wing(from_wing="src_wing", to_wing="dst_wing")
+        assert result["success"] is True
+        assert result["renamed"] == 2
+
+        remaining = tool_rename_wing(from_wing="src_wing", to_wing="dst_wing")
+        assert remaining["success"] is True
+        assert remaining["renamed"] == 0
+
+    def test_tool_rename_wing_same_name(self, monkeypatch, config, palace_path, kg):
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace.mcp_server import tool_rename_wing
+
+        result = tool_rename_wing(from_wing="x", to_wing="x")
+        assert result["success"] is True
+        assert result["renamed"] == 0
+
+
 # ── KG Tools ────────────────────────────────────────────────────────────
 
 
