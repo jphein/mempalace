@@ -1,4 +1,4 @@
-"""Tests for the conversation source adapter (RFC 002 §9)."""
+"""Tests for the conversation source adapter."""
 
 import os
 from pathlib import Path

@@ -60,6 +60,9 @@ postgres = "mempalace.backends.postgres:PostgresBackend"
 filesystem = "mempalace.sources.filesystem:FilesystemSourceAdapter"
 conversations = "mempalace.sources.conversations:ConversationSourceAdapter"
 opencode = "mempalace.sources.opencode:OpenCodeSourceAdapter"
+codex = "mempalace.sources.codex:CodexSourceAdapter"
+gemini = "mempalace.sources.gemini:GeminiSourceAdapter"
+aider = "mempalace.sources.aider:AiderSourceAdapter"
 
 [project.optional-dependencies]
 dev = [

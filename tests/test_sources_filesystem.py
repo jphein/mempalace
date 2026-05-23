@@ -1,4 +1,4 @@
-"""Tests for the filesystem source adapter (RFC 002 §9)."""
+"""Tests for the filesystem source adapter."""
 
 import os
 from pathlib import Path
