@@ -549,6 +549,64 @@ class PostgresCollection(BaseCollection):
             params,
         )
 
+    def update(
+        self,
+        *,
+        ids: list[str],
+        documents: Optional[list[str]] = None,
+        metadatas: Optional[list[dict]] = None,
+        embeddings: Optional[list[list[float]]] = None,
+    ) -> None:
+        if documents is None and metadatas is None and embeddings is None:
+            raise ValueError("update requires at least one of documents, metadatas, embeddings")
+        if documents is not None or embeddings is not None:
+            super().update(
+                ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings,
+            )
+            return
+
+        n = len(ids)
+        if metadatas is not None and len(metadatas) != n:
+            raise ValueError(f"metadatas length {len(metadatas)} does not match ids length {n}")
+        self._ensure_setup(create=True)
+
+        cur = self._get_conn().cursor()
+        for i, doc_id in enumerate(ids):
+            meta = dict(metadatas[i]) if metadatas else {}
+            raw_wing = meta.pop("wing", None)
+            raw_room = meta.pop("room", None)
+            set_parts = []
+            params: list[Any] = []
+            if raw_wing is not None:
+                set_parts.append(self._sql.SQL("wing = %s"))
+                params.append(_metadata_value(raw_wing))
+            if raw_room is not None:
+                set_parts.append(self._sql.SQL("room = %s"))
+                params.append(_metadata_value(raw_room))
+            set_parts.append(self._sql.SQL("metadata = metadata || %s::jsonb"))
+            params.append(json.dumps(meta))
+            params.append(doc_id)
+            cur.execute(
+                self._sql.SQL("UPDATE {} SET {} WHERE id = %s").format(
+                    self._table_id,
+                    self._sql.SQL(", ").join(set_parts),
+                ),
+                params,
+            )
+
+    def rename_wing(
+        self, *, from_wing: str, to_wing: str, batch_size: int = 500
+    ) -> dict:
+        self._ensure_setup(create=True)
+        cur = self._get_conn().cursor()
+        cur.execute(
+            self._sql.SQL("UPDATE {} SET wing = %s WHERE wing = %s").format(
+                self._table_id,
+            ),
+            [to_wing, from_wing],
+        )
+        return {"renamed": cur.rowcount, "errors": 0}
+
     def count(self) -> int:
         self._ensure_setup(create=True)
         cur = self._get_conn().cursor()

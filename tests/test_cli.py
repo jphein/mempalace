@@ -303,6 +303,95 @@ def test_cmd_purge_source_file_end_to_end(tmp_path):
     assert survivor_ids == ["b1"]
 
 
+# ── cmd_rename_wing ───────────────────────────────────────────────────
+
+
+def test_cmd_rename_wing_local(tmp_path, capsys):
+    """End-to-end: cmd_rename_wing renames drawers in a local ChromaDB palace."""
+    from mempalace.backends.chroma import ChromaBackend
+    from mempalace.cli import cmd_rename_wing
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    backend = ChromaBackend()
+    col = backend.get_collection(str(palace), "mempalace_drawers", create=True)
+    col.add(
+        ids=["a1", "a2", "b1"],
+        documents=["alpha one", "alpha two", "bravo one"],
+        metadatas=[
+            {"wing": "alpha", "room": "r1"},
+            {"wing": "alpha", "room": "r2"},
+            {"wing": "bravo", "room": "r1"},
+        ],
+    )
+
+    args = argparse.Namespace(
+        from_wing="alpha", to_wing="renamed", dry_run=False,
+        batch_size=500, palace=str(palace), json=False, quiet=False,
+    )
+    with patch("mempalace.cli._daemon_strict", return_value=False):
+        cmd_rename_wing(args)
+
+    col2 = backend.get_collection(str(palace), "mempalace_drawers", create=False)
+    old = col2.get(where={"wing": "alpha"}, include=["metadatas"])
+    assert len(old.ids) == 0
+    new = col2.get(where={"wing": "renamed"}, include=["metadatas"])
+    assert set(new.ids) == {"a1", "a2"}
+    kept = col2.get(where={"wing": "bravo"}, include=["metadatas"])
+    assert len(kept.ids) == 1
+
+
+def test_cmd_rename_wing_dry_run(tmp_path, capsys):
+    """Dry-run mode counts drawers without renaming."""
+    from mempalace.backends.chroma import ChromaBackend
+    from mempalace.cli import cmd_rename_wing
+
+    palace = tmp_path / "palace"
+    palace.mkdir()
+    backend = ChromaBackend()
+    col = backend.get_collection(str(palace), "mempalace_drawers", create=True)
+    col.add(
+        ids=["d1", "d2"],
+        documents=["one", "two"],
+        metadatas=[{"wing": "old", "room": "r"}, {"wing": "old", "room": "r"}],
+    )
+
+    args = argparse.Namespace(
+        from_wing="old", to_wing="new", dry_run=True,
+        batch_size=500, palace=str(palace), json=False, quiet=False,
+    )
+    with patch("mempalace.cli._daemon_strict", return_value=False):
+        cmd_rename_wing(args)
+
+    out = capsys.readouterr().out
+    assert "2" in out
+    assert "would be renamed" in out
+
+    still_old = col.get(where={"wing": "old"}, include=["metadatas"])
+    assert len(still_old.ids) == 2
+
+
+def test_cmd_rename_wing_daemon_mode(monkeypatch, capsys):
+    """In daemon-strict mode, rename-wing routes through _call_daemon_tool."""
+    from mempalace.cli import cmd_rename_wing
+
+    args = argparse.Namespace(
+        from_wing="src", to_wing="dst", dry_run=False,
+        batch_size=500, json=False, quiet=False,
+    )
+    with patch("mempalace.cli._daemon_strict", return_value=True), \
+         patch("mempalace.cli._call_daemon_tool", return_value={
+             "success": True, "renamed": 42, "errors": 0,
+         }) as mock_call:
+        cmd_rename_wing(args)
+
+    mock_call.assert_called_once_with("mempalace_rename_wing", {
+        "from_wing": "src", "to_wing": "dst", "batch_size": 500,
+    })
+    out = capsys.readouterr().out
+    assert "42" in out
+
+
 # ── cmd_mined ──────────────────────────────────────────────────────────
 
 

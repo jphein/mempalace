@@ -1422,6 +1422,91 @@ def cmd_purge(args):
     print(f"\n  Purged {match_count:,} drawers. Remaining: {remaining:,}\n")
 
 
+def cmd_rename_wing(args):
+    want_json = getattr(args, "json", False)
+    from_wing = args.from_wing
+    to_wing = args.to_wing
+    dry_run = getattr(args, "dry_run", False)
+    batch_size = getattr(args, "batch_size", 500)
+
+    if _daemon_strict():
+        if dry_run:
+            try:
+                data = _call_daemon_tool("mempalace_list_drawers", {
+                    "wing": from_wing, "limit": 1,
+                })
+            except DaemonError as e:
+                if want_json:
+                    _emit_json({"error": str(e)})
+                else:
+                    print(f"\n  ERROR: {e}", file=sys.stderr)
+                sys.exit(2)
+            total = data.get("total", 0)
+            if want_json:
+                _emit_json({"dry_run": True, "from_wing": from_wing, "to_wing": to_wing, "count": total})
+            else:
+                print(f"\n  Dry run: {total:,} drawers would be renamed from '{from_wing}' to '{to_wing}'\n")
+            return
+
+        try:
+            data = _call_daemon_tool("mempalace_rename_wing", {
+                "from_wing": from_wing,
+                "to_wing": to_wing,
+                "batch_size": batch_size,
+            })
+        except DaemonError as e:
+            if want_json:
+                _emit_json({"error": str(e)})
+            else:
+                print(f"\n  ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
+
+        if want_json:
+            _emit_json(data)
+        else:
+            renamed = data.get("renamed", 0)
+            errors = data.get("errors", 0)
+            print(f"\n  Renamed {renamed:,} drawers: '{from_wing}' -> '{to_wing}'")
+            if errors:
+                print(f"  Errors: {errors:,}")
+            print()
+        return
+
+    from .backends.chroma import ChromaBackend
+    from .backends.base import PalaceRef
+
+    palace_path = os.path.abspath(
+        os.path.expanduser(args.palace) if getattr(args, "palace", None) else MempalaceConfig().palace_path
+    )
+    backend = ChromaBackend()
+    try:
+        col = backend.get_collection(
+            palace=PalaceRef(id=palace_path, local_path=palace_path),
+            collection_name="mempalace_drawers",
+        )
+    except Exception as e:
+        print(f"\n  Error reading palace: {e}")
+        sys.exit(1)
+
+    if dry_run:
+        matched = col.get(where={"wing": from_wing}, include=[])
+        count = len(matched.ids) if hasattr(matched, "ids") else len(matched.get("ids", []))
+        if want_json:
+            _emit_json({"dry_run": True, "from_wing": from_wing, "to_wing": to_wing, "count": count})
+        else:
+            print(f"\n  Dry run: {count:,} drawers would be renamed from '{from_wing}' to '{to_wing}'\n")
+        return
+
+    result = col.rename_wing(from_wing=from_wing, to_wing=to_wing, batch_size=batch_size)
+    if want_json:
+        _emit_json({"success": True, "from_wing": from_wing, "to_wing": to_wing, **result})
+    else:
+        print(f"\n  Renamed {result['renamed']:,} drawers: '{from_wing}' -> '{to_wing}'")
+        if result["errors"]:
+            print(f"  Errors: {result['errors']:,}")
+        print()
+
+
 def cmd_replay(args):
     """Drain ``~/.mempalace/pending/*.jsonl`` by re-issuing each request to the daemon.
 
@@ -2622,6 +2707,15 @@ def main():
     )
     p_purge.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
 
+    p_rename_wing = sub.add_parser(
+        "rename-wing",
+        help="Rename all drawers from one wing to another (atomic on postgres)",
+    )
+    p_rename_wing.add_argument("--from", dest="from_wing", required=True, help="Source wing name")
+    p_rename_wing.add_argument("--to", dest="to_wing", required=True, help="Target wing name")
+    p_rename_wing.add_argument("--dry-run", action="store_true", help="Count matching drawers without renaming")
+    p_rename_wing.add_argument("--batch-size", type=int, default=500, help="Batch size for non-postgres backends (default: 500)")
+
     # ── rooms — manage the canonical room set (hybrid-search-taxonomy follow-up) ────
     p_rooms = sub.add_parser(
         "rooms",
@@ -2761,6 +2855,7 @@ def main():
         "migrate": cmd_migrate,
         "migrate-to-postgres": cmd_migrate_to_postgres,
         "purge": cmd_purge,
+        "rename-wing": cmd_rename_wing,
         "rooms": cmd_rooms,
         "status": cmd_status,
         "mined": cmd_mined,

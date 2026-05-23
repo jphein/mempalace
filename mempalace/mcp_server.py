@@ -2097,41 +2097,9 @@ def tool_rename_wing(from_wing: str, to_wing: str, batch_size: int = 500):
         return _no_palace()
 
     try:
-        total_result = col.get(where={"wing": from_wing}, include=[])
-        total = len(total_result["ids"])
-        if total == 0:
-            return {"success": True, "renamed": 0, "message": f"no drawers in wing '{from_wing}'"}
-
-        renamed = 0
-        errors = 0
-
-        while True:
-            batch = col.get(
-                where={"wing": from_wing},
-                include=["metadatas"],
-                limit=batch_size,
-                offset=0,
-            )
-            if not batch["ids"]:
-                break
-
-            update_ids = []
-            update_metas = []
-            for i, did in enumerate(batch["ids"]):
-                meta = dict(_safe_meta(batch["metadatas"][i]))
-                meta["wing"] = to_wing
-                update_ids.append(did)
-                update_metas.append(meta)
-
-            try:
-                col.update(ids=update_ids, metadatas=update_metas)
-                renamed += len(update_ids)
-            except Exception:
-                errors += len(update_ids)
-
-            if len(batch["ids"]) < batch_size:
-                break
-
+        result = col.rename_wing(
+            from_wing=from_wing, to_wing=to_wing, batch_size=batch_size,
+        )
         _metadata_cache = None
 
         _wal_log(
@@ -2139,19 +2107,16 @@ def tool_rename_wing(from_wing: str, to_wing: str, batch_size: int = 500):
             {
                 "from_wing": from_wing,
                 "to_wing": to_wing,
-                "renamed": renamed,
-                "errors": errors,
+                **result,
             },
         )
 
-        logger.info(f"Renamed wing: {from_wing} -> {to_wing} ({renamed} drawers)")
+        logger.info(f"Renamed wing: {from_wing} -> {to_wing} ({result['renamed']} drawers)")
         return {
             "success": True,
             "from_wing": from_wing,
             "to_wing": to_wing,
-            "renamed": renamed,
-            "errors": errors,
-            "total": total,
+            **result,
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
