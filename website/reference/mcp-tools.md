@@ -174,6 +174,20 @@ Update an existing drawer's content and/or metadata (wing, room, tags). Fetches 
 
 ---
 
+### `mempalace_rename_wing`
+
+Rename all drawers in one wing to another, server-side. Uses batch updates for efficiency.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `from_wing` | string | **Yes** | Source wing name |
+| `to_wing` | string | **Yes** | Target wing name |
+| `batch_size` | integer | No | Drawers per batch (default 500) |
+
+**Returns:** `{ renamed, from_wing, to_wing }`
+
+---
+
 ### `mempalace_list_tags`
 
 List every unique tag in the palace with the number of drawers carrying each. Sorted by count, descending.

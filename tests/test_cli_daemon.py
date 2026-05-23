@@ -43,10 +43,16 @@ class TestDaemonStrictGate:
         with patch.dict("os.environ", {"PALACE_DAEMON_URL": "http://x:8085"}, clear=True):
             assert _daemon_strict() is True
 
-    def test_returns_false_when_url_unset(self):
+    def test_returns_false_when_url_unset(self, tmp_path):
         from mempalace.cli import _daemon_strict
+        from mempalace.config import MempalaceConfig
 
-        with patch.dict("os.environ", {}, clear=True):
+        with (
+            patch.dict("os.environ", {}, clear=True),
+            patch(
+                "mempalace.cli.MempalaceConfig", lambda: MempalaceConfig(config_dir=str(tmp_path))
+            ),
+        ):
             assert _daemon_strict() is False
 
     def test_strict_zero_disables(self):

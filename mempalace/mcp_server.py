@@ -2064,6 +2064,89 @@ def tool_update_drawer(
         return {"success": False, "error": str(e)}
 
 
+def tool_rename_wing(from_wing: str, to_wing: str, batch_size: int = 500):
+    """Rename all drawers in one wing to another, server-side.
+
+    Iterates through the source wing in batches and updates each
+    drawer's metadata. Much faster than individual update_drawer calls
+    over HTTP since it operates directly on the collection.
+    """
+    global _metadata_cache
+
+    try:
+        from_wing = sanitize_name(from_wing, "from_wing")
+        to_wing = sanitize_name(to_wing, "to_wing")
+    except ValueError as e:
+        return {"success": False, "error": str(e)}
+
+    if from_wing == to_wing:
+        return {"success": True, "renamed": 0, "message": "source and target are the same"}
+
+    col = _get_collection()
+    if not col:
+        return _no_palace()
+
+    try:
+        total_result = col.get(where={"wing": from_wing}, include=[])
+        total = len(total_result["ids"])
+        if total == 0:
+            return {"success": True, "renamed": 0, "message": f"no drawers in wing '{from_wing}'"}
+
+        renamed = 0
+        errors = 0
+
+        while True:
+            batch = col.get(
+                where={"wing": from_wing},
+                include=["metadatas"],
+                limit=batch_size,
+                offset=0,
+            )
+            if not batch["ids"]:
+                break
+
+            update_ids = []
+            update_metas = []
+            for i, did in enumerate(batch["ids"]):
+                meta = dict(_safe_meta(batch["metadatas"][i]))
+                meta["wing"] = to_wing
+                update_ids.append(did)
+                update_metas.append(meta)
+
+            try:
+                col.update(ids=update_ids, metadatas=update_metas)
+                renamed += len(update_ids)
+            except Exception:
+                errors += len(update_ids)
+
+            if len(batch["ids"]) < batch_size:
+                break
+
+        _metadata_cache = None
+
+        _wal_log(
+            "rename_wing",
+            {
+                "from_wing": from_wing,
+                "to_wing": to_wing,
+                "renamed": renamed,
+                "errors": errors,
+            },
+        )
+
+        logger.info(f"Renamed wing: {from_wing} -> {to_wing} ({renamed} drawers)")
+        return {
+            "success": True,
+            "from_wing": from_wing,
+            "to_wing": to_wing,
+            "renamed": renamed,
+            "errors": errors,
+            "total": total,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def tool_list_tags(wing: str = None, room: str = None, min_count: int = 1):
     """Return every unique tag in the palace with the number of drawers carrying it.
 
@@ -3144,6 +3227,31 @@ TOOLS = {
             "required": ["drawer_id"],
         },
         "handler": tool_update_drawer,
+    },
+    "mempalace_rename_wing": {
+        "description": "Rename all drawers from one wing to another, server-side. Much faster than individual update_drawer calls. Use for wing name standardization.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "from_wing": {
+                    "type": "string",
+                    "description": "Source wing name to rename from",
+                },
+                "to_wing": {
+                    "type": "string",
+                    "description": "Target wing name to rename to",
+                },
+                "batch_size": {
+                    "type": "integer",
+                    "description": "Drawers per batch (default 500)",
+                    "default": 500,
+                    "minimum": 1,
+                    "maximum": 5000,
+                },
+            },
+            "required": ["from_wing", "to_wing"],
+        },
+        "handler": tool_rename_wing,
     },
     "mempalace_diary_write": {
         "description": "Write to your personal agent diary in AAAK format. Your observations, thoughts, what you worked on, what matters. Each agent has their own diary with full history. Write in AAAK for compression — e.g. 'SESSION:2026-04-04|built.palace.graph+diary.tools|ALC.req:agent.diaries.in.aaak|★★★'. Use entity codes from the AAAK spec.",
