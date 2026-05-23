@@ -17,6 +17,7 @@ set is used (entity scoring degrades gracefully).
 
 import argparse
 import json
+import os
 import sys
 import urllib.error
 import urllib.request
@@ -27,30 +28,32 @@ from mempalace.config import MempalaceConfig
 
 def _fetch_wings(config):
     # type: (MempalaceConfig) -> set
-    """Fetch known wing names from the daemon."""
+    """Fetch known wing names from the daemon via JSON-RPC."""
     daemon_url = config.daemon_url
     if not daemon_url:
         return set()
     url = "{}/mcp".format(daemon_url.rstrip("/"))
     payload = json.dumps(
         {
-            "tool": "mempalace_list_wings",
-            "args": {},
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {"name": "mempalace_list_wings", "arguments": {}},
+            "id": 1,
         }
     ).encode("utf-8")
-    req = urllib.request.Request(
-        url,
-        data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
+    headers = {"Content-Type": "application/json"}
+    api_key = os.environ.get("PALACE_API_KEY", "").strip()
+    if api_key:
+        headers["X-API-Key"] = api_key
+    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
     try:
         with urllib.request.urlopen(req, timeout=3) as resp:
-            body = json.loads(resp.read().decode("utf-8"))
-            result = body.get("result", body)
+            rpc = json.loads(resp.read().decode("utf-8"))
+            text = rpc.get("result", {}).get("content", [{}])[0].get("text", "")
+            result = json.loads(text) if text else {}
             wings = result.get("wings", [])
             return {w.get("name", w) if isinstance(w, dict) else str(w) for w in wings}
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError, KeyError):
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError, KeyError, IndexError):
         return set()
 
 

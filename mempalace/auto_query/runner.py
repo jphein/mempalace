@@ -15,6 +15,7 @@ reachable, the call is skipped and a dry-run decision is logged.
 """
 
 import json
+import os
 import time
 import urllib.error
 import urllib.request
@@ -203,26 +204,59 @@ def _call_mcp(tool_call, config):
     url = "{}/mcp".format(daemon_url.rstrip("/"))
     payload = json.dumps(
         {
-            "tool": tool_call.tool,
-            "args": tool_call.args,
+            "jsonrpc": "2.0",
+            "method": "tools/call",
+            "params": {
+                "name": tool_call.tool,
+                "arguments": tool_call.args,
+            },
+            "id": 1,
         }
     ).encode("utf-8")
+
+    headers = {"Content-Type": "application/json"}
+    api_key = os.environ.get("PALACE_API_KEY", "").strip()
+    if api_key:
+        headers["X-API-Key"] = api_key
 
     req = urllib.request.Request(
         url,
         data=payload,
-        headers={"Content-Type": "application/json"},
+        headers=headers,
         method="POST",
     )
 
     try:
         with urllib.request.urlopen(req, timeout=5) as resp:
             body = resp.read().decode("utf-8")
-            result = json.loads(body)
-            if isinstance(result, dict) and "result" in result:
-                return result["result"]
-            return result
+            rpc_response = json.loads(body)
+            return _extract_mcp_result(rpc_response)
     except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _extract_mcp_result(rpc_response):
+    # type: (dict) -> Optional[dict]
+    """Extract the tool result from a JSON-RPC MCP response.
+
+    The daemon returns ``{"jsonrpc":"2.0","result":{"content":[{"type":"text",
+    "text":"..."}]}}``.  The ``text`` field is itself a JSON string containing
+    the actual result dict (search results, KG facts, diary entries, etc.).
+    """
+    if not isinstance(rpc_response, dict):
+        return None
+    result = rpc_response.get("result")
+    if not isinstance(result, dict):
+        return None
+    content = result.get("content", [])
+    if not content:
+        return None
+    text = content[0].get("text", "") if isinstance(content[0], dict) else ""
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, ValueError):
         return None
 
 
