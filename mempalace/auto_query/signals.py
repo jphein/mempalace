@@ -27,13 +27,18 @@ _TEMPORAL_RE = re.compile(
 # Explicit hint patterns (spec section 1.1.4)
 _EXPLICIT_RE = re.compile(
     r"\b(remind\s+me"
-    r"|do\s+we\s+have"
-    r"|did\s+we\s+ever"
-    r"|what\s+did\s+we"
+    r"|(?:do\s+you\s+)?remember"
+    r"|do\s+(?:we|you)\s+(?:have|know)"
+    r"|did\s+(?:we|you)(?:\s+ever)?"
+    r"|what\s+(?:did|was|were)\s+(?:we|the)"
     r"|history\s+of"
     r"|prior\s+to"
     r"|earlier\s+we"
-    r"|have\s+we\s+ever)\b",
+    r"|have\s+we\s+ever"
+    r"|recall"
+    r"|was\s+there"
+    r"|were\s+there"
+    r"|check\s+(?:if|whether))\b",
     re.IGNORECASE,
 )
 

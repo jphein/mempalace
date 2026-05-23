@@ -57,7 +57,12 @@ postgres = "mempalace.backends.postgres:PostgresBackend"
 # (``mempalace-source-cursor``, ``mempalace-source-git``, …) also register
 # under this group.
 [project.entry-points."mempalace.sources"]
+filesystem = "mempalace.sources.filesystem:FilesystemSourceAdapter"
+conversations = "mempalace.sources.conversations:ConversationSourceAdapter"
 opencode = "mempalace.sources.opencode:OpenCodeSourceAdapter"
+codex = "mempalace.sources.codex:CodexSourceAdapter"
+gemini = "mempalace.sources.gemini:GeminiSourceAdapter"
+aider = "mempalace.sources.aider:AiderSourceAdapter"
 
 [project.optional-dependencies]
 dev = [
