@@ -131,13 +131,17 @@ class _MockDaemonHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         content_len = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(content_len)
-        json.loads(body) if body else {}
+        self.rfile.read(content_len)
 
+        rpc_response = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": {"content": [{"type": "text", "text": json.dumps(self.response_body)}]},
+        }
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps({"result": self.response_body}).encode())
+        self.wfile.write(json.dumps(rpc_response).encode())
 
     def log_message(self, format, *args):
         pass  # suppress stderr
