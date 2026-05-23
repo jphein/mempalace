@@ -64,6 +64,34 @@ TestParserAcceptsFlags (8).
   *Files:* `mempalace/cli.py`, `tests/test_cli_json.py`
 
 
+- **Design eval: multi-palace separation — curated vs auto-mined (#45)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  ``docs/designs/multi-palace-separation.md`` evaluates two
+  architectures for @kostadis's curated-vs-auto-mined separation
+  raised in upstream discussion #1018: collection partitioning
+  inside one palace versus multiple palaces side-by-side. Answers
+  the six design questions in issue #45 (palace_path shape,
+  per-hook target, search surface, daemon routing, shared
+  embedder, CLI surface) on the collection-partition track first,
+  with multi-palace as a deferred promotion if the partition
+  layer falls short.
+
+  Carries forward the P8 lesson explicitly — the recovery-collection
+  split shipped 2026-04-25 and was retired 2026-05-05 because
+  the partition was write-side without read-side parity. The
+  design rules every named partition must earn a search surface
+  from day one; ``searchable: false`` is opt-out, not the default.
+
+  Coordinates with #76 (scope/collection filter on search) — the
+  ``partition`` / ``partitions`` parameter shape proposed here
+  is the same surface #76 needs, picking one name avoids drift
+  between two parallel designs.
+
+  Design, not implementation. No runtime change. Tracks
+  techempower-org/mempalace#45.
+
+  *Files:* `docs/designs/multi-palace-separation.md`
+
+
 - **Document .sh shim delegation to palace-daemon (counter-position to upstream #1069)** ([`bf0a4d0`](https://github.com/techempower-org/mempalace/commit/bf0a4d0))
   Upstream MemPalace/mempalace#1069 wants the per-event hook
   ``.sh`` wrappers consolidated into shims delegating to
