@@ -30,6 +30,7 @@ Usage:
 """
 
 import gzip
+from functools import lru_cache
 from typing import Iterable
 
 
@@ -42,24 +43,30 @@ __all__ = ["ncd", "novelty_score", "classify_novelty"]
 _GZIP_LEVEL = 6
 
 
+@lru_cache(maxsize=128)
 def _csize(data: bytes) -> int:
-    """Compressed byte length of ``data`` under gzip."""
+    """Compressed byte length of ``data`` under gzip.
+
+    Cached so windowed scoring (which compresses the same ``text`` N
+    times across a recent-drawer loop) only pays the gzip cost once
+    per distinct input within the cache window.
+    """
     return len(gzip.compress(data, compresslevel=_GZIP_LEVEL))
 
 
 def ncd(a: str, b: str) -> float:
     """Normalized Compression Distance between two strings.
 
-    Returns 0.0 when ``a`` and ``b`` are identical (and non-empty), and
-    approaches 1.0 as they become maximally different. Values slightly
-    above 1.0 are possible for very short inputs because gzip framing
+    Returns 0.0 when ``a`` and ``b`` are identical, and approaches 1.0
+    as they become maximally different. Values slightly above 1.0 are
+    possible for very short non-identical inputs because gzip framing
     overhead dominates — clamp at the call site if a strict [0, 1]
     range is required.
 
     Empty inputs collapse to 0.0 (two empty strings are identical) or
     1.0 (one empty, one not — maximally different by convention).
     """
-    if not a and not b:
+    if a == b:
         return 0.0
     if not a or not b:
         return 1.0
