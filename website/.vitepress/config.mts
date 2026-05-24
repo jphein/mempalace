@@ -43,6 +43,16 @@ export default withMermaid(
         { text: 'Guide', link: '/guide/getting-started' },
         { text: 'Concepts', link: '/concepts/the-palace' },
         { text: 'Reference', link: '/reference/cli' },
+        {
+          text: 'Fork',
+          items: [
+            { text: 'Architecture', link: 'https://github.com/techempower-org/mempalace/blob/main/docs/ARCHITECTURE.md' },
+            { text: 'Ecosystem', link: 'https://github.com/techempower-org/mempalace/blob/main/docs/ECOSYSTEM.md' },
+            { text: 'Bibliography', link: 'https://github.com/techempower-org/mempalace/blob/main/docs/BIBLIOGRAPHY.md' },
+            { text: 'Research', link: 'https://github.com/techempower-org/mempalace/tree/main/docs/research' },
+            { text: 'Fork Changelog', link: 'https://github.com/techempower-org/mempalace/blob/main/FORK_CHANGELOG.md' },
+          ],
+        },
       ],
 
       sidebar: {
@@ -94,7 +104,7 @@ export default withMermaid(
       },
 
       socialLinks: [
-        { icon: 'github', link: 'https://github.com/MemPalace/mempalace' },
+        { icon: 'github', link: 'https://github.com/techempower-org/mempalace' },
         { icon: 'discord', link: 'https://discord.com/invite/ycTQQCu6kn' },
       ],
 
@@ -108,7 +118,7 @@ export default withMermaid(
       },
 
       editLink: {
-        pattern: `https://github.com/MemPalace/mempalace/edit/${editBranch}/website/:path`,
+        pattern: `https://github.com/techempower-org/mempalace/edit/${editBranch}/website/:path`,
         text: 'Edit this page on GitHub',
       },
     },
