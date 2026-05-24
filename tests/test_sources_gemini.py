@@ -1,7 +1,6 @@
 """Tests for the Gemini CLI source adapter."""
 
 import json
-from pathlib import Path
 
 import pytest
 

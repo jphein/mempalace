@@ -54,8 +54,6 @@ class FilesystemSourceAdapter(BaseSourceAdapter):
     ) -> Iterator[DrawerRecord]:
         from ..config import MempalaceConfig
         from ..miner import (
-            _build_drawer_metadata,
-            _extract_content_date,
             chunk_text,
             detect_room,
             load_config,
@@ -75,7 +73,7 @@ class FilesystemSourceAdapter(BaseSourceAdapter):
 
         wing = source.options.get("wing") or config.get("wing", project_path.name)
         rooms = config.get("rooms", [{"name": "general", "description": "All project files"}])
-        agent = source.options.get("agent", "mempalace")
+        _agent = source.options.get("agent", "mempalace")
         respect_gitignore = source.options.get("respect_gitignore", True)
         include_ignored = source.options.get("include_ignored")
 

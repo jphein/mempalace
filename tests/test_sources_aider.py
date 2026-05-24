@@ -1,7 +1,5 @@
 """Tests for the Aider source adapter."""
 
-from pathlib import Path
-
 import pytest
 
 from mempalace.sources.aider import (
@@ -152,7 +150,6 @@ class TestAiderAdapter:
             options={"limit": 1},
         )
         results = list(adapter.ingest(source=source, palace=palace_ctx))
-        items = [r for r in results if isinstance(r, SourceItemMetadata)]
         # Should stop after 1 session
         drawers_per_session = [
             r for r in results if isinstance(r, DrawerRecord)

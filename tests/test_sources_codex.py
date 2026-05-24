@@ -1,7 +1,6 @@
 """Tests for the Codex CLI source adapter."""
 
 import json
-from pathlib import Path
 
 import pytest
 
