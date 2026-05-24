@@ -97,22 +97,57 @@ The four agreements across these systems: (1) verbatim storage as the base layer
 
 ## Why this fork exists
 
-We surveyed the memory-system landscape in April 2026 and found no verbatim-first local system with MCP. Every alternative transforms content on write — extracted facts, knowledge graphs, tiered summaries — losing the original text.
+We surveyed the memory-system landscape in April 2026 and found no verbatim-first local system with MCP. The landscape has since fragmented — MCP memory servers proliferated in May 2026 — but the verbatim-vs-derivative axis remains the clearest architectural dividing line. Updated survey as of 2026-05-24:
 
-| System | Verbatim? | Local? | MCP? | First public | Notes |
-|---|---|---|---|---|---|
-| **MemPalace** | Yes | Yes | Yes | 2026-04-06 (v3.0.0) | What we have. 335K+ drawers in production. Verbatim drawers + wings/rooms scope + AGE knowledge graph + BM25/vector/graph hybrid search. |
-| [Longhand](https://glama.ai/mcp/servers/Wynelson94/longhand) | Yes | Yes | Yes, 17-tool MCP | 2026-04-14 (v0.5.5) | Closest cousin. Claude Code-specific — reads `~/.claude/projects/*.jsonl` directly. SQLite (raw JSON per event) + ChromaDB (embeddings of pre-computed "episodes"). Deterministic file-state replay via stored diffs. |
-| [Celiums](https://celiums.ai/) | Yes | Yes (SQLite, Docker, or DO) | Yes, 6-tool MCP | 2026-04-08 (repo) | Stores full module text with PAD emotional vectors, importance scores, and circadian metadata. Bundles a 500K+ expert-module knowledge base alongside personal memory — different product shape. |
-| [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) | Yes by default (opt-in consolidation) | Yes (SQLite) or Cloudflare Workers | Yes | 2024-12-26 | The long-standing verbatim option. Turn-level storage; MiniLM embeddings local. Targets LangGraph / CrewAI / AutoGen plus Claude. |
-| [Hindsight](https://github.com/vectorize-io/hindsight) | No — LLM extracts facts | Yes (Docker) | Yes | 2026-01-05 | Three ops: retain / recall / reflect. Original text is lost. |
-| [Mem0](https://github.com/mem0ai/mem0) / [OpenMemory](https://github.com/mem0ai/mem0/tree/main/openmemory) | No — extracts "memories" | Partial | Yes | 2023-06 | Cloud-first; OpenMemory is local-mode sibling. |
-| [Cognee](https://github.com/topoteretes/cognee) | No — knowledge graph | Yes | Yes | 2023-08 | "Knowledge Engine" via ECL pipeline. |
-| [Letta](https://github.com/letta-ai/letta) | No — tiered summarization | Yes | No | 2023-10 (as MemGPT) | Rebrand kept the repo. |
-| [engram](https://github.com/NickCirv/engram) | Structured fields, not raw | Yes | Yes | 2026-04-11 | Go + SQLite FTS5. |
-| [CaviraOSS OpenMemory](https://github.com/CaviraOSS/OpenMemory) | No — temporal graph | Yes | Yes | 2025-10-26 | SQL-native. |
+### Verbatim-first systems
 
-The April-2026 verbatim cluster (MemPalace, Celiums, Longhand, engram all within ~8 days) is striking — it suggests the "store it raw and retrieve well" pattern reached independent critical mass right around the same time. The differentiator: **verbatim storage is the foundation; everything else (tags, KG, decay, summaries, consolidated indices) is enrichment layered on top.** If any layer fails or needs rebuilding, the underlying truth is still there. The same architectural call has been winning in observability for a decade — Grafana Loki's verbatim-event store, with the recent [Kafka rearchitect](https://www.infoq.com/news/2026/04/grafana-loki-ai-agents/) (10× faster aggregated queries, 20× less data scanned), is what mature verbatim-first systems eventually do under scale pressure — useful precedent for the substrate section below.
+| System | Local? | MCP? | First public | Notes |
+|---|---|---|---|---|
+| **MemPalace** ([upstream](https://github.com/MemPalace/mempalace)) / **[techempower-org fork](https://github.com/techempower-org/mempalace)** | Yes | Yes | 2026-04-06 (v3.0.0) | What we have. 335K+ drawers in production. Postgres + pgvector + AGE knowledge graph + BM25/vector/graph hybrid search. ~23K stars (upstream). |
+| [Longhand](https://github.com/Wynelson94/longhand) | Yes | Yes, 17 tools | 2026-04-14 (v0.9.1) | Closest cousin. Claude Code-specific — indexes `~/.claude/projects/*.jsonl` verbatim. SQLite + ChromaDB. Deterministic file-state replay via stored diffs. |
+| [Celiums](https://celiums.ai/) | Yes (SQLite, Docker, or DO) | Yes, 6 tools | 2026-04-08 | Full module text with PAD emotional vectors, importance scores, circadian metadata. 500K+ expert-module knowledge base alongside personal memory. |
+| [mcp-memory-service](https://github.com/doobidoo/mcp-memory-service) | Yes (SQLite) or Cloudflare Workers | Yes | 2024-12-26 | The long-standing verbatim option (v10.36.6). Turn-level storage; MiniLM local embeddings. REST API + MCP + OAuth + CLI + dashboard. |
+| [iai-mcp](https://github.com/CodeAbra/iai-mcp) | Yes (LanceDB) | Yes | ~2026 | Three-layer: episodic (verbatim, write-once), semantic (consolidated summaries), procedural (stable preferences). Background sleep-cycle consolidation. |
+| [ai-memory](https://github.com/alphaonedev/ai-memory-mcp) | Yes (SQLite FTS5) | Yes, 43 tools | ~2026 | Rust binary. Three tiers with configurable TTL. Autonomous curator daemon (auto-tag, contradiction detection, dedup). Ed25519 attestation. |
+| [Open Brain (OB1)](https://github.com/NateBJones-Projects/OB1) | Yes (Postgres + pgvector, Docker) | Yes, 10 tools | ~2026 | Separates raw data from embedding indexes — rebuild indexes without touching source. HNSW sub-ms vector search. |
+
+### Extraction-based / derivative systems
+
+| System | Local? | MCP? | First public | Notes |
+|---|---|---|---|---|
+| [claude-mem](https://github.com/thedotmack/claude-mem) | Yes (SQLite + ChromaDB) | Yes | ~2025-10 | **89K+ stars** — largest community by far. AI-compressed summaries, not verbatim. "Endless Mode" for extended sessions. |
+| [Mem0](https://github.com/mem0ai/mem0) / [OpenMemory](https://github.com/mem0ai/mem0/tree/main/openmemory) | Partial | Yes | 2023-06 | ~48K stars. New 2026 algorithm: single-pass hierarchical extraction + multi-signal retrieval (91.6% accuracy). Opt-in `infer=False` for verbatim hard constraints. Graph Memory locked behind Pro. |
+| [Zep / Graphiti](https://github.com/getzep/graphiti) | Partial (Neo4j/FalkorDB) | Yes (Graphiti MCP v1.0) | 2023 / 2024 | ~22.8K stars. Temporal knowledge graph with dual timelines. 63.8% LongMemEval. Cloud Pro $99/mo+. |
+| [Letta](https://github.com/letta-ai/letta) (formerly MemGPT) | Yes | Partial (transitioning) | 2023-10 | ~22.8K stars. V1 architecture rework (Mar 2026) — heartbeats deprecated. New [Letta Code](https://github.com/letta-ai/letta-code) (memory-first coding agent). Three-tier: core/recall/archival. MCP shifting from server-side to client-side skills. |
+| [Supermemory](https://github.com/supermemoryai/supermemory) | Cloud-first (Cloudflare Workers) | Yes | ~2024 | 22.7K stars. Fact extraction + graph. Dual-layer timestamps. Plugins for Claude Code, OpenCode, Hermes. |
+| [Cognee](https://github.com/topoteretes/cognee) | Yes | Yes | 2023-08 | ~14.8K stars. "Memory control plane" via ECL pipeline. MCP with graph/RAG/code/cypher search modes. v1.1.0.dev1. |
+| [Hindsight](https://github.com/vectorize-io/hindsight) | Yes (Docker) | Yes | 2026-01-05 | ~14K stars. v0.6.2. Three ops: retain/recall/reflect. Bank Template Hub, Constellation graph view. Fortune 500 production use. |
+| [CaviraOSS OpenMemory](https://github.com/CaviraOSS/OpenMemory) | Yes | Yes | 2025-10-26 | 4.1K stars. TypeScript. Time-based filtering, connectors for GitHub/Notion/GDrive. Migration tools from Mem0/Zep/Supermemory. |
+
+### Structured / hybrid approaches
+
+| System | Local? | MCP? | First public | Notes |
+|---|---|---|---|---|
+| [agentmemory](https://github.com/rohitg00/agentmemory) | Yes (SQLite) | Yes, 53 tools | ~2026-04 | 9.4K stars. BM25 + vectors + KG via RRF. Confidence decay, auto-archival. 95.2% R@5 on LongMemEval-S. |
+| [EngramX](https://github.com/NickCirv/engram) | Yes (SQLite) | Yes | 2026-04-11 | v4.0 "Skill Pack" (May 2026). Context spine intercepts file reads — ~89% token reduction. 8 IDEs. Bi-temporal mistake prevention. 3-layer cache (23us/op). |
+| [EverOS / EverMind](https://github.com/EverMind-AI/EverOS) | Yes (Docker) | Yes | ~2025 | SOTA on LoCoMo (93.05%), LongMemEval-S (83.0%). Three-phase lifecycle: episodic → semantic → reconstructive. Multimodal. |
+| [OMEGA](https://github.com/omega-memory/core) | Yes (SQLite + ONNX) | Yes, 25 tools | ~2026-03 | 95.4% LongMemEval. Zero external deps. AES-256-GCM encryption at rest. Open-core (Apache 2.0 core; Pro for multi-agent). |
+
+### Academic / not-yet-shipped
+
+| System | Notes |
+|---|---|
+| [True Memory](https://arxiv.org/abs/2605.04897) | arXiv 2026-05. Six-layer verbatim-first architecture. 93.0% LoCoMo, 87.8% LongMemEval, 76.6% BEAM-1M. Argues "extraction at ingestion is the wrong primitive" — independent validation of the verbatim thesis. No code release yet. |
+
+### Notable shifts since April 2026
+
+- **The verbatim thesis has academic validation.** True Memory (arXiv:2605.04897) independently argues that extraction at ingestion is the wrong primitive, scoring 93.0% on LoCoMo vs Mem0's 61.4%. New entrants iai-mcp and ai-memory both chose verbatim-first designs, suggesting the pattern has reached broader adoption.
+- **claude-mem (89K+ stars) is the elephant in the room.** Explicitly non-verbatim (AI compression), but its community size makes it the default comparison point. The largest system taking the opposite architectural approach.
+- **Letta V1 rework (Mar 2026) deprecates heartbeats and server-side MCP.** MCP support is shifting to client-side skills; the story is less clear-cut than before.
+- **Mem0 shipped a significant algorithm upgrade** (single-pass hierarchical extraction + multi-signal retrieval → 91.6%) without going verbatim. Added opt-in `infer=False` for verbatim hard constraints — an escape hatch, not a core commitment.
+- **MCP memory server space fragmented dramatically.** At least 6 new systems with MCP support since April: agentmemory, OMEGA, ai-memory, iai-mcp, Open Brain, EngramX v4.0. Most are local-first SQLite. Differentiators narrowing to verbatim-vs-extraction and consolidation strategy.
+
+The April-2026 verbatim cluster (MemPalace, Celiums, Longhand, engram all within ~8 days) is no longer an isolated coincidence — it was the leading edge of a pattern now confirmed by academic work and a second wave of implementations. The differentiator: **verbatim storage is the foundation; everything else (tags, KG, decay, summaries, consolidated indices) is enrichment layered on top.** If any layer fails or needs rebuilding, the underlying truth is still there. The same architectural call has been winning in observability for a decade — Grafana Loki's verbatim-event store, with the recent [Kafka rearchitect](https://www.infoq.com/news/2026/04/grafana-loki-ai-agents/) (10× faster aggregated queries, 20× less data scanned), is what mature verbatim-first systems eventually do under scale pressure — useful precedent for the substrate section below.
 
 ## Substrate: Postgres + pgvector + Apache AGE
 
@@ -340,9 +375,12 @@ From a 2026-04-21 sweep of upstream MemPalace issue + comment + discussion histo
 
 ### Adjacent / competing memory systems
 
-- **[agentmemory](https://github.com/rohitg00/agentmemory)** (@rohitg00) — BM25 + vector hybrid. **95.2% R@5** on LongMemEval-S with same MiniLM embedding model. Filed methodology review in upstream [#747](https://github.com/MemPalace/mempalace/discussions/747).
+See the [expanded comparison table](#why-this-fork-exists) above for the full landscape survey (updated 2026-05-24). Systems with specific fork interactions or benchmark findings worth noting:
+
+- **[agentmemory](https://github.com/rohitg00/agentmemory)** (@rohitg00) — BM25 + vector hybrid. **95.2% R@5** on LongMemEval-S with same MiniLM embedding model. Filed methodology review in upstream [#747](https://github.com/MemPalace/mempalace/discussions/747). Now 9.4K stars with 53 MCP tools.
 - **[engram-2](https://github.com/199-biotechnologies/engram-2)** — Rust CLI, deterministic, SQLite + FTS5 only. Hybrid via Gemini embeddings + FTS5 reciprocal rank fusion. **0.990 R@5** vs MemPalace's 0.984 with no reranking, claims **17% end-to-end QA** for MemPalace — the critique the structural-fix work above closes. Memory-layer-budgeting (identity / critical / topic / deep tiers with token accounting) is worth studying.
 - **[Tiro (project-tiro)](https://github.com/esagduyu/project-tiro)** (@esagduyu) — Same data-spine architecture (FastAPI + ChromaDB + SQLite + sentence-transformers + MCP) but *curated* input domain (web pages, email newsletters as clean markdown). Architectural twin to MemPalace's auto-mine-everything: same stack, different input shape. Forked at [jphein/project-tiro](https://github.com/jphein/project-tiro).
+- **[claude-mem](https://github.com/thedotmack/claude-mem)** — 89K+ stars, largest community in the space. Explicitly non-verbatim (AI compression). Its dominance makes it the default comparison point even though its architecture takes the opposite approach.
 
 ### Adjacent inference paradigms (different layer than memory)
 
