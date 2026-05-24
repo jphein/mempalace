@@ -25,6 +25,8 @@ Complete index of fork documentation and external references.
 - [**2026-05-15-multi-encoder-rrf.md**](research/2026-05-15-multi-encoder-rrf.md) — Multi-encoder RRF research feature.
 - [**2026-05-15-rrf-eval-3way.json**](research/2026-05-15-rrf-eval-3way.json) — RRF evaluation benchmark data (3-way).
 - [**uncertainty-aware-retrieval.md**](research/uncertainty-aware-retrieval.md) — Uncertainty-aware retrieval analysis.
+- [**2026-05-24-true-memory-comparison.md**](research/2026-05-24-true-memory-comparison.md) — True Memory (arXiv:2605.04897) vs MemPalace: six-vs-four layers, benchmark comparison, convergent verbatim-first design.
+- [**2026-05-24-memory-system-benchmarks.md**](research/2026-05-24-memory-system-benchmarks.md) — Landscape benchmark survey: LongMemEval/LoCoMo/BEAM scores for 20+ systems, methodology concerns, multipass SME gap analysis.
 
 ### Design docs
 
