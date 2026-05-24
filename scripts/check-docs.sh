@@ -11,9 +11,6 @@
 #      doc claims (OPEN / MERGED / CLOSED). Uses `gh pr view`; skipped
 #      gracefully if `gh` isn't authenticated.
 #   5. website/public/llms-full.txt regenerates clean from its sources.
-#   6. Every `commit:` hash in docs/fork-changes.yaml is referenced
-#      somewhere in CLAUDE.md (catches drift between the structured DB
-#      and the hand-maintained row inventory).
 #
 # Exit codes:
 #   0 — clean
@@ -208,7 +205,7 @@ if [ -x "$llms_bin" ]; then
     [ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
     if [ -z "$py" ]; then
         warn "no python interpreter — skipping llms-full check"
-    elif "$py" "$llms_bin" --check >/dev/null 2>&1; then
+    elif "$py" "$llms_bin" --check >/dev/null; then
         ok "website/public/llms-full.txt matches its sources"
     else
         fail "website/public/llms-full.txt is stale — run scripts/render-llms-full.py"
