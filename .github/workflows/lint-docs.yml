@@ -1,0 +1,141 @@
+name: Lint docs
+
+# Structural + link + prose linting for fork docs.
+#
+# Separate from `check-docs.yml` (which validates fork-ahead semantic
+# state — test counts, commit hashes, upstream PR drift). This workflow
+# validates the markdown itself: well-formed structure, working links,
+# clean prose on user-facing docs.
+#
+# Issue: techempower-org/mempalace#176
+#
+# Security note: this workflow only consumes secrets.GITHUB_TOKEN (for
+# lychee's GitHub API rate-limit budget) and the checked-out repo
+# contents. No untrusted event payload fields are interpolated into run
+# blocks. github.ref is used only as a concurrency-group key, never in
+# a shell command.
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - '**/*.md'
+      - 'docs/**'
+      - '.markdownlint.json'
+      - '.markdownlintignore'
+      - 'lychee.toml'
+      - '.vale.ini'
+      - '.vale/**'
+      - '.github/workflows/lint-docs.yml'
+  pull_request:
+    paths:
+      - '**/*.md'
+      - 'docs/**'
+      - '.markdownlint.json'
+      - '.markdownlintignore'
+      - 'lychee.toml'
+      - '.vale.ini'
+      - '.vale/**'
+      - '.github/workflows/lint-docs.yml'
+  workflow_dispatch:
+
+# Cancel in-flight runs when a new commit lands on the same ref — the
+# previous run's findings are stale.
+concurrency:
+  group: lint-docs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Structural markdown ────────────────────────────────────────────
+  # Catches broken tables, inconsistent heading nesting, malformed
+  # lists, etc. Config in .markdownlint.json keeps the strict rules
+  # off (no line-length, no first-line-h1 requirement) so we don't
+  # have to retrofit existing docs. Tune per-rule there as needed.
+  markdownlint:
+    name: markdownlint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: DavidAnson/markdownlint-cli2-action@v23
+        with:
+          # Lint the front-door docs plus everything under docs/.
+          # Scratch, tests, generated sites are filtered via
+          # .markdownlintignore.
+          globs: |
+            README.md
+            CLAUDE.md
+            MISSION.md
+            CONTRIBUTING.md
+            SECURITY.md
+            FORK_CHANGELOG.md
+            CHANGELOG.md
+            ROADMAP.md
+            AGENTS.md
+            docs/**/*.md
+            examples/**/*.md
+            hooks/**/*.md
+            mempalace/**/*.md
+            benchmarks/**/*.md
+
+  # ── Dead-link check ────────────────────────────────────────────────
+  # Internal links (relative paths) + external URLs. Config in
+  # lychee.toml; ignore list there for known-flaky hosts and private
+  # homelab hostnames. Runs against the same surface as markdownlint.
+  lychee:
+    name: lychee link check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # GITHUB_TOKEN raises lychee's GitHub API rate limit from 60/hr
+      # (anonymous) to 5000/hr. Our docs reference many github.com
+      # URLs; without this we'd flake on every run.
+      - name: Run lychee
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: >-
+            --config lychee.toml
+            --no-progress
+            --verbose
+            README.md
+            CLAUDE.md
+            MISSION.md
+            CONTRIBUTING.md
+            SECURITY.md
+            FORK_CHANGELOG.md
+            CHANGELOG.md
+            ROADMAP.md
+            AGENTS.md
+            './docs/**/*.md'
+            './examples/**/*.md'
+            './hooks/**/*.md'
+            './mempalace/**/*.md'
+            './benchmarks/**/*.md'
+          fail: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Prose linting ──────────────────────────────────────────────────
+  # Narrow scope: README, MISSION, CONTRIBUTING, SECURITY (configured
+  # in .vale.ini). Vale on the full doc tree produces too much noise
+  # against research/changelog prose. continue-on-error keeps Vale
+  # advisory until we've curated the style rules — findings show in
+  # the run log but don't block PRs.
+  vale:
+    name: vale (advisory)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v6
+      - uses: errata-ai/vale-action@reviewdog
+        with:
+          # Vale-action does the install + run. Reviewdog posts
+          # inline review comments on PRs (no blocking).
+          fail_on_error: false
+          reporter: github-pr-check
+          # Restrict to the four front-door files; matches .vale.ini.
+          # Vale-action's `files` input is a JSON-formatted list or a
+          # delimiter-separated string — not newline-delimited.
+          files: '["README.md", "MISSION.md", "CONTRIBUTING.md", "SECURITY.md"]'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

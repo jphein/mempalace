@@ -142,12 +142,27 @@ renderers land.
 
 ### Lint
 
-`scripts/check-docs.sh` runs four checks:
+Two CI workflows guard doc quality. `check-docs.yml` runs the semantic
+checks in `scripts/check-docs.sh`:
 
 1. README test count vs `pytest --collect-only`
 2. every fork commit hash referenced in docs resolves via `git cat-file -e`
 3. `FORK_CHANGELOG.md` matches the YAML (re-render idempotent)
 4. every `#NNNN` reference has an upstream state matching the doc's claim
 
-Run before committing any doc change. Exit code 1 on drift.
+Run `scripts/check-docs.sh` before committing any doc change. Exit
+code 1 on drift.
+
+`lint-docs.yml` (#176) runs the structural checks on every `**/*.md`
+change:
+
+- **markdownlint** — well-formed structure, configured in
+  `.markdownlint.json` (permissive defaults; tune rules there before
+  blanket-disabling)
+- **lychee** — dead-link check across internal and external URLs,
+  configured in `lychee.toml` (homelab hostnames and known-flaky
+  CDNs excluded)
+- **vale** — advisory prose lint on the four front-door docs (README,
+  MISSION, CONTRIBUTING, SECURITY); `continue-on-error: true` so it
+  reports findings without blocking PRs
 
