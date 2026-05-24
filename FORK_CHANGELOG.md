@@ -18,6 +18,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-05-24]
+
+
+### Added
+
+
+- **mempalace stats — palace analytics dashboard (#191)** ([`6f994fb`](https://github.com/techempower-org/mempalace/commit/6f994fb))
+  ``mempalace stats`` composes ``mempalace_status`` +
+  ``mempalace_kg_stats`` + ``mempalace_graph_stats`` (and optionally
+  ``mempalace_list_tags``) into a single read-only view of corpus
+  health. Renders wings with proportional bars, KG entity/triple
+  counts with a relationship-type preview, graph room/tunnel/edge
+  counts with the top cross-wing tunnel rooms, and an opt-in
+  ``--tags`` breakdown. Standard ``--json`` / ``--quiet`` / ``--top``
+  flags. Daemon-only — refuses to run when ``PALACE_DAEMON_URL`` is
+  unset rather than surfacing a stale split-brain view from local
+  chromadb. Partial daemon failures (e.g. KG offline) inline the
+  error in the affected section instead of blanking the dashboard.
+
+  *Tests:* 13 — test_cli_stats.py
+  *Files:* `mempalace/cli.py`, `tests/test_cli_stats.py`
+
+
 ## [2026-05-23]
 
 
