@@ -1188,7 +1188,7 @@ def tool_search(
     max_distance: float = 1.5,
     min_similarity: float = None,
     context: str = None,
-    candidate_strategy: str = "vector",
+    candidate_strategy: str = "hybrid",
     include_trace: bool = False,
 ):
     limit = max(1, min(limit, _MAX_RESULTS))
@@ -3038,7 +3038,7 @@ TOOLS = {
                 },
                 "candidate_strategy": {
                     "type": "string",
-                    "description": "Candidate selection: 'vector' (default), 'union' (vector + BM25), or 'hybrid' (vector + BM25 + graph).",
+                    "description": "Candidate selection: 'vector', 'union' (vector + BM25), or 'hybrid' (default, vector + BM25 + graph).",
                     "enum": ["vector", "union", "hybrid"],
                 },
                 "include_trace": {
