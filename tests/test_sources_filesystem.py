@@ -1,7 +1,6 @@
 """Tests for the filesystem source adapter."""
 
 import os
-from pathlib import Path
 
 import pytest
 

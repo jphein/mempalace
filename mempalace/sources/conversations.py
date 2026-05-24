@@ -63,7 +63,7 @@ class ConversationSourceAdapter(BaseSourceAdapter):
             raise SourceNotFoundError(f"Not a directory: {convo_path}")
 
         wing = source.options.get("wing", "conversations")
-        agent = source.options.get("agent", "mempalace")
+        _agent = source.options.get("agent", "mempalace")
 
         session_files = scan_convos(str(convo_path))
 

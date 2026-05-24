@@ -1,7 +1,6 @@
 """Tests for the conversation source adapter."""
 
 import os
-from pathlib import Path
 
 import pytest
 
