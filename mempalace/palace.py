@@ -21,7 +21,9 @@ from .backends import (
     get_backend,
     resolve_backend_for_palace,
 )
+from .backends.chroma import ChromaBackend
 from .config import DEFAULT_COLLECTION_NAME, MempalaceConfig
+from .entity_detector import _apply_known_systems_prepass, _get_coca_filter
 
 logger = logging.getLogger("mempalace_mcp")
 
@@ -343,10 +345,22 @@ def build_closet_lines(source_file, drawer_ids, content, wing, room, drawer_meta
 
     # Extract proper nouns (2+ occurrences). Uses i18n-aware patterns so
     # non-Latin names (Cyrillic, accented Latin, etc.) are also detected.
-    words = _candidate_entity_words(window)
-    word_freq = {}
+    # Tier 3 linguistics cleanup — known-systems compound pre-pass. Detects
+    # multi-word product names ("Claude Code", "GitHub Copilot", …) atomically
+    # and masks them out of the working window so the single-word extraction
+    # below doesn't decompose them.
+    working_window, compound_counts = _apply_known_systems_prepass(window)
+
+    coca_filter = _get_coca_filter()
+    words = _candidate_entity_words(working_window)
+    word_freq: dict = dict(compound_counts)
     for w in words:
         if w in _ENTITY_STOPLIST:
+            continue
+        # Tier 2 linguistics cleanup — drop common English content words
+        # ("Code", "Line", "Note", "Phase", …) so they don't appear in
+        # closet pointers as fake entities.
+        if w.lower() in coca_filter:
             continue
         word_freq[w] = word_freq.get(w, 0) + 1
     entities = sorted(
@@ -527,6 +541,39 @@ def mine_lock(source_file: str):
 
 class MineAlreadyRunning(RuntimeError):
     """Raised when another `mempalace mine` already holds the per-palace lock."""
+
+
+class MineValidationError(RuntimeError):
+    """Raised at end of mine when PRAGMA quick_check on the palace reports errors."""
+
+    def __init__(self, palace_path: str, errors: list[str]) -> None:
+        if not errors:
+            raise ValueError("MineValidationError requires at least one error string")
+        if not palace_path:
+            raise ValueError("MineValidationError requires a non-empty palace_path")
+        super().__init__(f"FTS5/SQLite quick_check failed: {len(errors)} issue(s)")
+        self.palace_path = palace_path
+        # Freeze the forensic snapshot so handlers cannot mutate it.
+        self.errors: tuple[str, ...] = tuple(errors)
+
+
+def _validate_palace_fts5_after_mine(palace_path: str) -> None:
+    """Raise MineValidationError if PRAGMA quick_check reports any error after a mine.
+
+    Reuses the same primitive that `cmd_repair` already runs as preflight so the
+    operator sees the same recovery banner regardless of which command surfaces
+    the bug.
+    """
+    # Defer-import: keeps the repair module graph out of mine's hot import path.
+    from .repair import _close_chroma_handles, sqlite_integrity_errors
+
+    # Pass a ChromaBackend instance so the writer's cached PersistentClient
+    # gets closed and WAL flushes before the read-only sqlite3 re-open.
+    _close_chroma_handles(palace_path, backend=ChromaBackend())
+
+    errors = sqlite_integrity_errors(palace_path)
+    if errors:
+        raise MineValidationError(palace_path, errors)
 
 
 # Per-thread record of palaces this thread already holds the lock for. Used by

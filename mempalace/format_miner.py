@@ -72,6 +72,7 @@ from typing import Optional, Union
 from .palace import (
     NORMALIZE_VERSION,
     SKIP_DIRS,
+    _validate_palace_fts5_after_mine,
     file_already_mined,
     get_collection,
     mine_lock,
@@ -928,8 +929,9 @@ def mine_formats(
     else:
         # All files processed without interruption — compute cross-wing topic
         # tunnels linking this wing to others that share confirmed topics.
-        # Mirrors miner.py:1241-1249 exactly: tunnel-compute failures must
-        # never fail a mine, so any exception is logged and skipped quietly.
+        # Mirrors the post-loop tunnel block in miner._mine_impl: tunnel-compute
+        # failures must never fail a mine, so any exception is logged and
+        # skipped quietly.
         if not dry_run:
             try:
                 tunnels_added = _compute_topic_tunnels_for_wing(wing)
@@ -945,6 +947,14 @@ def mine_formats(
                     f"\n  WARNING: topic tunnel computation skipped — {exc}",
                     file=sys.stderr,
                 )
+
+            # End-of-mine FTS5 integrity check (#1537). Mirrors _mine_impl;
+            # raises MineValidationError to cmd_mine if PRAGMA quick_check
+            # finds malformed FTS5 rows so a corrupted palace cannot silently
+            # exit Done on the --mode extract path that bypasses _mine_impl.
+            # Sits outside the per-file try/except in the for-loop body, so
+            # caught per-file errors do not mask the integrity result.
+            _validate_palace_fts5_after_mine(palace_path)
     finally:
         # Hook-spawned mines write a PID file that miner.py's
         # _cleanup_mine_pid_file() clears; we mirror that so format-mode

@@ -60,6 +60,7 @@ from .config import (  # noqa: E402
     sanitize_name,
     sanitize_content,
     sanitize_iso_temporal,
+    strip_lone_surrogates,
 )
 from .version import __version__  # noqa: E402
 from chromadb.errors import NotFoundError as _ChromaNotFoundError  # noqa: E402
@@ -1289,6 +1290,7 @@ def tool_check_duplicate(content: str, threshold: float = 0.9):
     if not col:
         return _no_palace()
     try:
+        content = strip_lone_surrogates(content)
         results = col.query(
             query_texts=[content],
             n_results=5,
@@ -1640,6 +1642,9 @@ def tool_add_drawer(
         wing = sanitize_name(wing_pass["cleaned"], "wing")
         room = sanitize_name(room_pass["cleaned"], "room")
         content = sanitize_content(content_pass["cleaned"])
+        if source_file:
+            source_file = strip_lone_surrogates(source_file)
+        added_by = strip_lone_surrogates(added_by)
     except ValueError as e:
         return {"success": False, "error": str(e)}
 

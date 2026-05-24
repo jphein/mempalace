@@ -1,6 +1,6 @@
 [project]
 name = "mempalace"
-version = "3.3.5"
+version = "3.3.6"
 description = "Give your AI a memory — mine projects and conversations into a searchable palace. No API key required."
 readme = "README.md"
 requires-python = ">=3.9"
@@ -30,6 +30,16 @@ dependencies = [
     "chromadb>=1.5.4,<2",
     "pyyaml>=6.0,<7",
     "tomli>=2.0.0; python_version < '3.11'",
+    # Multilingual embedding model deps. Onboarding now offers the
+    # embeddinggemma-300m ONNX model as the default for new installs, so
+    # these are required core deps (not optional extras). The 300 MB ONNX
+    # model itself is lazy-downloaded on first use, not at install time.
+    # Users who pick minilm during onboarding still get these installed
+    # but unused — small wheel-size cost in exchange for one fewer pip
+    # command in the multilingual setup path.
+    "huggingface_hub>=0.20",
+    "tokenizers>=0.15",
+    "numpy>=1.24",
     # Tier 6a content-date extraction uses dateutil for natural-language
     # date parsing (filename + content body branches). It happens to install
     # transitively today via chromadb→kubernetes→python-dateutil, but that
@@ -85,6 +95,9 @@ spellcheck = ["autocorrect>=2.0"]
 gpu = ["onnxruntime-gpu>=1.16"]
 dml = ["onnxruntime-directml>=1.16"]
 coreml = ["onnxruntime>=1.16"]
+# Multilingual extra kept as a no-op alias for back-compat with
+# `pip install mempalace[multilingual]` — these deps now ship in core.
+multilingual = []
 # Binary-format extraction for `mempalace mine --mode extract`. Per-format
 # transformer routing: striprtf for .rtf, MarkItDown for .pdf/.docx/.pptx/
 # .xlsx/.epub. MarkItDown requires Python ≥ 3.10 (env marker ensures it

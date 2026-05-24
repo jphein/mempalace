@@ -19,10 +19,14 @@ from datetime import datetime
 from collections import defaultdict
 from typing import Optional
 
+from .entity_detector import _apply_known_systems_prepass, _get_coca_filter
 from .palace import (
     NORMALIZE_VERSION,
     SKIP_DIRS,
+    MineValidationError,
+    _candidate_entity_words,
     _open_collection_or_explain,
+    _validate_palace_fts5_after_mine,
     build_closet_lines,
     file_already_mined,
     get_closets_collection,
@@ -901,13 +905,23 @@ def _extract_entities_for_metadata(content: str) -> str:
         if re.search(r"(?<!\w)" + re.escape(name) + r"(?!\w)", content, re.IGNORECASE):
             matched.add(name)
 
-    from .palace import _candidate_entity_words
-
+    coca_filter = _get_coca_filter()
     window = content[:_ENTITY_EXTRACT_WINDOW]
-    words = _candidate_entity_words(window)
-    freq: dict = {}
+    # Tier 3 linguistics cleanup — known-systems compound pre-pass. Detects
+    # multi-word product names atomically and masks them from the window so
+    # the single-word extraction below doesn't decompose them into their
+    # constituent tokens (which would then either get COCA-filtered or
+    # appear as wrongly-attributed standalone entities).
+    working_window, compound_counts = _apply_known_systems_prepass(window)
+    words = _candidate_entity_words(working_window)
+    freq: dict = dict(compound_counts)
     for w in words:
         if w in _ENTITY_STOPLIST:
+            continue
+        # Tier 2 linguistics cleanup — drop common English content words
+        # ("Code", "Line", "Note", "Phase", …) from per-drawer entity
+        # metadata so they don't poison hallways/tunnels/search.
+        if w.lower() in coca_filter:
             continue
         freq[w] = freq.get(w, 0) + 1
     for w, c in freq.items():
@@ -1830,6 +1844,8 @@ def _mine_impl(
                     file=sys.stderr,
                 )
 
+            _validate_palace_fts5_after_mine(palace_path)
+
         print(f"\n{'=' * 55}")
         print("  Done.")
         print(f"  Files processed: {len(files) - files_skipped}")
@@ -1874,6 +1890,13 @@ def _mine_impl(
             "already-filed drawers are\n  upserted idempotently and will not duplicate.\n"
         )
         sys.exit(130)
+    except MineValidationError:
+        # End-of-mine FTS5 validation failed (#1537). The loop completed
+        # successfully; cmd_mine prints the recovery banner. Don't print a
+        # "Mine aborted" partial-progress summary here: the mine didn't
+        # abort mid-loop, the post-write integrity check did, and the
+        # double-banner would mislead the operator.
+        raise
     except Exception as exc:
         # Without this, an arbitrary exception (ONNX bad_alloc, chromadb HNSW
         # error, OS fault) propagates and the process exits with no completion

@@ -17,6 +17,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+from mempalace.config import MempalaceConfig
+
 SAVE_INTERVAL = 15
 STATE_DIR = Path.home() / ".mempalace" / "hook_state"
 PALACE_ROOT = Path.home() / ".mempalace"
@@ -99,25 +101,17 @@ def _mempalace_python() -> str:
 _RECENT_MSG_COUNT = 30  # how many recent user messages to summarize
 
 STOP_BLOCK_REASON = (
-    "AUTO-SAVE checkpoint (MemPalace). Save this session's key content:\n"
-    "1. mempalace_diary_write — session summary (what was discussed, "
-    "key decisions, current state of work)\n"
-    "2. mempalace_add_drawer — verbatim quotes, decisions, code snippets "
-    "(place in appropriate wing and room)\n"
-    "3. mempalace_kg_add — entity relationships (optional)\n"
-    "For THIS save, use MemPalace MCP tools only (not auto-memory .md files). "
-    "Use verbatim quotes where possible. Continue conversation after saving."
+    "MemPalace auto-save checkpoint. "
+    "Use mempalace_diary_write (session summary) and mempalace_add_drawer "
+    "(quotes, decisions, code) to save session content. "
+    "Do NOT use native auto-memory files."
 )
 
 PRECOMPACT_BLOCK_REASON = (
-    "COMPACTION IMMINENT (MemPalace). Save ALL session content before context is lost:\n"
-    "1. mempalace_diary_write — thorough session summary\n"
-    "2. mempalace_add_drawer — ALL verbatim quotes, decisions, code, context "
-    "(place each in appropriate wing and room)\n"
-    "3. mempalace_kg_add — entity relationships (optional)\n"
-    "For THIS save, use MemPalace MCP tools only (not auto-memory .md files). "
-    "Be thorough — after compaction this is all that survives. "
-    "Save everything to MemPalace, then allow compaction to proceed."
+    "MemPalace emergency save — compaction imminent. "
+    "Use mempalace_diary_write (thorough summary) and mempalace_add_drawer "
+    "(ALL quotes, decisions, code, context) to save ALL content before context is lost. "
+    "Do NOT use native auto-memory files."
 )
 
 
@@ -731,6 +725,18 @@ def _desktop_toast(body: str, title: str = "MemPalace"):
         pass
 
 
+_THEME_STOPWORDS = frozenset(
+    "the a an and or but in on at to for of is it i me my you your we our "
+    "this that with from by was were be been are not no yes can do did dont "
+    "will would should could have has had lets let just also like so if then "
+    "ok okay sure yeah hey hi here there what when where how why which some "
+    "all any each every about into out up down over after before between "
+    "get got make made need want use used using check look see run try "
+    "know think right now still already really very much more most too "
+    "file files code one two new first last next thing things way well".split()
+)
+
+
 def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUNT) -> list[str]:
     """Extract the last N user messages from a JSONL transcript."""
     path = Path(transcript_path).expanduser()
@@ -770,6 +776,72 @@ def _extract_recent_messages(transcript_path: str, count: int = _RECENT_MSG_COUN
     return messages[-count:]
 
 
+def _extract_themes(messages: list[str], max_themes: int = 3) -> list[str]:
+    """Pull 2-3 distinctive topic words from recent messages."""
+    from collections import Counter
+
+    words: Counter[str] = Counter()
+    for msg in messages:
+        for word in msg.lower().split():
+            clean = word.strip(".,;:!?\"'`()[]{}#<>/\\-_=+@$%^&*~")
+            if len(clean) >= 4 and clean not in _THEME_STOPWORDS and clean.isalpha():
+                words[clean] += 1
+    return [w for w, _ in words.most_common(max_themes)]
+
+
+def _save_diary_direct(
+    transcript_path: str,
+    session_id: str,
+    wing: str = "",
+    toast: bool = False,
+) -> dict:
+    """Write a diary checkpoint by calling the tool function directly (no MCP roundtrip).
+
+    Returns {"count": N, "themes": [...]} on success, {"count": 0} on failure.
+    """
+    messages = _extract_recent_messages(transcript_path)
+    if not messages:
+        _log("No recent messages to save")
+        return {"count": 0}
+
+    themes = _extract_themes(messages)
+
+    now = datetime.now()
+    topics = "|".join(m[:80] for m in messages[-10:])
+    entry = (
+        f"CHECKPOINT:{now.strftime('%Y-%m-%d')}|session:{session_id}"
+        f"|msgs:{len(messages)}|recent:{topics}"
+    )
+
+    try:
+        from .mcp_server import tool_diary_write
+
+        result = tool_diary_write(
+            agent_name="session-hook",
+            entry=entry,
+            topic="checkpoint",
+            wing=wing,
+        )
+        if result.get("success"):
+            _log(f"Diary checkpoint saved: {result.get('entry_id', '?')}")
+            try:
+                ack_file = STATE_DIR / "last_checkpoint"
+                ack_file.write_text(
+                    json.dumps({"msgs": len(messages), "ts": now.isoformat()}),
+                    encoding="utf-8",
+                )
+            except OSError:
+                pass
+            if toast:
+                _desktop_toast(f"Checkpoint saved — {len(messages)} messages archived")
+            return {"count": len(messages), "themes": themes}
+        else:
+            _log(f"Diary checkpoint failed: {result.get('error', 'unknown')}")
+    except Exception as e:
+        _log(f"Diary checkpoint error: {e}")
+    return {"count": 0}
+
+
 def _ingest_transcript(transcript_path: str):
     """Mine a Claude Code session transcript into the palace as a conversation.
 
@@ -794,8 +866,6 @@ def _ingest_transcript(transcript_path: str):
     if _daemon_strict():
         _post_daemon_mine(str(path.parent), wing=project_wing, mode="convos")
         return
-
-    from .config import MempalaceConfig
 
     try:
         MempalaceConfig()  # validate config loads
@@ -974,6 +1044,11 @@ def hook_stop(data: dict, harness: str):
     stop_hook_active = parsed["stop_hook_active"]
     transcript_path = parsed["transcript_path"]
 
+    # Respect auto_save config toggle (clean opt-out)
+    if not MempalaceConfig().hooks_auto_save:
+        _output({})
+        return
+
     # If already in a block-mode save cycle, let through (infinite-loop prevention).
     # Silent mode saves directly without returning {"decision":"block"}, so there's
     # no loop to prevent — and Claude Code's plugin dispatch sets this flag on every
@@ -984,16 +1059,9 @@ def hook_stop(data: dict, harness: str):
         # (v3.3.0+), so if we can't read config, behave as if it's still on.
         silent_guard = True
         try:
-            from .config import MempalaceConfig
-        except ImportError as exc:
-            _log(
-                f"WARNING: could not import MempalaceConfig for stop guard: {exc}; defaulting to silent mode"
-            )
-        else:
-            try:
-                silent_guard = MempalaceConfig().hook_silent_save
-            except AttributeError as exc:
-                _log(f"WARNING: could not read hook_silent_save: {exc}; defaulting to silent mode")
+            silent_guard = MempalaceConfig().hook_silent_save
+        except AttributeError as exc:
+            _log(f"WARNING: could not read hook_silent_save: {exc}; defaulting to silent mode")
         if not silent_guard:
             _output({})
             return
@@ -1019,8 +1087,6 @@ def hook_stop(data: dict, harness: str):
         _log(f"TRIGGERING SAVE at exchange {exchange_count}")
 
         # Read hook settings from config
-        from .config import MempalaceConfig
-
         try:
             config = MempalaceConfig()
             silent = config.hook_silent_save
@@ -1179,23 +1245,17 @@ def _daemon_health_ok(daemon_url: str) -> bool:
 def hook_precompact(data: dict, harness: str):
     """Precompact hook: trigger transcript ingest + project mine, then allow compaction.
 
+    Respects the ``hooks.auto_save`` config toggle — when disabled, returns
+    immediately without mining.
+
     Two write paths fire in sequence:
       1. ``_ingest_transcript(transcript_path)`` — local mode spawns a
          background ``mempalace mine`` Popen (best-effort, non-blocking);
          daemon-strict mode POSTs to ``/mine`` (the daemon serializes
          under its own ``_mine_sem``, replays from a queue if a rebuild
-         is in progress). NOT a synchronous-write contract — by the time
-         compaction starts, the mine subprocess may still be running.
+         is in progress).
       2. ``_mine_sync()`` — synchronous mempalace mine of MEMPAL_DIR
          (project files) when set. Blocks until exit (subprocess.run).
-
-    Closes Copilot finding on jphein/mempalace#6: previous docstring
-    claimed step 1 was synchronous; corrected to describe the actual
-    fire-and-forget semantics. Recoverability of "where we were" is
-    delivered by the verbatim transcript chunks landing in
-    mempalace_drawers — searching any phrase from the last few messages
-    finds the session. (The earlier dedicated session-recovery collection
-    has since been retired; see PR #8 / row 32 of CLAUDE.md.)
     """
     if not _palace_root_exists():
         _output({})
@@ -1203,6 +1263,11 @@ def hook_precompact(data: dict, harness: str):
     parsed = _parse_harness_input(data, harness)
     session_id = parsed["session_id"]
     transcript_path = parsed["transcript_path"]
+
+    # Respect auto_save config toggle (clean opt-out)
+    if not MempalaceConfig().hooks_auto_save:
+        _output({})
+        return
 
     _log(f"PRE-COMPACT triggered for session {session_id}")
 
