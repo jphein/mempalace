@@ -674,6 +674,11 @@ def _get_collection_postgres(create=False):
             )
             _metadata_cache = None
             _metadata_cache_time = 0
+
+            if hasattr(_collection_cache, "set_kg_writethrough"):
+                from .palace import _maybe_attach_writethrough
+                _maybe_attach_writethrough(_collection_cache, _config.postgres_dsn)
+
         _last_backend_error = None
         return _collection_cache
     except Exception as e:

@@ -92,12 +92,44 @@ def get_collection(
     if backend_name == "postgres":
         options = {"dsn": config.postgres_dsn} if config.postgres_dsn else None
 
-    return get_backend(backend_name).get_collection(
+    collection = get_backend(backend_name).get_collection(
         palace=PalaceRef(id=palace_path, local_path=palace_path),
         collection_name=collection_name,
         create=create,
         options=options,
     )
+
+    if backend_name == "postgres" and hasattr(collection, "set_kg_writethrough"):
+        _maybe_attach_writethrough(collection, config.postgres_dsn)
+
+    return collection
+
+
+_writethrough_attached: set = set()
+
+def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
+    """Auto-attach the AGE KG write-through hook when MEMPALACE_KG_WRITETHROUGH=1.
+
+    Called once per collection instance. Idempotent — tracks by collection id
+    so repeated get_collection() calls don't stack hooks.
+    """
+    cid = id(collection)
+    if cid in _writethrough_attached:
+        return
+    try:
+        from .kg_writethrough import make_writethrough_from_env
+        from .knowledge_graph_age import KnowledgeGraphAGE
+
+        if not dsn:
+            return
+        kg = KnowledgeGraphAGE(dsn=dsn)
+        hook = make_writethrough_from_env(kg=kg)
+        if hook is not None:
+            collection.set_kg_writethrough(hook)
+            _writethrough_attached.add(cid)
+            logger.info("KG write-through attached to collection (AGE entities will be extracted inline)")
+    except Exception as e:
+        logger.debug("KG write-through not attached: %s", e)
 
 
 def get_closets_collection(palace_path: str, create: bool = True):
