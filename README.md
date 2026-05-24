@@ -25,75 +25,11 @@
 
 ---
 
-This fork tracks `upstream/develop` through the 2026-05-10 sync (commit `a67be3f`, fork merge via `chore/sync-develop-2026-05-10`) and runs in production on a **335K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon) on `disks:8085`. It carries ~434 fork-ahead changes that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. 2993 tests pass on `main`. The new things here are *what we've learned*, not just what we've fixed.
+## What this is
 
-**2026-05-15 substrate cutover complete.** What was on the `feat/pgvector-age-impl` branch is now on `main` and serving production traffic. **Hybrid retrieval** (`candidate_strategy="hybrid"` — vector ∪ postgres-`tsvector` BM25 ∪ AGE graph-expanded candidates, hybrid-reranked) shipped end-to-end through `palace-daemon`'s new `/search/keyword` and `/search/hybrid` endpoints. **8 of 9 bench suites pass** on the postgres backend (`test_chromadb_stress` skipped, doesn't apply) — no regressions on the search heap hot path vs the chromadb-era numbers. See [`docs/operators/pgvector-cutover-runbook.md`](docs/operators/pgvector-cutover-runbook.md) for the operator narrative and [`docs/benchmarks/2026-05-15-remaining-benches.json`](docs/benchmarks/2026-05-15-remaining-benches.json) for the bench artifact.
+A verbatim-first local AI memory system. This fork tracks `upstream/develop` through the 2026-05-23 sync (commit `eb77c8c`) and runs in production on a **335K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon). It carries ~490 fork-ahead commits that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. 2993 tests pass on `main`.
 
-## The four layers
-
-Agent memory architecture has stratified into four orthogonal layers over the last six months. The cleanest way to read the field — and the cleanest way to read what this fork is doing — is to treat them as independently improvable, because the empirical evidence is that improvements stack rather than substitute.
-
-1. **Storage.** Verbatim drawers; no LLM in the index path. ChromaDB upstream, with this fork running [Postgres + pgvector + Apache AGE](#substrate-postgres--pgvector--apache-age) **on `main` as of 2026-05-15** — the chromadb-era code path still works (`MEMPALACE_BACKEND=chroma`), but production traffic flows through pgvector + AGE now. Convergent across five 2026-vintage systems (MemPalace, Longhand, Celiums, mcp-memory-service, engram) — the verbatim-first cluster reached independent critical mass in April.
-2. **Encoder.** The embedding model itself, normally invisible in architectural debates because most systems treat it as a vendor decision. @nakata-app's [adaptmem](https://github.com/nakata-app/adaptmem) ([discussion #1249](https://github.com/MemPalace/mempalace/discussions/1249)) shows contrastive fine-tuning on hard negatives lifts retrieval orthogonally: MemPalace raw 0.966 R@5 → +FT-300 0.980 → +hybrid_v4 0.990 R@5 / 0.916 R@1. Independent reproduction of MemPalace's published number (0.966 matches exactly), then orthogonal lift stacked on top. The encoder layer is the most under-explored across OSS memory systems.
-3. **Retrieval.** How vectors are queried, combined, reranked. Three patterns co-exist and are not mutually exclusive: deterministic pipelines ([Familiar](https://github.com/jphein/familiar.realm.watch) v0.3.9 hits **78.33%** recall on the jp-realm-v0.1 corpus), LLM-orchestrated retrieval ([RLM](https://github.com/alexzhang13/rlm) with Qwen 2.5 7B and Llama 3.3 70B both **ceiling at 46.67%** — model size doesn't fix it), parallel hybrid ([Hindsight](https://hindsight.vectorize.io/blog/2026/03/27/parallel-hybrid-search)'s 91% R@10 via four-way RRF). The 32-point gap between Familiar and RLM is entirely invocation: RLM agents zero-call the tool on 22–25 of 30 questions; Familiar's pipeline runs on all 30 because the agent doesn't choose.
-4. **Consumption.** What happens after retrieval. This is where the R@k → end-to-end QA gap lives — MemPalace's 96.6% R@5 → 82.6% E2E QA on Issue #39 reproduction; @terrizoaguimor's [Celiums](https://celiums.ai/) benchmarking shows 100% retrieval rate but only 62.3% QA with Opus 4.6. Three architectural bets compete: algorithm (Familiar's always-on pipeline), human-in-the-loop ([Kostadis's retrieve/render isolation](https://github.com/kostadis/CampaignGenerator/blob/main/docs/rlm_paper_comparison.md) CI invariant), trained policy ([Kent's APO recall games](https://github.com/kenchambers/kent)). The right answer probably depends on workload; the field doesn't yet know.
-
-*Calibration on the SME numbers:* 30 questions, beta-level instrumentation, substring-on-filename scoring. The defensible findings are deltas under identical conditions; absolute percentages are decoration. Methodology disclosure and the broader four-layer synthesis live in [`docs/research/three-patterns-for-agent-memory.md`](docs/research/three-patterns-for-agent-memory.md) and the [compass artifact](docs/research/compass_artifact_wf-ad108fcc-3960-4eab-ad5d-234bf365b2f4_text_markdown.md). The shape of the result — invocation ceiling — generalizes; the exact numbers do not.
-
-The three operational principles in [the thesis below](#the-thesis-operational-principles) are claims about layer 1 (verbatim storage) and how retrieval over it actually fails in production. They follow from this four-layer model; they aren't all of it.
-
-## The thesis (operational principles)
-
-The fork has converged on three principles. Treat them as the design test for future work over the verbatim layer.
-
-### 1. Verbatim vs. derivative is the canonical axis
-
-The unit of memory in MemPalace is the verbatim utterance — chats, tool calls, mined files, the literal text the user produced or witnessed. Anything else (summaries, KG triples, agent journals, AAAK-encoded reflections, Auto-Dream consolidated indices) is *derivative* of that verbatim record. Derivative writes are useful but they are a different kind of thing: their right access pattern is event-shaped (session_id, time, agent) or scoped (cwd, project), not unconditioned semantic similarity over the whole corpus.
-
-Most public AI memory systems frame the problem the other way around: ingest raw, transform on write, store the derivative as canonical. Mem0 extracts "memories." Zep and Letta tier and summarize. Cognee builds a knowledge graph. Hindsight retains/recalls/reflects with LLM-extracted facts. In each, the verbatim original is gone — or at best, retrievable only through a layer of inference that already lost nuance. The fork's bet is the inverse: keep verbatim canonical, key derivative layers for their actual access pattern, and treat any derivative store as rebuildable from the verbatim. Derivative layers can then be replaced or re-derived without losing underlying truth. The April-2026 verbatim cohort (Longhand, Celiums, mcp-memory-service, MemPalace) converged on this within ~8 days of each other; the timing is suggestive.
-
-Mixing verbatim and derivative in one corpus is a real failure mode — the structural fix in May 2026 was to drop one half of an earlier split entirely (see [What this fork has learned](#what-this-fork-has-learned)). Future derivative layers can still live in sibling collections keyed for their access pattern — but only if and when each one earns its own MCP read surface. Without that, a side collection becomes invisible to search.
-
-This axis is implicit in upstream's [RFC 001](https://github.com/MemPalace/mempalace/pull/743) (`get_collection(palace, collection_name=...)` already supports it) but isn't yet named in the spec. Worth making explicit upstream — multi-collection-by-purpose is the architectural move that future backends should plan for, and the substrate work below depends on it.
-
-### 2. Corpus shape eats retrieval algorithm for breakfast
-
-A week of filter tuning, BM25 fallback, and over-fetch parameters could not make `kind=content` return more than 3 tokens per question on the canonical palace. ~640 Stop-hook auto-save checkpoint drawers — 0.4% of the corpus — dominated 80%+ of every vector top-N because they were short, query-term-saturated, and embedded close to recent prompts. Recall@5 was 0.984 the whole time. End-to-end answer quality collapsed.
-
-Then we moved them out of the corpus. One structural change — a separate ChromaDB collection — and `kind=content` jumped to 1,267 tokens per question. The fix that retired the checkpoint split in May 2026 went further in the same direction: stop writing the derivative half at all. The lesson is durable: when corpus shape is wrong, no amount of post-filter cleverness substitutes for fixing the corpus.
-
-This generalizes to every retrieval system that ingests by default and filters by query. Solve it at write time, by purpose, not at query time, by predicate.
-
-### 3. The right to measure is the local-first benefit
-
-The usual case for local AI memory is data sovereignty. The deeper benefit is *the right to audit your own integration shape*. Cat 9 in the SME framework — "the Handshake" — names a class of failure that recall benchmarks miss: the gap between retrieval working and the model actually being grounded on the retrieved content. We could only measure it because we own every layer of the stack. A vendor product would have shown us 0.984 R@5 on a dashboard and called it a day.
-
-The SME jp-realm-v0.1 numbers in the four-layer section above are this principle made operational. The 46.67% / 78.33% delta is *invocation discipline*, not retrieval quality — a distinction no offline-only benchmark catches. The 96.6% R@5 → 82.6% E2E QA gap on independent reproduction is the same story at a different layer. Sovereignty wins arguments; auditability wins debugging sessions. The TechEmpower bridge essay at [`notebook/essays/2026-04-25-techempower-bridge.md`](https://github.com/jphein/notebook/blob/main/essays/2026-04-25-techempower-bridge.md) develops the underlying claim further.
-
-## What this fork has learned
-
-Four claims that fall out of the thesis when you take it seriously and run it in production for a few months.
-
-**Corpus shape is not a tuning parameter; it's an architectural choice.** The 2026-04-25 → 2026-04-26 collection split closed a 210× pre/post token gap that no amount of `kind=` filtering, over-fetch tuning, or BM25 fallback had touched. Three weeks later, on 2026-05-05, the structural shift went one step further: drop the derivative half entirely. Hooks now write only verbatim transcript chunks; the dedicated `mempalace_session_recovery` collection and its read tool retired. One collection, one search path, no kind-filter, no over-fetch hack. The story of those three weeks is the empirical case that retrieval algorithms have less leverage over end-to-end quality than the shape of what you ingest; when the corpus is wrong-shaped, you don't filter your way out — you split, then if the split was a workaround for the wrong write contract, you stop writing the derivative half.
-
-**Verbatim storage is load-bearing as the canonical layer.** Derivative work (KG, summaries, decay scores, embeddings under different models, Auto-Dream consolidated indices) is welcome as long as it stays *next to* the verbatim record, not replacing it. The integrity of every downstream layer depends on being able to re-derive from the original — drop the original and every layer above it is fragile. This is also the architectural read on Anthropic's [Dreams API](#two-memory-layers) below: the API design treats input as read-only and produces a *separate* output store you can diff and discard. That's the verbatim-vs-derivative axis showing up in a vendor API design, not just in this fork's writeups.
-
-**The right to measure is the local-first benefit that matters in production.** Sovereignty wins arguments; auditability wins debugging sessions. Cat 9 / The Handshake on this fork's deployment was findable because we own every layer of the stack — a vendor product would have shown 0.984 R@5 on a dashboard and called it shipped.
-
-**The integration gap (Cat 9 / Handshake) is real, reproducible, and measurable.** Engram-2's "17% E2E QA" claim landed on a real failure surface — checkpoint domination of vector top-N — and the structural fix demonstrably closes it on this corpus. The 632/3 → 974/1267 token convergence is the structural-fix proxy; the end-to-end LongMemEval run on the post-migration palace is instrumented, with results to publish at `notebook/data/cat9-postmigrate-e2e/REPORT.md`.
-
-Underneath all four, the operational work that doesn't make headlines is still mostly the two hard things — **naming** (wing/room/topic taxonomies, the verbatim-vs-derivative split was itself a naming clarification, multi-label tags, embedding-model identity across collections) and **cache invalidation** (HNSW staleness detection, graph-cache write-invalidation, the `kind=` filter that went inert post-split, decay/recency weighting, stale auto-loaded docs, the `.blob_seq_ids_migrated` marker). Karlton's joke is durable for a reason: every retrieval system eventually has to engineer good answers to both, and this one is no exception. The four-layer model and the operational thesis are the parts of the work that generalize; the two-hard-things are the part that keeps showing up on every PR.
-
-## Convergence with peer systems
-
-The strongest defense of the fork's architectural choices in 2026 isn't anything this fork wrote — it's that three other production-shaped systems built on the MemPalace substrate independently arrived at compatible designs. Different domains, different teams, different downstream consumers, same four agreements at the architectural level.
-
-- **[Familiar](https://github.com/jphein/familiar.realm.watch)** (jphein) — deterministic retrieval pipeline running llama.cpp + Phi-4 on Pascal GPUs against MemPalace. Rerank, temporal decay, temporal query expansion, extractive compression, grounding directives, all running unconditionally. Measured: 78.33% recall on jp-realm-v0.1.
-- **[CampaignGenerator](https://github.com/kostadis/CampaignGenerator)** (@kostadis, with kostadis/mempalace fork) — RPG session-prep over a 2 TB local PDF library + 5etools JSON. Rank-bucketed AAAK projections enable hierarchical pruning before drawer-level vector search runs. Measured: **19.82× cost reduction at 0% recall@10 loss** on a 281-entry benchmark fixture. Articulates the *why* of deterministic intermediate compression more clearly than the fork itself does (drift + recall-loss-at-prune-step failure modes when LLMs do intermediate compression).
-- **[Kent](https://github.com/kenchambers/kent)** (@kenchambers) — typed async agent runtime with APO (Automatic Prompt Optimization via Microsoft Agent Lightning) training memory invocation policies. Recall games (recall@k / scope / closet fidelity / tunnel utility). Heartbeat agent for between-conversation memory maintenance. Channel-as-wing automatic routing. Measured: APO Round 01 drawer-aware queries average 0.323 embedding similarity vs 0.027 for unrelated (3/3 pairwise wins).
-- **[adaptmem](https://github.com/nakata-app/adaptmem)** (@nakata-app) — sits at the encoder layer, not the consumption layer; orthogonal lift across retrieval modes; clean independent reproduction of MemPalace's published 0.966 R@5 number via monkey-patch encoder swap on `longmemeval_bench.py`.
-
-The four agreements across these systems: (1) verbatim storage as the base layer, (2) no LLM in the index path, (3) wings as scope routing rather than required classification, (4) the consumption problem is real and not solved by retrieval quality. The divergence — where intelligence above retrieval lives — is where the field's debate actually is, and it's an interesting place to be wrong in different directions. The three-way (Familiar / CampaignGenerator / Kent) comparison plus the adaptmem orthogonality finding live at [`docs/research/three-mempalace-consumers.md`](docs/research/three-mempalace-consumers.md) and [`docs/research/adaptmem-orthogonal-layers.md`](docs/research/adaptmem-orthogonal-layers.md).
+The fork's architectural thinking — the four-layer memory model, the verbatim-vs-derivative thesis, design principles, and the two-memory-layer pairing with Auto Dream — lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The new things here are *what we've learned*, not just what we've fixed.
 
 ## Why this fork exists
 
@@ -147,64 +83,7 @@ We surveyed the memory-system landscape in April 2026 and found no verbatim-firs
 - **Mem0 shipped a significant algorithm upgrade** (single-pass hierarchical extraction + multi-signal retrieval → 91.6%) without going verbatim. Added opt-in `infer=False` for verbatim hard constraints — an escape hatch, not a core commitment.
 - **MCP memory server space fragmented dramatically.** At least 6 new systems with MCP support since April: agentmemory, OMEGA, ai-memory, iai-mcp, Open Brain, EngramX v4.0. Most are local-first SQLite. Differentiators narrowing to verbatim-vs-extraction and consolidation strategy.
 
-The April-2026 verbatim cluster (MemPalace, Celiums, Longhand, engram all within ~8 days) is no longer an isolated coincidence — it was the leading edge of a pattern now confirmed by academic work and a second wave of implementations. The differentiator: **verbatim storage is the foundation; everything else (tags, KG, decay, summaries, consolidated indices) is enrichment layered on top.** If any layer fails or needs rebuilding, the underlying truth is still there. The same architectural call has been winning in observability for a decade — Grafana Loki's verbatim-event store, with the recent [Kafka rearchitect](https://www.infoq.com/news/2026/04/grafana-loki-ai-agents/) (10× faster aggregated queries, 20× less data scanned), is what mature verbatim-first systems eventually do under scale pressure — useful precedent for the substrate section below.
-
-## Substrate: Postgres + pgvector + Apache AGE
-
-*Status (2026-05-24): **shipped on `main`** and serving production traffic since 2026-05-15. Postgres backend cherry-picked from upstream [#665](https://github.com/MemPalace/mempalace/pull/665) (skuznetsov's PostgreSQL backend on the RFC 001 `BaseBackend` contract) plus our pgvector lazy-index race fix (commit `4566f8a`, also posted to #665 as an operator follow-up). Live on `disks.jphe.in:5433` running PG16 + pgvector 0.8.2 + AGE 1.6.0 via `apache/age:release_PG16_1.6.0` + `postgresql-16-pgvector`. **335K+ drawer palace.** Hybrid retrieval (vector ∪ tsvector BM25 ∪ AGE graph) is the default for all callers — MCP `candidate_strategy` default changed to `"hybrid"` on 2026-05-24. AGE knowledge graph fully integrated: writethrough on every drawer write + backfill for existing drawers ([PR #101](https://github.com/techempower-org/mempalace/pull/101)). 8/9 mempalace bench suites pass on postgres backend ([`docs/benchmarks/2026-05-15-remaining-benches.json`](docs/benchmarks/2026-05-15-remaining-benches.json)). Full operator narrative at [`docs/operators/pgvector-cutover-runbook.md`](docs/operators/pgvector-cutover-runbook.md).*
-
-This is composition, not a fork-led architectural shift: `BaseBackend` + `BaseCollection` + `PalaceRef` + the entry-point registry already live in upstream develop at [`mempalace/backends/`](https://github.com/MemPalace/mempalace/tree/develop/mempalace/backends), explicitly designed so third-party backends register via Python entry points without touching core. The architectural decision was upstream's; the fork's contribution is choosing pgvector + AGE as one specific implementation worth picking — and running it.
-
-**What this consolidates.** Vector search, full-text search, graph traversal, and the temporal entity-relationship store all in a single engine. Previously: ChromaDB (HNSW vectors), SQLite (BM25 + KG triples + corpus_origin index), graph cache (in-process). Now: one Postgres connection, one transaction model, one backup story, one operational surface.
-
-**The bridge pattern.** Microsoft's [pgvector ↔ Apache AGE post](https://techcommunity.microsoft.com/blog/adforpostgresql/combining-pgvector-and-apache-age---knowledge-graph--semantic-intelligence-in-a-/4508781) (Raunak, 2026-04-15) describes the architectural reference: pgvector cosine similarity scores written as `SIMILAR_TO` edges in the AGE property graph, making vector similarity itself a traversable relationship. The KG-extraction work (P4, now shipped — see [Walking the palace](#walking-the-palace--apache-age-integration-2026-05-17)) landed naturally with the graph in-database; P5 (temporal fact validity) remains future work.
-
-**What stays the same.** The verbatim-first commitment is unchanged — Postgres tables hold the same canonical raw text, just on a different storage engine. The multi-collection-by-purpose pattern (Principle 1 of the thesis) maps directly onto Postgres schemas or per-collection tables. Composition with upstream stays the rule: this is a backend implementation against the seam, not a parallel reimplementation. The fork's main branch keeps tracking upstream develop; ChromaDB stays the upstream default (`MEMPALACE_BACKEND=chroma`).
-
-**The composition discipline.** Writing the implementation against #665's contract means the fork picks up improvements skuznetsov ships on the way to merge, rather than diverging. dekoza's bus-factor concern on the optional `pg_sorted_heap` path was addressed by skuznetsov's 2026-04-19 rewrite — pgvector is now the broadly-available default; `pg_sorted_heap` is opt-in for self-managed installs. Our deployment runs the pgvector path, making us a real-world consumer of the seam.
-
-**What we've learned running it (2026-05-24).** The speculative questions from the pre-cutover writeup are now answered: embedding-model identity was a non-issue (same MiniLM-L6-v2 ONNX model, same 384-dim vectors, no re-embedding needed). The bridge pattern — pgvector ↔ AGE in one engine — handles 335K+ drawers without a custom indexing strategy; standard HNSW + GIN + btree indexes suffice. Operational ergonomics are strictly better than the daemon-fronted ChromaDB era: one `pg_dump` backs up everything, HNSW staleness detection is simpler (pgvector rebuilds are in-place), and the AGE knowledge graph lives in the same transaction as the drawer write. The bench numbers justified the migration cost — 8/9 suites pass with no search-heap regressions.
-
-## "Walking the palace" — Apache AGE integration (2026-05-17)
-
-*Status (2026-05-24): **merged and live in production.** [PR #101](https://github.com/techempower-org/mempalace/pull/101) merged 2026-05-22; companion read-side fusion endpoint [techempower-org/palace-daemon#25](https://github.com/techempower-org/palace-daemon/pull/25) merged same day. AGE writethrough enabled (`MEMPALACE_KG_WRITETHROUGH=1`); backfill running against 335K+ existing drawers at ~5 drawers/s. MCP `candidate_strategy` default changed from `"vector"` to `"hybrid"` — all MCP callers now get vector + BM25 + AGE graph fusion automatically.*
-
-A six-phase plan to fully integrate the mempalace knowledge base with Apache AGE so the metaphor of *the AI walking into a palace and finding wings, rooms, and drawers* becomes real Cypher traversal — not a narrative device. The motivating result: a [2026-05-17 spike on n=200 git-derived probes](https://github.com/techempower-org/multipass-structural-memory-eval/blob/feat/rlm-adapter/docs/benchmarks/2026-05-17-age-write-through-spike.md) showed graph signal adds **+9pp R@5** over vector-only retrieval (graph-only beats vector by +5pp; RRF fusion adds another +4pp on top).
-
-| Phase | What | Module |
-|---|---|---|
-| 1 | `KnowledgeGraphAGE` API parity with the SQLite KG (6 new methods) | `mempalace/knowledge_graph_age.py` |
-| 2 | Write-through middleware on `PostgresCollection.add/upsert` (every drawer write extracts entities + creates `:MENTIONS` edges in AGE) | `mempalace/kg_writethrough.py` + `mempalace/backends/postgres.py` |
-| 3 | Palace structure as native AGE nodes (Wing → Room → Drawer + tunnels) | `mempalace/palace_graph_age.py` |
-| 4 | `backfill_age` — restartable, checkpointed one-shot for existing drawer tables (~18h for 335K+ palace at ~5/s) | `mempalace/backfill_age.py` |
-| 5 | `POST /search/age-fused` endpoint on palace-daemon — vector ⊕ AGE graph RRF fusion | (palace-daemon repo) |
-| 6 | `mempalace_walk_palace` MCP tool — `start_wing` / `start_room` / `start_entity` × depth | `mempalace/mcp_server.py` |
-
-**The unified graph schema after all six phases:**
-
-```
-Wing  -[:CONTAINS]->  Room  -[:CONTAINS]->  Drawer  -[:MENTIONS]->  Entity
-  ↑                                                                    ↑
-  +-[:SHARED_VIA {via_room}]- Wing (tunnels)        (kg_writethrough auto-populates)
-```
-
-**The walk primitive** an agent calls:
-```python
-walk_palace(start_wing="memorypalace", depth=3)
-# → [{wing, room, drawer, entity}] rows for every reachable leaf
-```
-
-**AGE Cypher dialect gaps documented + worked around** during the build (AGE 1.6.0): no multi-column `RETURN` inside `cypher(...)`, no list literals (`RETURN [a, b]` errors), no `MERGE ... ON CREATE SET`, no `SET` on edge properties inline, no `coalesce()` in SET. All five encoded in the implementation. See PR #101 description for the full operational rollout plan and AGE Cypher gap inventory.
-
-Independent same-day cross-fork verification by [@nakata-app](https://github.com/nakata-app) on his AdaptMem fork found the same operational state via a different angle (code-level audit found `KnowledgeGraphAGE` skeleton-only on his fork; the state-level audit on the production palace-daemon found 2 placeholder vertices + 1 placeholder edge total). The two-angle convergence is itself a methodology callout the [SME spec arc](https://github.com/M0nkeyFl0wer/multipass-structural-memory-eval/issues/9) intends to incorporate: *"substrate is ready" claims need cross-fork verification before downstream work depends on them.*
-
-## What this fork ships, organized by axis
-
-Three bands of work, all instances of the principles above. Detail rows in the [appendix](#fork-change-inventory) at the bottom.
-
-- **Structural retrieval fixes (Principle 1, Principle 2).** Verbatim-only model: hooks no longer write 1KB checkpoint summaries; auto-mined transcript chunks land in `mempalace_drawers` and `mempalace_search` reaches them directly. The earlier dedicated `mempalace_session_recovery` collection (Apr 25–May 5) and its read-only `mempalace_session_recovery_read` MCP tool have been retired (May 5 — see `docs/superpowers/specs/2026-05-05-verbatim-only-design.md`). Net result: one collection, one search path, no kind-filter / over-fetch hack. `drawer_id` surfacing on every search/diary hit so callers can build citation popovers and follow-ups.
-- **Single-writer architecture (Principle 3).** [palace-daemon](https://github.com/techempower-org/palace-daemon) is the only process that opens the palace; clients connect over HTTP. ChromaDB 1.5.x's HNSW concurrency hazards (`#974`/`#965`/`#823` family) become structurally impossible. Cold-start integrity sniff-test on segment metadata files prevents `quarantine_stale_hnsw` from destroying healthy indexes during async-flush lag. Cherry-pick of upstream [#1085](https://github.com/MemPalace/mempalace/pull/1085) for 10–30× mining speedup; fork-side boundary-level None-metadata coercion that closes a per-site-guard family, filed upstream as [#1094](https://github.com/MemPalace/mempalace/pull/1094).
-- **Deterministic hook saves (Principles 1+2+3 compose).** Silent saves bypass auto-memory conflicts entirely — the LLM is no longer in the save path, so `decision: "block"` race conditions and Claude's auto-memory winning over MCP tools both go away. Verbatim transcript ingest is the entire save path; the save marker advances on each fire and `systemMessage` reports the wing the ingest landed in. PreCompact does the same — sync-mines the transcript before context boundary, no separate marker write.
+The April-2026 verbatim cluster (MemPalace, Celiums, Longhand, engram all within ~8 days) is no longer an isolated coincidence — it was the leading edge of a pattern now confirmed by academic work and a second wave of implementations. The differentiator: **verbatim storage is the foundation; everything else (tags, KG, decay, summaries, consolidated indices) is enrichment layered on top.**
 
 ## Quickstart
 
@@ -247,105 +126,43 @@ A Stop hook fires every 15 messages in Claude Code, triggers verbatim transcript
 
 When the HNSW index is genuinely degraded (rare, post-fix), the same call returns `warnings: ["vector search returned 0 of 5 requested; filled 5 from sqlite+BM25 keyword match"]` with hits tagged `"matched_via": "sqlite_bm25_fallback"` — data is never silently hidden.
 
-## Architectural principles
+## Current state
 
-Three operational principles that inform PR review alongside the thesis above. They predate the thesis but converge on the same conclusions, and they're the design tests against which new fork-side work gets evaluated.
+**Substrate (2026-05-15).** Postgres + pgvector + Apache AGE shipped on `main` and serving production traffic. PG16 + pgvector 0.8.2 + AGE 1.6.0 on `disks.jphe.in:5433`. One engine consolidates vector search, full-text search (tsvector BM25), graph traversal, and the temporal entity-relationship store — previously four separate systems (ChromaDB + SQLite + graph cache). 8/9 bench suites pass. Full operator narrative at [`docs/operators/pgvector-cutover-runbook.md`](docs/operators/pgvector-cutover-runbook.md).
 
-### 1. Lazy derivation with graceful fallback is the pattern
+**AGE integration (2026-05-22).** [PR #101](https://github.com/techempower-org/mempalace/pull/101) merged — six-phase AGE integration complete. Writethrough middleware on every drawer write extracts entities and creates `:MENTIONS` edges in the AGE graph. Backfill running against 335K+ existing drawers at ~5/s. The `mempalace_walk_palace` MCP tool enables Cypher traversal by wing, room, or entity. A [2026-05-17 spike](https://github.com/techempower-org/multipass-structural-memory-eval/blob/feat/rlm-adapter/docs/benchmarks/2026-05-17-age-write-through-spike.md) showed graph signal adds **+9pp R@5** over vector-only retrieval.
 
-Write the raw text first; derive everything else lazily, from unambiguous signals, with a graceful fallback when derivation fails. The verbatim archive is the one thing that must always succeed. Optional enrichment (LLM topic extraction, AAAK encoding, concept chunking) is welcome as long as it stays opt-in, additive, and never a prerequisite for the write to complete.
+**Hybrid retrieval (2026-05-24).** `candidate_strategy="hybrid"` (vector ∪ tsvector BM25 ∪ AGE graph-expanded candidates, hybrid-reranked) is now the MCP default for all callers.
 
-The inverse — making classification a *gate* — is where the fork's earliest visible bugs came from: `room=None` crashes, a stopword list at 285 English entries papering over false positives, wing misassignment. Entity detection misfires, classifiers force wrong rooms, LLM-extracted "facts" lose nuance and can't be un-extracted. The fork's design test for any new write-path feature is now: *does this require interpreting content at write time?* If yes, derive lazily instead.
+## What this fork ships
 
-Same instinct as the verbatim-vs-derivative axis. Derivative work belongs *next to* the verbatim record, never *replacing* it. Anthropic's Dreams API (below) made the same call at the vendor-API level: input read-only, output a separate store.
+Three bands of work, all instances of the [architectural principles](docs/ARCHITECTURE.md#design-principles). Detail rows in the [fork change inventory](#fork-change-inventory) and [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md).
 
-### 2. Derived hierarchy from unambiguous signals outperforms hand-classified hierarchy
-
-Hierarchy works when it's derived from unambiguous signals (cwd, transcript path, project directory) — not when it's hand-classified by content inspection. The earlier mistake was conflating "hierarchy is bad" with "mandatory synchronous classification is bad" — different claims.
-
-**Good uses of hierarchy, which we keep:**
-- **Browseable scope** for serendipitous recall across 335K+ drawers.
-- **Deletion and retention as a unit.** Purging an abandoned project is one operation, not a risky query-then-delete.
-- **Disambiguation without query gymnastics.** The same keyword across years of unrelated work.
-- **Auto-surfacing priors.** A wing derived from cwd is a cheap, unambiguous scoping signal.
-
-**Bad uses, which we're unwinding:**
-- Required at write time (caused all the crashes).
-- Derived from content-inspection heuristics (NER, keyword matching) rather than unambiguous signals.
-- Single-label, as if every drawer had one true parent. Cross-cutting concerns belong in tags ([P0](#planned-work)).
-- Deep nesting when shallow would do.
-
-### 3. Algorithmic effort belongs on retrieval, not on write-time classification
-
-Spend the algorithmic budget on retrieval, where quality compounds. Classification quality has a hard ceiling set by the accuracy of the classifier, and a write-time classifier won't be that accurate. Vector + BM25 + optional scope filter already beats the hierarchy on its own. Tags ([P0](#planned-work)), feedback ([P3](#planned-work)), and decay ([P2](#planned-work)) extend without requiring write-time commitment.
-
-Effort spent tuning the entity detector is effort not spent on the thing that pays compounding returns — which, per the [four-layer model](#the-four-layers), is now visibly four independent surfaces, not one.
-
-## Two memory layers
-
-Claude Code has two complementary memory layers, used in tandem:
-
-| Layer | Storage | Size | Consolidation | Purpose |
-|---|---|---|---|---|
-| **Auto-memory** | `~/.claude/projects/*/memory/*.md` | ~17 files (this project) | **Auto Dream** (research preview in both Claude Code and the Managed Agents Dreams API; beta header `dreaming-2026-04-21`) | Preferences, feedback, context |
-| **MemPalace** | palace-daemon at `http://disks.jphe.in:8085` (postgres + pgvector + Apache AGE + KG writethrough) | 335K+ drawers | None — deliberately. See below. | Verbatim conversations, tool output, code |
-
-**Auto Dream's arrival ratifies the verbatim-vs-derivative axis.** Anthropic shipped Auto Dream in two surfaces in late April, both research preview: a [research-preview consolidator inside Claude Code](https://claudefa.st/blog/guide/mechanics/auto-dream) (manual `/dream` or auto-trigger when both 24 hours and 5+ sessions have elapsed since the last run; reads `~/.claude/projects/<project>/memory/` + MEMORY.md + JSONL transcripts + daily logs; writes back to the same memory directory) and a [Dreams API in Managed Agents](https://platform.claude.com/docs/en/managed-agents/dreams) (REST research preview, beta header `dreaming-2026-04-21`, supported models `claude-opus-4-7` and `claude-sonnet-4-6`, up to 100 sessions per dream, optional 4096-character `instructions`).
-
-The Dreams API design is the more architecturally interesting half because it ratifies an axis this fork's been arguing: **the input memory store is never modified; the dream produces a separate output store you can review, attach, or discard.** Non-destructive consolidation of verbatim inputs, with a review gate, where the model curates rather than mutates. That is the verbatim-vs-derivative pattern at the level of a vendor API. The April-2026 verbatim cohort and Anthropic's Dreams API landed on the same architectural call from different starting points.
-
-**Why MemPalace deliberately doesn't consolidate the verbatim layer.** Both Dreams surfaces consume the *same* JSONL transcripts that MemPalace mines. The pairing is complementary, not competitive: Auto Dream curates a small high-signal index for the model to read on every turn; MemPalace stores the corpus verbatim for post-hoc retrieval. Consolidating MemPalace's verbatim layer would forfeit exactly the property that makes it useful — the ability to audit, re-derive, and recover the original utterance. Decay ([P2](#planned-work)), feedback ([P3](#planned-work)), KG ([P4](#planned-work)), and tags ([P0](#planned-work)) are the right places to invest derivative effort because they sit *next to* the verbatim record, not on top of it. The verbatim layer doesn't need consolidation; it needs durability.
+- **Structural retrieval fixes.** Verbatim-only model: hooks no longer write 1KB checkpoint summaries; auto-mined transcript chunks land in `mempalace_drawers` and `mempalace_search` reaches them directly. One collection, one search path, no kind-filter / over-fetch hack.
+- **Single-writer architecture.** [palace-daemon](https://github.com/techempower-org/palace-daemon) is the only process that opens the palace; clients connect over HTTP. ChromaDB HNSW concurrency hazards become structurally impossible.
+- **Deterministic hook saves.** Silent saves bypass auto-memory conflicts — the LLM is no longer in the save path. Verbatim transcript ingest is the entire save path.
 
 ## Planned work
 
-Reorganized 2026-04-26 around the verbatim-vs-derivative axis. Each item evaluated against the three architectural principles + the three thesis principles above.
+Organized around the [verbatim-vs-derivative axis](docs/ARCHITECTURE.md#1-verbatim-vs-derivative-is-the-canonical-axis). Each item evaluated against the architectural principles.
 
-### Verbatim-store improvements
-
-- **P0 — Multi-label tags** *(1-2 days, additive)*. Tags are the cross-cutting-concerns layer that hierarchy can't provide. Add `tags` metadata (3-8 per drawer) extracted during mining via TF-IDF or longest-non-stopword heuristic. Adjacent: [#1033](https://github.com/MemPalace/mempalace/pull/1033) (`<private>` tag filter, @zackchiutw) is single-purpose; full multi-label additive on top. Optional opt-in `--enrich` flag for Haiku-extracted topic tags (96.6% R@5 baseline → competitive before rerank).
-- **P1 — Derive hierarchy from unambiguous signals** *(half day)*. Reframe from "best-effort classification" to "derive from cwd, transcript path, project directory." Default wing to source dir name (already mostly works). Demote entity detector to last-resort hint, not gate. Documents the derivation order: cwd → transcript path → project hint → (optional) entity hint → unfiled.
-- **P6 — Input sanitization on writes** *(half day)*. Strip known injection patterns. Flag with `sanitized: true` metadata, don't block. 10K char cap. Low priority while local-only.
-
-### Derivative-store work (the new axis)
-
-- **P8 — Corpus partitioning by purpose** *(architectural, on hold)*. The recovery-collection split (Apr 25 → May 5, 2026) was the first attempt at this — moved Stop-hook checkpoints to a dedicated `mempalace_session_recovery` collection. Retired May 5: splitting required every read path to query both collections, but the recovery side never got a semantic-search MCP surface, so checkpoints became invisible to `mempalace_search`. The architectural pattern stays valid for future siblings (KG-triple store ([P4](#p4-anchor)), Haiku-enriched topic docs, transcript-mine outputs in the [#1083](https://github.com/MemPalace/mempalace/issues/1083) family), but each new sibling collection has to earn its own read tool before it gets writes. Worth flagging in [RFC 001](https://github.com/MemPalace/mempalace/pull/743) so future backends know that multi-collection-per-palace is the pattern AND that read-surface parity is a precondition.
-- **P4 — KG auto-population + entity resolution** *(shipped 2026-05-22)*. <a id="p4-anchor"></a> Writethrough middleware on `PostgresCollection.add/upsert` extracts entities via regex (no LLM) and creates `:MENTIONS` edges in the AGE graph on every drawer write. Backfill for existing drawers via `POST /backfill-age`. Entity resolution (alias table + Levenshtein normalization) remains future work. Triples are *derived* — re-mine if extraction improves; verbatim untouched.
-- **P5 — Temporal fact validity** *(1 day, depends on P4)*. KG triples get a context slot (SPOC: subject-predicate-object-context). Reference: Zep's [Graphiti](https://github.com/getzep/graphiti). *Same Postgres+AGE caveat as P4 — temporal validity ranges are SQL-native on Postgres in a way they aren't across two engines.*
-
-### Cross-cutting
-
-- **P2 — Decay / recency weighting** *(tracked upstream)*. Handled by [#1032](https://github.com/MemPalace/mempalace/pull/1032) (Weibull decay, MERGEABLE). Independent `mempalace prune --stale-days 180` CLI is still a fork opportunity.
-- **P3 — Feedback loops** *(rerank tracked upstream; rating still open)*. #1032 covers Tier 0 LLM rerank (96.6% → 99.4% with Haiku). Tier 1+: `mempalace_rate_memory(drawer_id, useful: bool)` MCP tool, implicit echo/fizzle signals. Reference: [Celiums](https://celiums.ai/)'s novelty + emotional + circadian importance scoring.
-- **P7 — Alternative storage modes** *(tracked upstream + fork-side pgvector+AGE implementation in flight)*. Upstream owns the [RFC 001](https://github.com/MemPalace/mempalace/pull/743) seam and the four backend-implementation PRs. Fork is running [Postgres + pgvector + Apache AGE](#substrate-postgres--pgvector--apache-age) as one specific implementation against that seam — composition, not a parallel reimplementation. See the dedicated section earlier for substrate state and Plan-B trigger.
-
-### Deprioritized
-
-- **Expanding hierarchy types** (tunnels, closets, new room categories). Adding categories doesn't address the write-time classification problem. Tags (P0) and derived scope (P1) do.
-- **Full architecture rewrite** — not worth migration cost.
-- **Dual-granularity ANN, dream engine, foresight signals** ([Karta](https://github.com/rohithzr/karta)-inspired) — require LLM calls on every write. Zero-LLM philosophy makes these opt-in at best.
-- ~~**FTS5 parallel index**~~ — superseded by Postgres `tsvector` BM25, which shipped as part of the pgvector substrate cutover. Full-text search is now native and fused into the hybrid pipeline.
+| ID | What | Status | Tracking |
+|---|---|---|---|
+| P0 | Multi-label tags (3-8 per drawer, TF-IDF extraction) | Open | Fork-side |
+| P1 | Derive hierarchy from unambiguous signals (cwd, transcript path) | Open | Fork-side |
+| P2 | Decay / recency weighting (Weibull) | Tracked upstream | [#1032](https://github.com/MemPalace/mempalace/pull/1032) |
+| P3 | Feedback loops (rerank + rating MCP tool) | Rerank tracked upstream | [#1032](https://github.com/MemPalace/mempalace/pull/1032) |
+| P4 | KG auto-population + entity resolution | **Shipped 2026-05-22** | [PR #101](https://github.com/techempower-org/mempalace/pull/101) |
+| P5 | Temporal fact validity (SPOC context slot) | Open, depends on P4 | — |
+| P6 | Input sanitization on writes | Low priority while local-only | — |
+| P7 | Alternative storage modes | **Shipped** (pgvector+AGE) | [RFC 001 #743](https://github.com/MemPalace/mempalace/pull/743) |
+| P8 | Corpus partitioning by purpose | On hold | [Design doc](docs/designs/multi-palace-separation.md) |
 
 ## Active investigations
 
-### Engram-2's "17% E2E QA" critique — closing
-
-[engram-2](https://github.com/199-biotechnologies/engram-2) published a benchmark note stating MemPalace achieves 0.984 R@5 on LongMemEval but only 17% end-to-end question-answering accuracy. The structural fix shipped 2026-04-25 → 2026-04-26 demonstrably closes one concrete instance — checkpoint domination of `mempalace_search` results — on this corpus. Pre-migration `kind=content` returned 3 tokens/Q; post-migration it returns 1,267. End-to-end LongMemEval-S through this fork against a modern reader model is instrumented; results will land at `notebook/data/cat9-postmigrate-e2e/REPORT.md`. The corpus-shape thesis is the durable claim; the E2E number will be the operationalization.
-
-### Hybrid retrieval A/B — resolved
-
-BM25 + vector + AGE graph fusion with reciprocal rank fusion shipped as `candidate_strategy="hybrid"` and became the MCP default on 2026-05-24. The [2026-05-17 spike](https://github.com/techempower-org/multipass-structural-memory-eval/blob/feat/rlm-adapter/docs/benchmarks/2026-05-17-age-write-through-spike.md) showed graph signal adds +9pp R@5 over vector-only. HyDE is structurally weak for this corpus shape ([#6](https://github.com/techempower-org/familiar.realm.watch/issues/6)); multi-encoder RRF is the next lever (tracked at [#82](https://github.com/techempower-org/mempalace/issues/82)).
-
-### Cat 9 / The Handshake as a generalizable measurement
-
-The SME framework's Cat 9 is an underappreciated piece of the memory-systems landscape — every deployment runs into the integration gap; the field's benchmarks deliberately don't measure it. The [four-layer section](#the-four-layers) above leads with the cleanest numbers we have: 46.67% / 78.33% on RLM-vs-Familiar at the retrieval-into-consumption boundary. Scaling that comparison up across the verbatim-first cohort (Longhand, Celiums, mcp-memory-service) is the right next move; adapter work tracked at [`jphein/multipass-structural-memory-eval`](https://github.com/jphein/multipass-structural-memory-eval). Grafana's [o11y-bench](https://grafana.com/blog/o11y-bench-open-benchmark-for-observability-agents/) (April 2026) is the same instinct applied to observability — bench what agents actually *do* with the data, not just retrieval-side metrics — and worth tracking as the pattern matures across domains.
-
-### Multi-palace separation — curated "authority" vs auto-mined memory
-
-@kostadis raised in upstream [#1018](https://github.com/MemPalace/mempalace/discussions/1018): a manually curated palace alongside the auto-mined chat palace. The hooks dump everything into one palace today, polluting curated content. Right fix is multi-palace support with per-hook target flag — design needs review (does it fit the single-`palace_path` model? does it want `palace_name` aliases?). P8 (collection partitioning) might absorb this — different collections per purpose inside the same palace, vs. multiple palaces. Decide once we've tried the lighter move first.
-
-### Stale auto-loaded docs
-
-Knowledge lives across 7+ layers: global CLAUDE.md, project CLAUDE.md, auto-memory, docs/, superpowers specs, code comments, MemPalace. The auto-loaded layers go stale and actively mislead. MemPalace is the only layer that *can't* go stale (verbatim + timestamped) but never auto-loaded. Planned `/verify-docs` slash command pattern-matches version strings, file paths, PR numbers, URLs, and verifies against current state. Cleaning stale docs prevents more wrong assumptions than any amount of auto-querying.
+- **Engram-2's "17% E2E QA" critique** — closing. Structural fix shipped (checkpoint corpus-shape correction); E2E LongMemEval run instrumented, results to publish at `notebook/data/cat9-postmigrate-e2e/REPORT.md`.
+- **Cat 9 / The Handshake** — generalizable measurement of the retrieval→consumption gap. 46.67% / 78.33% on RLM-vs-Familiar. Scaling across the verbatim-first cohort via [`jphein/multipass-structural-memory-eval`](https://github.com/jphein/multipass-structural-memory-eval).
+- **Multi-palace separation** — curated "authority" vs auto-mined memory ([upstream #1018](https://github.com/MemPalace/mempalace/discussions/1018)). P8 may absorb. [Design doc](docs/designs/multi-palace-separation.md).
 
 ## Composition with upstream
 
@@ -353,65 +170,20 @@ A meaningful shift in 2026-04 and 2026-05: this fork increasingly *composes with
 
 - **Cherry-picks (in-flight upstream PRs we use early):** [#665](https://github.com/MemPalace/mempalace/pull/665) PostgreSQL backend (commit `5e90c72`, the substrate work above), [#1085](https://github.com/MemPalace/mempalace/pull/1085) batched inserts (`6be6fff` — CLOSED 2026-05-16, superseded by merged [#1185](https://github.com/MemPalace/mempalace/pull/1185); safe to drop on next sync), [#1087 rewrite](https://github.com/MemPalace/mempalace/pull/1087) `cmd_purge` via `delete(where=)` (`366a9ad`), [#1094](https://github.com/MemPalace/mempalace/pull/1094) None-metadata coercion (`43d728d`).
 - **Co-authored merges:** [#1377](https://github.com/MemPalace/mempalace/pull/1377) (surgical `_get_collection` retry-once, shipped in v3.3.5 — originated from this fork via #1286 which igorls closed and re-extracted with `Co-authored-by` credit).
-- **Coordinated reviews:** [#1199](https://github.com/MemPalace/mempalace/pull/1199) (rmdes' unbounded-ingest fix — pulled and tested locally, +1 with composition note), [#1219](https://github.com/MemPalace/mempalace/pull/1219) (pepo72's drawer_id — narrower than ours; offered the diary/recovery extension), [RFC 001 #743](https://github.com/MemPalace/mempalace/pull/743) (storage backend spec — flagged the multi-collection-by-purpose pattern as worth naming explicitly).
-- **Closed in favor of upstream:** [#1171](https://github.com/MemPalace/mempalace/pull/1171) cross-process write lock (closed 2026-04-25 — Felipe's [#976](https://github.com/MemPalace/mempalace/pull/976) `mine_global_lock` at the right layer plus daemon-strict architecture obsoleted ours).
+- **Coordinated reviews:** [#1199](https://github.com/MemPalace/mempalace/pull/1199) (rmdes' unbounded-ingest fix), [#1219](https://github.com/MemPalace/mempalace/pull/1219) (pepo72's drawer_id), [RFC 001 #743](https://github.com/MemPalace/mempalace/pull/743) (storage backend spec).
+- **Closed in favor of upstream:** [#1171](https://github.com/MemPalace/mempalace/pull/1171) cross-process write lock (closed 2026-04-25 — Felipe's [#976](https://github.com/MemPalace/mempalace/pull/976) plus daemon-strict architecture obsoleted ours).
 
-The fork ships structural moves first, validates them on the canonical palace, then either contributes upstream as PRs or aligns with upstream's parallel implementation. The substrate work is the cleanest current example: rather than fork-port #665, wait for it to merge and run our implementation on top of its contract, with a documented trigger to switch strategies if upstream stalls. The composition is the point.
+The fork ships structural moves first, validates them on the canonical palace, then either contributes upstream as PRs or aligns with upstream's parallel implementation. The composition is the point.
 
-## Ecosystem — third-party projects, forks, and evaluation frameworks
+## Ecosystem
 
-From a 2026-04-21 sweep of upstream MemPalace issue + comment + discussion history, updated with peer-build entries surfaced in May. State moves; check the repos directly for current status.
+Four peer builds converged on the same architectural agreements as this fork (verbatim base layer, no LLM in index path, wings as scope routing, consumption problem unsolved by retrieval): [Familiar](https://github.com/jphein/familiar.realm.watch) (78.33% recall), [CampaignGenerator](https://github.com/kostadis/CampaignGenerator) (19.82x cost reduction), [Kent](https://github.com/kenchambers/kent) (APO training), [adaptmem](https://github.com/nakata-app/adaptmem) (orthogonal encoder lift). The [multipass-structural-memory-eval](https://github.com/M0nkeyFl0wer/multipass-structural-memory-eval) framework provides the Cat 9 / Handshake diagnostic.
 
-### Companion tools (compose with MemPalace, don't replace it)
-
-- **[palace-daemon](https://github.com/rboarescu/palace-daemon)** (@rboarescu) — FastAPI gateway + MCP-over-HTTP proxy. Three asyncio semaphores (read / write / mine). Pins correctness floor at MemPalace ≥3.3.2. **This fork migrated to palace-daemon on 2026-04-24** ([`c09582c`](https://github.com/techempower-org/mempalace/commit/c09582c) wired MCP + hooks; [`0e97b19`](https://github.com/techempower-org/mempalace/commit/0e97b19) added daemon-strict mode). All reads and writes from the plugin flow through the daemon; auto-migrate-on-startup of the checkpoint split landed as palace-daemon [`034023c`](https://github.com/techempower-org/palace-daemon/commit/034023c). JP's deployment runs at [`techempower-org/palace-daemon`](https://github.com/techempower-org/palace-daemon).
-- **[engram](https://github.com/NickCirv/engram)** (@NickCirv) — File-read interception for AI coding assistants. Uses MemPalace as one of six context providers via `mcp-mempalace mempalace-search`; caches with 1h TTL. Upstream [discussion #798](https://github.com/MemPalace/mempalace/discussions/798).
-- **[engram](https://github.com/harreh3iesh/engram)** (@harreh3iesh — different project, same name) — Hooks + tools for AI memory, first-class MemPalace backend. **Stuck detector** (`PreToolUse` hook counts Grep/Glob calls and nudges the AI when spinning) is a pattern worth borrowing. Upstream [discussion #748](https://github.com/MemPalace/mempalace/discussions/748).
-- **[cdd-mempalace](https://github.com/fuzzymoomoo/cdd-mempalace)** (@fuzzymoomoo) — Bridge library mapping Context-Driven Development methodology onto wings/halls/rooms. Multiple active upstream PRs.
-
-### Evaluation frameworks
-
-- **[multipass-structural-memory-eval](https://github.com/M0nkeyFl0wer/multipass-structural-memory-eval)** (@M0nkeyFl0wer) — Nine-category diagnostic framework. **"Category 9: The Handshake"** tests integration under production model usage, not just offline retrieval — the gap the [four-layer](#the-four-layers) lede's invocation finding lives in. Forked at [jphein/multipass-structural-memory-eval](https://github.com/jphein/multipass-structural-memory-eval). The mempalace-daemon adapter at `sme/adapters/mempalace_daemon.py` talks HTTP/MCP only — no parallel `PersistentClient`, daemon-strict-compatible. The Cat 9 A/B harness used for the 2026-04-25 → 2026-04-26 measurements lives here.
-
-### Adjacent / competing memory systems
-
-See the [expanded comparison table](#why-this-fork-exists) above for the full landscape survey (updated 2026-05-24). Systems with specific fork interactions or benchmark findings worth noting:
-
-- **[agentmemory](https://github.com/rohitg00/agentmemory)** (@rohitg00) — BM25 + vector hybrid. **95.2% R@5** on LongMemEval-S with same MiniLM embedding model. Filed methodology review in upstream [#747](https://github.com/MemPalace/mempalace/discussions/747). Now 9.4K stars with 53 MCP tools.
-- **[engram-2](https://github.com/199-biotechnologies/engram-2)** — Rust CLI, deterministic, SQLite + FTS5 only. Hybrid via Gemini embeddings + FTS5 reciprocal rank fusion. **0.990 R@5** vs MemPalace's 0.984 with no reranking, claims **17% end-to-end QA** for MemPalace — the critique the structural-fix work above closes. Memory-layer-budgeting (identity / critical / topic / deep tiers with token accounting) is worth studying.
-- **[Tiro (project-tiro)](https://github.com/esagduyu/project-tiro)** (@esagduyu) — Same data-spine architecture (FastAPI + ChromaDB + SQLite + sentence-transformers + MCP) but *curated* input domain (web pages, email newsletters as clean markdown). Architectural twin to MemPalace's auto-mine-everything: same stack, different input shape. Forked at [jphein/project-tiro](https://github.com/jphein/project-tiro).
-- **[claude-mem](https://github.com/thedotmack/claude-mem)** — 89K+ stars, largest community in the space. Explicitly non-verbatim (AI compression). Its dominance makes it the default comparison point even though its architecture takes the opposite approach.
-
-### Adjacent inference paradigms (different layer than memory)
-
-- **[RLM (Recursive Language Models)](https://github.com/alexzhang13/rlm)** (@alexzhang13, MIT OASYS) — LM offloads context as a REPL variable and recursively decomposes. Targets near-infinite context length. Forked at [jphein/rlm](https://github.com/jphein/rlm); integration example at [`examples/mempalace_demo.py`](https://github.com/jphein/rlm/blob/main/examples/mempalace_demo.py). The [four-layer](#the-four-layers) section's 46.67% / 78.33% finding came from running this fork's SME adapter against the same RLM substrate against Familiar's deterministic pipeline.
-- **[ASI-Evolve](https://github.com/GAIR-NLP/ASI-Evolve)** (@GAIR-NLP) — Closed-loop autonomous research agent (Researcher / Engineer / Analyzer). Two parallel memory systems: **Cognition Store** (upfront domain knowledge) and **Experiment Database** (every trial). Validated on neural architecture design (+0.97 over DeltaNet — ~3× recent human gains). [arXiv 2603.29640](https://arxiv.org/abs/2603.29640). Forked at [jphein/ASI-Evolve](https://github.com/jphein/ASI-Evolve). The Cognition Store is exactly the role MemPalace would play.
-
-### MemPalace-orbit projects (peer builds)
-
-Built *on top of* or *alongside* MemPalace by community contributors who use the palace as substrate. The [Convergence with peer systems](#convergence-with-peer-systems) section above narrates the architectural triangulation; this is the inventory.
-
-- **[Familiar](https://github.com/jphein/familiar.realm.watch)** (@jphein) — deterministic retrieval pipeline, llama.cpp + Phi-4 on Pascal GPUs, temporal query expansion, 78.33% recall on jp-realm-v0.1.
-- **[CampaignGenerator](https://github.com/kostadis/CampaignGenerator)** (@kostadis) — RPG session-prep over 2 TB PDFs + 5etools; 19.82× cost reduction at 0% R@10 loss via hierarchical AAAK pruning.
-- **[Kent](https://github.com/kenchambers/kent)** (@kenchambers) — typed async agent runtime with APO training subsystem and recall games.
-- **[adaptmem](https://github.com/nakata-app/adaptmem)** (@nakata-app) — encoder fine-tune adapter; orthogonal lift across retrieval modes.
-- **[GraphPalace](https://github.com/web3guru888/GraphPalace)** (@web3guru888) — graph-layer build. Forked at [jphein/GraphPalace](https://github.com/jphein/GraphPalace).
-- **[mempalace-viz](https://github.com/JoeDoesJits/mempalace-viz)** (@JoeDoesJits) — visualization layer (wings, rooms, tunnels, drawer counts). Forked at [jphein/mempalace-viz](https://github.com/techempower-org/mempalace-viz).
-- **[AutomataArena](https://github.com/astrutt/AutomataArena)** (@astrutt) — multi-agent orchestration substrate. Forked at [jphein/AutomataArena](https://github.com/jphein/AutomataArena).
-
-### Active forks beyond ours
-
-| Fork | Contributor work |
-|---|---|
-| [techempower-org/mempalace](https://github.com/techempower-org/mempalace) | this fork (transferred from `jphein/mempalace` in May 2026) |
-| [kostadis/mempalace](https://github.com/kostadis/mempalace) | hierarchical AAAK pruning branch |
-| [fuzzymoomoo/cdd-mempalace](https://github.com/fuzzymoomoo/cdd-mempalace) | 10 comment refs; CDD integration layer |
-| [potterdigital/mempalace](https://github.com/potterdigital/mempalace) | author of upstream [#1081](https://github.com/MemPalace/mempalace/pull/1081) |
-| [vnguyen-lexipol/mempalace](https://github.com/vnguyen-lexipol/mempalace) | author of upstream [#851](https://github.com/MemPalace/mempalace/pull/851) |
+Full inventory of companion tools, evaluation frameworks, competing systems, peer builds, and active forks in [`docs/ECOSYSTEM.md`](docs/ECOSYSTEM.md).
 
 ## Open upstream PRs
 
-Open from this fork as of 2026-05-22. Run `gh pr list --repo MemPalace/mempalace --author jphein --state open` for the live list. Recently merged: [#1024](https://github.com/MemPalace/mempalace/pull/1024) (configurable chunking, 2026-05-15), [#1459](https://github.com/MemPalace/mempalace/pull/1459) (empty-metadata sentinel, 2026-05-12) and [#1474](https://github.com/MemPalace/mempalace/pull/1474) (convo_miner bulk pre-fetch, 2026-05-12).
+Open from this fork as of 2026-05-24. Run `gh pr list --repo MemPalace/mempalace --author jphein --state open` for the live list. Recently merged: [#1142](https://github.com/MemPalace/mempalace/pull/1142) (RELEASING.md, 2026-05-22), [#1494](https://github.com/MemPalace/mempalace/pull/1494) (recovery runbook, 2026-05-22), [#1487](https://github.com/MemPalace/mempalace/pull/1487) (rebuild_index progress, 2026-05-13), [#1024](https://github.com/MemPalace/mempalace/pull/1024) (configurable chunking, 2026-05-15), [#1459](https://github.com/MemPalace/mempalace/pull/1459) (empty-metadata sentinel, 2026-05-13) and [#1474](https://github.com/MemPalace/mempalace/pull/1474) (convo_miner bulk pre-fetch, 2026-05-13).
 
 | PR | Status | Description |
 |---|---|---|
@@ -420,23 +192,18 @@ Open from this fork as of 2026-05-22. Run `gh pr list --repo MemPalace/mempalace
 | [#1086](https://github.com/MemPalace/mempalace/pull/1086) | CI green, awaiting review | `mempalace export` CLI wrapper |
 | [#1087](https://github.com/MemPalace/mempalace/pull/1087) | CI green, **rewritten 2026-04-26** per @igorls's review | `mempalace purge --wing/--room` via `delete(where=)` (no nuke-and-rebuild) |
 | [#1094](https://github.com/MemPalace/mempalace/pull/1094) | CI green, awaiting review | Coerce `None` metadatas to `{}` at `ChromaCollection` boundary |
-| [#1142](https://github.com/MemPalace/mempalace/pull/1142) | CI green, @bensig accepted 2026-04-23 | `docs/RELEASING.md` |
 | [#1378](https://github.com/MemPalace/mempalace/pull/1378) | CI green | Hoist `CLOSET_RANK_BOOSTS` to module level + record VecRecall ablation finding |
 | [#1382](https://github.com/MemPalace/mempalace/pull/1382) | CI green | Benchmarks UTF-8 encoding + ASCII print chrome on Windows |
-| [#1484](https://github.com/MemPalace/mempalace/pull/1484) | CI pending | OpenCode source adapter on RFC 002 contract — co-authored with @JakobSachs (originated from his #23 spadework) |
+| [#1484](https://github.com/MemPalace/mempalace/pull/1484) | CI pending | OpenCode source adapter on RFC 002 contract — co-authored with @JakobSachs |
+| [#1508](https://github.com/MemPalace/mempalace/pull/1508) | CI pending | `symbol_header_prefix` kwarg in `chunk_text` |
 
 ## What's next
 
-Forward-looking, in rough priority order. The substrate work is the biggest single piece of in-flight engineering; everything else is incremental against the existing direction.
-
-- ~~**Complete the pgvector + Apache AGE backend implementation.**~~ Done — shipped on `main` since 2026-05-15, AGE integration merged 2026-05-22. See [Substrate](#substrate-postgres--pgvector--apache-age) and [Walking the palace](#walking-the-palace--apache-age-integration-2026-05-17) above.
-- **Publish Cat 9 end-to-end results** on the post-migration palace at `notebook/data/cat9-postmigrate-e2e/REPORT.md`, with adapter parity numbers across the verbatim-first cohort once the SME harness lands.
-- **Publish the multipass-structural-memory-eval harness** with adapters for MemPalace, Longhand, Celiums, mcp-memory-service so Cat 9 / The Handshake stops being a one-deployment story. The four-layer model needs the cross-system numbers to be more than this fork's read of its own corpus.
-- **Land P0 (multi-label tags) and P2 (decay/recency)** — P2 tracked upstream via [#1032](https://github.com/MemPalace/mempalace/pull/1032); P0 is fork-side until upstream wants it.
-- **Publish the verbatim-vs-derivative axis as a standalone essay**, distinct from the README. The Auto Dream Dreams-API arrival is the most quotable evidence yet that this axis matters at the vendor-API level; that observation deserves its own writeup.
-- **Coordinate with upstream on the multi-collection-by-purpose pattern** — implicit in RFC 001 today, worth naming explicitly so future backends plan for it. The substrate work surfaces this concretely: pgvector + AGE backends need to know about it.
-- **Agent-shaped CLI surface.** MCP brings palace data into Claude Code via tool calls; the peer surface is a pipe-friendly CLI with structured-output flags so agents, hooks, or scripts can call `mempalace search ... --json` and route results into context without the MCP roundtrip. Grafana's [GCX CLI](https://www.infoq.com/news/2026/04/grafana-loki-ai-agents/) is the prior art for this pattern in observability — bring the data to where the agent lives, don't force the agent into a separate UI. Today's `mempalace` CLI is operator-shaped (status / mine / repair / search); the next-generation surface should be agent-callable, with first-class JSON output and conventions that compose with shell pipelines and slash commands.
-- **First-class support across the AI coding agent ecosystem.** Today's integration is Claude Code-specific (Stop / PreCompact hooks, `~/.claude/projects/*.jsonl` mining). Target the broader set: [Claude Code](https://github.com/anthropics/claude-code), [OpenCode](https://opencode.ai/), [Cursor](https://cursor.com/), [Aider](https://aider.chat/), [Gemini CLI](https://github.com/google-gemini/gemini-cli), [Codex CLI](https://github.com/openai/codex), [Warp](https://www.warp.dev/), and adjacent. Path is upstream's [RFC 002 source-adapter spec](https://github.com/MemPalace/mempalace/pull/990) (tracking [#989](https://github.com/MemPalace/mempalace/issues/989)) — each agent ships a `pip install mempalace-source-<agent>` package mapping its session format onto the canonical drawer shape. Three integration cells: **read** is universal (the MCP server is already agent-agnostic), **mine** is per-agent via RFC 002 adapters, **hook/event** wiring lands wherever the host exposes a hook surface (mining-on-cron is the fallback). Fork unblocks the pattern by helping land RFC 002; per-agent adapter PRs land from their respective authors.
+- **Publish Cat 9 end-to-end results** on the post-migration palace, with adapter parity numbers across the verbatim-first cohort.
+- **Publish the multipass-structural-memory-eval harness** with adapters for MemPalace, Longhand, Celiums, mcp-memory-service.
+- **Land P0 (multi-label tags) and P2 (decay/recency)** — P2 tracked upstream via [#1032](https://github.com/MemPalace/mempalace/pull/1032); P0 fork-side.
+- **Agent-shaped CLI surface** — `mempalace search ... --json` for non-MCP integration. Prior art: Grafana's [GCX CLI](https://www.infoq.com/news/2026/04/grafana-loki-ai-agents/).
+- **First-class support across AI coding agents** — Claude Code, OpenCode, Cursor, Aider, Gemini CLI, Codex CLI, Warp. Path: upstream's [RFC 002 source-adapter spec](https://github.com/MemPalace/mempalace/pull/990). Three cells: **read** (MCP, already agent-agnostic), **mine** (per-agent via RFC 002), **hook/event** (per-host or mining-on-cron fallback).
 
 ## Setup / Development
 
@@ -461,138 +228,32 @@ uv run ruff check . && uv run ruff format --check .
 
 ## Fork change inventory
 
-The full enumeration of fork-ahead changes. For the narrative, see [What this fork ships](#what-this-fork-ships-organized-by-axis) above. This is the inventory for verifying claims, looking up specific commits, or picking a contribution.
-
-The canonical source is [`docs/fork-changes.yaml`](docs/fork-changes.yaml); [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md) is regenerated from it. Run `./scripts/check-docs.sh` to verify everything below resolves to live state.
-
-### Fork-ahead — open or pending
-
-<!-- BEGIN FORK-QUEUE -->
-<!-- This table is generated by scripts/render-docs.py from docs/fork-changes.yaml. Hand-edits will be overwritten. -->
-
-| # | Description | Upstream PR | Fork commit |
-|---|---|---|---|
-| 1 | CLI wiring: mempalace mine --source <adapter> (#57) | — | [`5ed9fa7`](https://github.com/techempower-org/mempalace/commit/5ed9fa7) |
-| 2 | Warp terminal source adapter (#62) | — | [`2e85585`](https://github.com/techempower-org/mempalace/commit/2e85585) |
-| 3 | OpenCode adapter smoke test against real DB (#56) | — | [`a9ed72b`](https://github.com/techempower-org/mempalace/commit/a9ed72b) |
-| 4 | Codex, Gemini, and Aider source adapters (#61, #59) | — | [`0c23165`](https://github.com/techempower-org/mempalace/commit/0c23165) |
-| 5 | Filesystem + conversation source adapters (#63) | — | [`9a1facf`](https://github.com/techempower-org/mempalace/commit/9a1facf) |
-| 6 | Widen auto-query signal patterns for natural recall phrases | — | [`33e780e`](https://github.com/techempower-org/mempalace/commit/33e780e) |
-| 7 | Native rename_wing backend operation + CLI command (#154) | — | [`d045f83`](https://github.com/techempower-org/mempalace/commit/d045f83) |
-| 8 | Standalone essay: the verbatim-vs-derivative axis (#47) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
-| 9 | Research doc: uncertainty-aware retrieval analysis (#84) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
-| 10 | Design doc: scope/collection filter on mempalace_search (#76) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
-| 11 | Agent-shaped CLI surface — --json / --quiet for non-MCP integration | — | [`25ed900`](https://github.com/techempower-org/mempalace/commit/25ed900) |
-| 12 | Design eval: multi-palace separation — curated vs auto-mined (#45) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
-| 13 | Document .sh shim delegation to palace-daemon (counter-position to upstream #1069) | — | [`bf0a4d0`](https://github.com/techempower-org/mempalace/commit/bf0a4d0) |
-| 14 | Honor ~/.mempalace/RETIRED marker — refuse default palace, surface retire message | — | [`798cf14`](https://github.com/techempower-org/mempalace/commit/798cf14) |
-| 15 | Empty repo .opencode/opencode.json mcp block — disabled flag wasn't being respected | — | [`7133eee`](https://github.com/techempower-org/mempalace/commit/7133eee) |
-| 16 | Drop \$comment from .opencode/opencode.json — schema rejects unknown root keys | — | [`637bb01`](https://github.com/techempower-org/mempalace/commit/637bb01) |
-| 17 | Disable repo-level MCP entry by default + venv-python fallback | — | [`47018e5`](https://github.com/techempower-org/mempalace/commit/47018e5) |
-| 18 | Stub resources/list + prompts/list so MCP clients stop ERROR-logging on connect | — | [`6ca0670`](https://github.com/techempower-org/mempalace/commit/6ca0670) |
-| 19 | Bundled OpenCode live-capture plugin that bypasses option-K v1.2.1 bugs (filed upstream as #4, #5) | — | [`5522623`](https://github.com/techempower-org/mempalace/commit/5522623) |
-| 20 | Documented OpenCode integration recipe (read-side MCP + push plugin + retrospective adapter) | — | [`60dc9e6`](https://github.com/techempower-org/mempalace/commit/60dc9e6) |
-| 21 | .opencode/opencode.json — repo-root MCP config so opencode picks up mempalace automatically | [#1567](https://github.com/MemPalace/mempalace/pull/1567) (OPEN) | [`ba16b82`](https://github.com/techempower-org/mempalace/commit/ba16b82) |
-| 22 | OpenCodeSourceAdapter (RFC 002) — retrospective ingest of OpenCode SQLite sessions | [#1484](https://github.com/MemPalace/mempalace/pull/1484) (OPEN) | [`2ffe652`](https://github.com/techempower-org/mempalace/commit/2ffe652) |
-| 23 | mempalace_walk_palace MCP tool — agent walks the palace via AGE Cypher | — | [`8022ecb`](https://github.com/techempower-org/mempalace/commit/8022ecb) |
-| 24 | Backfill AGE graph from existing drawer table — restartable, checkpointed | — | [`b3f0206`](https://github.com/techempower-org/mempalace/commit/b3f0206) |
-| 25 | Wing/Room/Drawer hierarchy as native AGE nodes; Cypher MATCH walks palace structure | — | [`ff583c0`](https://github.com/techempower-org/mempalace/commit/ff583c0) |
-| 26 | Write-through middleware on PostgresCollection — entities populate AGE on every drawer write | — | [`3321d83`](https://github.com/techempower-org/mempalace/commit/3321d83) |
-| 27 | KnowledgeGraphAGE API parity with SQLite KG: add_entity, invalidate, query_entity, query_relationship, timeline, seed_from_entity_facts | — | [`ff7187d`](https://github.com/techempower-org/mempalace/commit/ff7187d) |
-| 28 | Pending-writes journal + replay so daemon outages stop being silent | — | [`0c34464`](https://github.com/techempower-org/mempalace/commit/0c34464) |
-| 29 | MCP server distinguishes 'backend unreachable' from 'no palace found' | — | [`0c34464`](https://github.com/techempower-org/mempalace/commit/0c34464) |
-| 30 | Defense-in-depth metadata sanitizer at the chromadb-client chokepoint | — | [`f499814`](https://github.com/techempower-org/mempalace/commit/f499814) |
-| 31 | Route Stop/PreCompact hooks through palace-daemon/clients/hook.py | — | [`42ded2e`](https://github.com/techempower-org/mempalace/commit/42ded2e) |
-| 32 | KnowledgeGraphAGE skeleton — Apache AGE graph bootstrap over psycopg2 | — | [`a3ee623`](https://github.com/techempower-org/mempalace/commit/a3ee623) |
-| 33 | README pivots to the four-layer model + Auto Dream as vindication of the verbatim-vs-derivative axis | — | [`55b36ca`](https://github.com/techempower-org/mempalace/commit/55b36ca) |
-| 34 | CI: gate postgres-backend tests against a pgvector service container | — | [`da0bdbb`](https://github.com/techempower-org/mempalace/commit/da0bdbb) |
-| 35 | PostgreSQL backend via #665 cherry-pick + fork-side adaptations + smoke tests | [#665](https://github.com/MemPalace/mempalace/pull/665) (OPEN) | [`5e90c72`](https://github.com/techempower-org/mempalace/commit/5e90c72) |
-| 36 | daemon-route `mempalace status` / `search` / `mine` when PALACE_DAEMON_URL is set | — | [`22ef562`](https://github.com/techempower-org/mempalace/commit/22ef562) |
-| 37 | daemon-route `mcp_server.py` via the `handle_request` JSON-RPC chokepoint | — | [`41359ba`](https://github.com/techempower-org/mempalace/commit/41359ba) |
-| 38 | Preserve dashed project names in transcript-derived wings | [#10](https://github.com/MemPalace/mempalace/pull/10) | [`d76134d`](https://github.com/techempower-org/mempalace/commit/d76134d) |
-| 39 | Drop wing_ prefix from transcript-derived wings to converge with operator mines | [#9](https://github.com/MemPalace/mempalace/pull/9) | [`86d4700`](https://github.com/techempower-org/mempalace/commit/86d4700) |
-| 40 | Retire mempalace_session_recovery collection + read tool | [#8](https://github.com/MemPalace/mempalace/pull/8) | [`0b945e1`](https://github.com/techempower-org/mempalace/commit/0b945e1) |
-| 41 | mempalace mined + purge --source-file (mining management surface) | [#7](https://github.com/MemPalace/mempalace/pull/7) | [`2e6ced9`](https://github.com/techempower-org/mempalace/commit/2e6ced9) |
-| 42 | Drop hook-side checkpoint diary writes — verbatim-only architecture | [#6](https://github.com/MemPalace/mempalace/pull/6) | [`69768fc`](https://github.com/techempower-org/mempalace/commit/69768fc) |
-| 43 | Restore transcript ingest via daemon /mine when PALACE_DAEMON_URL is set | [#2](https://github.com/MemPalace/mempalace/pull/2) | [`09d2ca6`](https://github.com/techempower-org/mempalace/commit/09d2ca6) |
-| 44 | `hook_verbatim_mode` config flag preserves system tags + full tool I/O during transcript ingest | — | [`ef98961`](https://github.com/techempower-org/mempalace/commit/ef98961) |
-| 45 | Retire the `kind=` filter — structural split made it inert | — | [`7ba28dc`](https://github.com/techempower-org/mempalace/commit/7ba28dc) |
-| 46 | Hoist CLOSET_RANK_BOOSTS to module level + record VecRecall ablation finding | — | [`3cb03f3`](https://github.com/techempower-org/mempalace/commit/3cb03f3) |
-| 47 | Strip embedded API key from .claude-plugin/ manifests; rely on env inheritance | — | [`9f91e18`](https://github.com/techempower-org/mempalace/commit/9f91e18) |
-| 48 | Cherry-pick #1094 — coerce None metadatas at chromadb boundary | [#1094](https://github.com/MemPalace/mempalace/pull/1094) (OPEN) | [`43d728d`](https://github.com/techempower-org/mempalace/commit/43d728d) |
-| 49 | Cherry-pick #1087 rewrite — collection.delete(where=) instead of nuke-and-rebuild | [#1087](https://github.com/MemPalace/mempalace/pull/1087) (OPEN) | [`366a9ad`](https://github.com/techempower-org/mempalace/commit/366a9ad) |
-| 50 | Canonical YAML manifest + renderer for fork-ahead docs | — | [`5a01aec`](https://github.com/techempower-org/mempalace/commit/5a01aec) |
-| 51 | Phase D migration + PreCompact recovery write | — | [`42817d7`](https://github.com/techempower-org/mempalace/commit/42817d7) |
-| 52 | Surface drawer_id in search/diary/recovery payloads | — | [`9a8bb77`](https://github.com/techempower-org/mempalace/commit/9a8bb77) |
-| 53 | Cherry-pick #1085 — batch ChromaDB inserts in miner (10–30× faster) | [#1085](https://github.com/MemPalace/mempalace/pull/1085) (CLOSED) | [`6be6fff`](https://github.com/techempower-org/mempalace/commit/6be6fff) |
-| 54 | scripts/deploy.sh — one-command Syncthing-aware redeploy | — | [`8252025`](https://github.com/techempower-org/mempalace/commit/8252025) |
-| 55 | Phases A–C of the checkpoint collection split | — | [`e266365`](https://github.com/techempower-org/mempalace/commit/e266365) |
-| 56 | kind= filter on search_memories excludes Stop-hook checkpoints (transitional) | — | [`f9f5cc4`](https://github.com/techempower-org/mempalace/commit/f9f5cc4) |
-<!-- END FORK-QUEUE -->
+The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-changes.yaml`](docs/fork-changes.yaml); [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md) is regenerated from it and contains the complete open/pending table. Run `./scripts/check-docs.sh` to verify everything resolves to live state.
 
 ### Recently merged into upstream
 
+- **2026-05-22:** [#1142](https://github.com/MemPalace/mempalace/pull/1142) (`docs/RELEASING.md`), [#1494](https://github.com/MemPalace/mempalace/pull/1494) (recovery runbook for chromadb dimensionality=None corruption)
 - **2026-05-15:** [#1024](https://github.com/MemPalace/mempalace/pull/1024) — Configurable `chunk_size` / `chunk_overlap` / `min_chunk_size` exposed via `MempalaceConfig`
-- **2026-05-06 (in v3.3.5):** [#1377](https://github.com/MemPalace/mempalace/pull/1377) — `_get_collection` retry-once + log-on-failure (~25 LOC + 2 tests; co-authored from this fork via the closed #1286)
-- **2026-05-01 (post-v3.3.4):** [#1262](https://github.com/MemPalace/mempalace/pull/1262) (get-then-create at chromadb backend boundary), [#1289](https://github.com/MemPalace/mempalace/pull/1289) (MCP-server-side companion), [#1303](https://github.com/MemPalace/mempalace/pull/1303) (`embedding_function=` plumbing — prevents ONNX SIGSEGV on Py3.14)
-- **2026-04-26:** [#1173](https://github.com/MemPalace/mempalace/pull/1173) (`quarantine_stale_hnsw` cold-start gate + integrity sniff), [#1177](https://github.com/MemPalace/mempalace/pull/1177) (`.blob_seq_ids_migrated` marker), [#1198](https://github.com/MemPalace/mempalace/pull/1198) (`_tokenize` None guard), [#1201](https://github.com/MemPalace/mempalace/pull/1201) (`palace_graph` None metadata)
-- **2026-04-23:** [#659](https://github.com/MemPalace/mempalace/pull/659) — diary `wing` parameter, hook derives from transcript path
-- **2026-04-22:** [#661](https://github.com/MemPalace/mempalace/pull/661) (graph cache), [#673](https://github.com/MemPalace/mempalace/pull/673) (deterministic hook saves), [#1021](https://github.com/MemPalace/mempalace/pull/1021) (Claude Code 2.1.114 stdout fixes)
-- **2026-04-21 (in v3.3.2):** [#1000](https://github.com/MemPalace/mempalace/pull/1000) (`quarantine_stale_hnsw`), [#1023](https://github.com/MemPalace/mempalace/pull/1023) (PID file guard), [#681](https://github.com/MemPalace/mempalace/pull/681) (Unicode checkmark)
+- **2026-05-13:** [#1487](https://github.com/MemPalace/mempalace/pull/1487) (`rebuild_index` progress callback), [#1459](https://github.com/MemPalace/mempalace/pull/1459) (empty-metadata sentinel), [#1474](https://github.com/MemPalace/mempalace/pull/1474) (convo_miner bulk pre-fetch)
+- **2026-05-06 (in v3.3.5):** [#1377](https://github.com/MemPalace/mempalace/pull/1377) — `_get_collection` retry-once + log-on-failure (co-authored from this fork via the closed #1286)
+- **2026-05-01 (post-v3.3.4):** [#1262](https://github.com/MemPalace/mempalace/pull/1262), [#1289](https://github.com/MemPalace/mempalace/pull/1289), [#1303](https://github.com/MemPalace/mempalace/pull/1303)
+- **2026-04-26:** [#1173](https://github.com/MemPalace/mempalace/pull/1173), [#1177](https://github.com/MemPalace/mempalace/pull/1177), [#1198](https://github.com/MemPalace/mempalace/pull/1198), [#1201](https://github.com/MemPalace/mempalace/pull/1201)
+- **2026-04-23:** [#659](https://github.com/MemPalace/mempalace/pull/659) — diary `wing` parameter
+- **2026-04-22:** [#661](https://github.com/MemPalace/mempalace/pull/661), [#673](https://github.com/MemPalace/mempalace/pull/673), [#1021](https://github.com/MemPalace/mempalace/pull/1021)
+- **2026-04-21 (in v3.3.2):** [#1000](https://github.com/MemPalace/mempalace/pull/1000), [#1023](https://github.com/MemPalace/mempalace/pull/1023), [#681](https://github.com/MemPalace/mempalace/pull/681)
 - **2026-04-18:** [#999](https://github.com/MemPalace/mempalace/pull/999) — None-metadata guards across 8 read paths
 - **In v3.3.0:** [#664](https://github.com/MemPalace/mempalace/pull/664), [#682](https://github.com/MemPalace/mempalace/pull/682), [#683](https://github.com/MemPalace/mempalace/pull/683), [#684](https://github.com/MemPalace/mempalace/pull/684), [#635](https://github.com/MemPalace/mempalace/pull/635) (via #667)
 
 ### Closed (superseded or withdrawn)
 
-- [#1085](https://github.com/MemPalace/mempalace/pull/1085) (cherry-pick — closed by @midweste 2026-05-16, superseded by merged upstream [#1185](https://github.com/MemPalace/mempalace/pull/1185) with wider GPU-acceleration scope; fork's `6be6fff` is a no-op against develop, safe to drop on next sync)
+- [#1085](https://github.com/MemPalace/mempalace/pull/1085) (cherry-pick — closed by @midweste 2026-05-16, superseded by merged upstream [#1185](https://github.com/MemPalace/mempalace/pull/1185))
 - [#1286](https://github.com/MemPalace/mempalace/pull/1286) (drifted; @igorls closed and re-extracted the surgical fix as #1377 with co-author credit)
 - [#1171](https://github.com/MemPalace/mempalace/pull/1171) (cross-process write lock — superseded by #976 + daemon-strict)
-- [#1146](https://github.com/MemPalace/mempalace/pull/1146) (duplicate of @igorls's [#1147](https://github.com/MemPalace/mempalace/pull/1147))
-- [#1115](https://github.com/MemPalace/mempalace/pull/1115) (premature, withdrew pending [#1069](https://github.com/MemPalace/mempalace/issues/1069) arbitration)
-- [#629](https://github.com/MemPalace/mempalace/pull/629), [#632](https://github.com/MemPalace/mempalace/pull/632), [#662](https://github.com/MemPalace/mempalace/pull/662), [#663](https://github.com/MemPalace/mempalace/pull/663), [#738](https://github.com/MemPalace/mempalace/pull/738), [#1036](https://github.com/MemPalace/mempalace/pull/1036) — all superseded; see commit history for context
+- [#1146](https://github.com/MemPalace/mempalace/pull/1146), [#1115](https://github.com/MemPalace/mempalace/pull/1115), [#629](https://github.com/MemPalace/mempalace/pull/629), [#632](https://github.com/MemPalace/mempalace/pull/632), [#662](https://github.com/MemPalace/mempalace/pull/662), [#663](https://github.com/MemPalace/mempalace/pull/663), [#738](https://github.com/MemPalace/mempalace/pull/738), [#1036](https://github.com/MemPalace/mempalace/pull/1036) — all superseded
 
 ## Sources
 
-Articles, surveys, and research that shaped the fork's direction.
-
-### Synthesis and research (this fork)
-
-- [**`docs/research/compass_artifact_wf-ad108fcc-…md`**](docs/research/compass_artifact_wf-ad108fcc-3960-4eab-ad5d-234bf365b2f4_text_markdown.md) — "Four layers and a methodology question." Source for the four-layer model and the retrieval-recall vs QA-accuracy distinction.
-- [**`docs/research/compass_artifact_wf-28bac4e8-…md`**](docs/research/compass_artifact_wf-28bac4e8-71d9-4175-837a-d4ad563aec8d_text_markdown.md) — "Agent Memory Systems in 2026." Landscape survey: compile-upstream vs verbatim-first, three retrieval patterns, Cat 9 / Handshake, invocation as bottleneck.
-- [**`docs/research/three-patterns-for-agent-memory.md`**](docs/research/three-patterns-for-agent-memory.md) — Source for the SME jp-realm-v0.1 46.67% / 78.33% finding and the stacked-architecture proposal (parallel hybrid as retrieval / Familiar's pipeline as fusion / RLM as composition).
-- [**`docs/research/three-mempalace-consumers.md`**](docs/research/three-mempalace-consumers.md) — Familiar / CampaignGenerator / Kent triangulation. Convergent design decisions, divergent intelligence-layer bets.
-- [**`docs/research/convergent-findings-kostadis-comparison.md`**](docs/research/convergent-findings-kostadis-comparison.md) — Companion to Kostadis's RLM-comparison piece. Articulates why deterministic intermediate compression is a precision discipline, not just a performance optimization.
-- [**`docs/research/adaptmem-orthogonal-layers.md`**](docs/research/adaptmem-orthogonal-layers.md) — Encoder fine-tuning as an orthogonal layer; independent reproduction of MemPalace's 0.966 R@5 plus FT-300 lift.
-- [**`docs/research/2026-05-06-chunking-strategy-ablation.md`**](docs/research/2026-05-06-chunking-strategy-ablation.md) — A/B/C chunking strategy ablation. The 2026 articles' thesis didn't reproduce on this corpus.
-- [**`docs/internal/pgvector-665-decision.md`**](docs/internal/pgvector-665-decision.md) — Composition stance for the substrate work: WAIT for #665, with Plan-B trigger date 2026-06-08.
-
-### External
-
-- [**lhl/agentic-memory**](https://github.com/lhl/agentic-memory) — multi-system analysis. The MemPalace review at [`ANALYSIS-mempalace.md`](https://github.com/lhl/agentic-memory/blob/main/ANALYSIS-mempalace.md) seeded the original 7-item roadmap.
-- [**codingwithcody.com — "MemPalace: digital castles on sand"**](https://codingwithcody.com/2026/04/13/mempalace-digital-castles-on-sand/) — TagMem-promotion critique whose hierarchy-causes-bugs argument produced architectural principles 1 and 2.
-- [**OSS Insight — Agent Memory Race 2026**](https://ossinsight.io/blog/agent-memory-race-2026) — competitive landscape survey.
-- [**InfoQ — Grafana rearchitects Loki with Kafka and ships a CLI to bring observability into coding agents**](https://www.infoq.com/news/2026/04/grafana-loki-ai-agents/) — verbatim-first observability precedent at scale; GCX CLI as agent-bridge prior art; o11y-bench as parallel to multipass-structural-memory-eval.
-- [**Anthropic — Dreams (Managed Agents API)**](https://platform.claude.com/docs/en/managed-agents/dreams) — input read-only, output a separate store. The verbatim-vs-derivative axis at the vendor-API level.
-- [**Claude Code Auto Dream guide**](https://claudefa.st/blog/guide/mechanics/auto-dream) — research-preview consolidation inside Claude Code; reads memory + JSONL, writes consolidated index.
-- [**Microsoft Tech Community — Combining pgvector and Apache AGE: knowledge graph & semantic intelligence in a single engine**](https://techcommunity.microsoft.com/blog/adforpostgresql/combining-pgvector-and-apache-age---knowledge-graph--semantic-intelligence-in-a-/4508781) (Raunak, 2026-04-15) — bridge-pattern reference for the substrate work.
-- [**Dave's Garage — "My Custom AI Went Superhuman Yesterday..."**](https://www.youtube.com/watch?v=TdbpoDjIvPk) (Dave Plummer, 2026-02-28) — conceptual reference for why graph structure matters in retrieval: vectors get you "topically nearby"; the graph gets you "actually related."
-- [**Phil Karlton's two hard things**](https://martinfowler.com/bliki/TwoHardThings.html) — naming and cache invalidation. Cited in "What this fork has learned" because, even at 335K+ drawers, the day-to-day operational work is still mostly these two.
-- [**Recursive Language Models**](https://arxiv.org/abs/2512.24601) (Zhang, Kraska, Khattab, 2025) — the RLM paper. The four-layer section's invocation-ceiling finding is measured against this paper's mechanism.
-- [**Think, But Don't Overthink: Reproducing Recursive Language Models**](https://arxiv.org/abs/2603.02615) — depth-2 collapse finding behind the recommendation to keep RLM at composition rather than retrieval.
-
-### Systems inspiring roadmap items
-
-- [**Karta**](https://github.com/rohithzr/karta) — contradiction detection, dream-engine feedback loop, foresight signals. Inspires P3/P4/P5; the heavier per-write LLM features are deprioritized.
-- [**Codex memory**](https://github.com/openai/codex) — citation-driven retention. Influences P3.
-- [**ByteRover CLI**](https://github.com/campfirein/byterover-cli) — 5-tier progressive retrieval. Pattern to consider for context-feeding.
-- [**engram**](https://github.com/NickCirv/engram) — Go + SQLite FTS5; file-read interception prototype. Cited in deprioritized FTS5 item and the auto-surfacing problem.
-- [**context-engine**](https://github.com/Emmimal/context-engine) — exponential decay implementation that ports directly into P2.
-- **Verbatim-first cohort** — Longhand, Celiums, mcp-memory-service. Different scopes, same architectural call.
-- **Peer builds on MemPalace** — Familiar, CampaignGenerator, Kent, adaptmem. Convergent architectural decisions, divergent intelligence-layer bets — the empirical evidence for the four-layer model.
-
-### Verification note
-
-Comparison table columns filled 2026-04-14–18, refreshed 2026-05-11; feature status drifts. Cite upstream before treating any row as current. [TagMem](https://codingwithcody.com/2026/04/13/mempalace-digital-castles-on-sand/) is omitted; we couldn't find a public repo for it.
+See [`docs/BIBLIOGRAPHY.md`](docs/BIBLIOGRAPHY.md) for the complete documentation index and external references.
 
 ## License
 

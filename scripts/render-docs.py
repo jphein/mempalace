@@ -273,16 +273,29 @@ def main() -> int:
 
     if args.target in ("readme", "all"):
         if not README_PATH.is_file():
-            print(f"README not found: {README_PATH}", file=sys.stderr)
-            return 2
-        existing = README_PATH.read_text()
-        try:
-            rendered_readme = render_readme(manifest, existing)
-        except ValueError as exc:
-            print(f"README render failed: {exc}", file=sys.stderr)
-            return 2
-        if write_or_check(README_PATH, rendered_readme, args.check):
-            drift = True
+            if args.target == "readme":
+                print(f"README not found: {README_PATH}", file=sys.stderr)
+                return 2
+        else:
+            existing = README_PATH.read_text()
+            has_markers = README_BEGIN_MARKER in existing and README_END_MARKER in existing
+            if has_markers:
+                try:
+                    rendered_readme = render_readme(manifest, existing)
+                except ValueError as exc:
+                    print(f"README render failed: {exc}", file=sys.stderr)
+                    return 2
+                if write_or_check(README_PATH, rendered_readme, args.check):
+                    drift = True
+            elif args.target == "readme":
+                print(
+                    f"README has no fork-queue markers ({README_BEGIN_MARKER} / "
+                    f"{README_END_MARKER}) — nothing to render",
+                    file=sys.stderr,
+                )
+                return 2
+            else:
+                print("README: no fork-queue markers, skipping")
 
     # CLAUDE + promises rendering planned for follow-on commits.
 
