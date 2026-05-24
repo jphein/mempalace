@@ -293,6 +293,7 @@ def main() -> int:
                     f"{README_END_MARKER}) — nothing to render",
                     file=sys.stderr,
                 )
+                return 2
             else:
                 print("README: no fork-queue markers, skipping")
 
