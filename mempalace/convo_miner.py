@@ -676,6 +676,7 @@ def mine_sessions(
             "agent": agent,
             "wing": wing,
             "room": "sessions",
+            "filed_at": first_ts or last_ts,
         }
 
         if dry_run:
