@@ -78,7 +78,8 @@
 | Supermemory | 81.6% (GPT-4o) / 85.2% (Gemini-3) | QA | GPT-4o / Gemini-3 | indie (Hindsight benchmark repo) | [supermemory README](https://github.com/supermemoryai/supermemory), [hindsight-benchmarks](https://github.com/vectorize-io/hindsight-benchmarks) |
 | EverOS/EverMind | 83.0% | QA (unspecified metric) | undisclosed | self | [github.com/EverMind-AI/EverOS](https://github.com/EverMind-AI/EverOS) |
 | Zep/Graphiti | 71.2% (GPT-4o) | QA | GPT-4o | self | [blog.getzep.com](https://blog.getzep.com/state-of-the-art-agent-memory/), [arXiv:2501.13956](https://arxiv.org/abs/2501.13956) |
-| True Memory | 87.8% | QA | gpt-4.1-mini | self (paper) | [arXiv:2605.04897](https://arxiv.org/abs/2605.04897) |
+| True Memory (Pro) | 87.8% | QA | gpt-4.1-mini | self (paper) | [arXiv:2605.04897](https://arxiv.org/abs/2605.04897) |
+| True Memory (Base) | 85.5% | QA | gpt-4.1-mini | self (paper) | [arXiv:2605.04897](https://arxiv.org/abs/2605.04897) |
 | ENGRAM (academic paper) | 71.4% | QA | GPT-4o-mini | paper | [arXiv:2511.12960](https://arxiv.org/abs/2511.12960) |
 | Celiums | 62.3% | QA | Opus (best of 5 models) | self | [celiums.ai/blog](https://celiums.ai/blog/longmemeval-benchmark-honest-results/) |
 | Longhand | -- | -- | -- | -- | No benchmarks published |
@@ -95,7 +96,8 @@
 | System | Score | Metric | Answer Model | Verification | Source |
 |---|---|---|---|---|---|
 | EverOS/EverMind (EverCore) | 93.05% | QA | undisclosed | self | [EverOS README](https://github.com/EverMind-AI/EverOS) |
-| True Memory | 93.0% | QA | gpt-4.1-mini | self (paper) | [arXiv:2605.04897](https://arxiv.org/abs/2605.04897) |
+| True Memory (Pro) | 93.0% | QA | gpt-4.1-mini | self (paper) | [arXiv:2605.04897](https://arxiv.org/abs/2605.04897) |
+| True Memory (Base) | 92.0% | QA | gpt-4.1-mini | self (paper) | [arXiv:2605.04897](https://arxiv.org/abs/2605.04897) |
 | Mem0 (platform v3) | 92.5% | QA | undisclosed | self | [mem0.ai/research](https://mem0.ai/research) |
 | MemMachine (not in README) | 91.7% | QA | gpt-4.1-mini | paper | [arXiv:2604.04853](https://arxiv.org/abs/2604.04853) |
 | Hindsight | 89.61% (Gemini-3) / 85.67% (OSS-120B) | QA | Gemini-3 / OSS-120B | indie (Virginia Tech) | [hindsight-benchmarks](https://github.com/vectorize-io/hindsight-benchmarks) |
@@ -113,7 +115,8 @@
 
 | System | BEAM-1M | BEAM-10M | Metric | Answer Model | Source |
 |---|---|---|---|---|---|
-| True Memory | 76.6% | -- | QA | gpt-4.1-mini | [arXiv:2605.04897](https://arxiv.org/abs/2605.04897) |
+| True Memory (Pro) | 76.6% | 65.0% (prelim) | QA | gpt-4.1-mini | [arXiv:2605.04897](https://arxiv.org/abs/2605.04897) |
+| True Memory (Base) | 74.9% | -- | QA | gpt-4.1-mini | [arXiv:2605.04897](https://arxiv.org/abs/2605.04897) |
 | Hindsight | 73.9% | 64.1% | QA | Gemini-3 | [benchmarks.hindsight.vectorize.io](https://benchmarks.hindsight.vectorize.io/) |
 | Mem0 (platform v3) | 70.1% | 50.5% | QA | undisclosed | [mem0.ai/research](https://mem0.ai/research) |
 | Mem0 (README, older) | 64.1% | 48.6% | QA | undisclosed | [mem0 README](https://github.com/mem0ai/mem0) |
@@ -144,6 +147,8 @@ These metrics are fundamentally different:
 - QA accuracy asks: "Did the full pipeline (retrieve + synthesize answer + judge) produce a correct answer?"
 
 A system can have 100% R@5 and 40% QA accuracy (Celiums demonstrated this: 100% retrieval, 62.3% QA). Conversely, a system with imperfect retrieval can sometimes still answer correctly from partial context. The gap is driven by the difficulty of temporal reasoning, multi-session aggregation, and knowledge update synthesis.
+
+True Memory's Section 6.2 retrieval bottleneck diagnostic quantifies this directly: 330 of 357 wrong answers were fixed when given the full correct context, confirming that retrieval is the dominant failure mode on these benchmarks. Their 56-configuration ablation (53/56 configs above 90% LoCoMo, only 3.2pp total spread) further demonstrates that **architecture matters more than component selection** — the choice of embedder or reranker model barely moves the needle compared to the retrieval design itself.
 
 **Impact:** MemPalace upstream's 96.6% R@5 and agentmemory's 95.2% R@5 are **not comparable** to OMEGA's 95.4% QA or Hindsight's 91.4% QA. The R@5 numbers would need to be paired with an answer model and judge to produce comparable QA accuracy figures. Celiums's blog demonstrated that even with perfect retrieval, QA accuracy with Opus topped out at 62.3% on this specific benchmark.
 
@@ -217,7 +222,7 @@ The README's reference to engram-2 claiming "17% E2E QA for MemPalace" was not f
 
 ### Current Capabilities
 
-The multipass-structural-memory-eval (SME) framework at `/home/jp/Projects/multipass-structural-memory-eval` currently has:
+The multipass-structural-memory-eval (SME) framework currently has:
 
 **Adapters (7):**
 - `flat` -- baseline flat retrieval
@@ -357,8 +362,11 @@ The multipass-structural-memory-eval (SME) framework at `/home/jp/Projects/multi
 
 ### True Memory
 
-- **LoCoMo:** 93.0% (3-run mean) / **LongMemEval:** 87.8% / **BEAM-1M:** 76.6%
+- **LoCoMo:** 93.0% Pro / 92.0% Base (3-run mean) / **LongMemEval:** 87.8% Pro / 85.5% Base / **BEAM-1M:** 76.6% Pro / 74.9% Base / **BEAM-10M:** 65.0% Pro (preliminary)
 - **Answer model:** gpt-4.1-mini
+- **Pro tier adds HyDE query expansion** (~1.0pp gain) and larger cross-encoder reranker
+- **56-configuration ablation:** 53/56 configs above 90% LoCoMo, only 3.2pp total spread — proves component choice is secondary to architecture
+- **Retrieval bottleneck diagnostic (Section 6.2):** 330/357 wrong answers fixed when given full correct context — quantifies the R@K → QA gap
 - **Six-layer verbatim-first architecture, no code release**
 - **Source:** [arXiv:2605.04897](https://arxiv.org/abs/2605.04897)
 
@@ -437,7 +445,8 @@ The multipass-structural-memory-eval (SME) framework at `/home/jp/Projects/multi
 | 2 | Mem0 (platform v3) | 94.4% | 92.5% | 70.1% | QA | Self-reported; cloud-only v3 alg |
 | 3 | Mastra | 94.87% | -- | -- | QA | Self-reported; GPT-5-mini |
 | 4 | Hindsight | 91.4% | 89.61% | 73.9% | QA | Indie verified; Gemini 3 Pro |
-| 5 | True Memory | 87.8% | 93.0% | 76.6% | QA | arXiv paper; gpt-4.1-mini |
+| 5 | True Memory (Pro) | 87.8% | 93.0% | 76.6% | QA | arXiv paper; gpt-4.1-mini; 65.0% BEAM-10M |
+| 5b | True Memory (Base) | 85.5% | 92.0% | 74.9% | QA | No HyDE; smaller reranker |
 | 6 | Supermemory | 81.6-85.2% | 65.4% | -- | QA | Model-dependent; GPT-4o to Gemini-3 |
 | 7 | EverOS/EverMind | 83.0% | 93.05% | -- | QA | Self-reported |
 | 8 | ENGRAM (paper) | 71.4% | 77.55% | -- | QA | Paper; GPT-4o-mini |
