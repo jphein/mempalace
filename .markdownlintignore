@@ -1,0 +1,23 @@
+node_modules/
+.venv/
+venv/
+.git/
+build/
+dist/
+htmlcov/
+site/
+
+# Scratch is working/intermediate state, not published docs.
+scratch/
+
+# Auto-generated stubs and notes.
+.claude/
+.claude-plugin/
+.codex-plugin/
+
+# Mining/ingest fixtures may include intentionally malformed markdown
+# as test data — don't lint those.
+tests/
+
+# Website is built from index.md but has its own templating noise.
+website/_site/

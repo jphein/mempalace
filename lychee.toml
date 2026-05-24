@@ -1,0 +1,74 @@
+# Lychee link-checker config for fork docs.
+#
+# Run locally:
+#   lychee --config lychee.toml README.md CLAUDE.md FORK_CHANGELOG.md docs/
+#
+# Format reference:
+#   https://github.com/lycheeverse/lychee/blob/master/lychee.example.toml
+
+# Accept 2xx and 3xx. Some GitHub anchor URLs return 403 to anonymous
+# scrapers even when the page exists (anti-abuse heuristics); accept 403
+# and 429 too rather than chase per-URL exclusions.
+accept = ["200", "206", "301", "302", "303", "304", "307", "308", "403", "429"]
+
+# Retry transient failures. CI is the noisy environment, not the
+# real link state.
+max_retries = 2
+retry_wait_time = 5
+
+# Be patient with slow upstream hosts (e.g. paper PDFs on academic CDNs).
+timeout = 30
+
+# Respect crawl budget — don't hammer a host with parallel probes.
+max_concurrency = 8
+
+# User-Agent some hosts (Twitter, LinkedIn, anti-bot CDNs) need to
+# return a real response instead of 403.
+user_agent = "lychee/0.24 (+https://github.com/techempower-org/mempalace)"
+
+# Skip URLs that match these patterns. Keep this list small and
+# documented — every entry is a hole in coverage.
+exclude = [
+    # Local / loopback — sometimes appears in example configs.
+    '^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|/|$)',
+
+    # Private homelab hostnames (jphe.in subdomains) — not reachable
+    # from GitHub runners. These are docs about JP's internal deploy.
+    '^https?://[a-z0-9.-]+\.jphe\.in(:|/|$)',
+
+    # jphein/mempalace transferred to techempower-org/mempalace and
+    # GitHub's redirect can return 404 to unauthenticated scrapers.
+    '^https://github\.com/jphein/mempalace(/|$)',
+
+    # Anthropic preview/beta docs URLs occasionally 404 during platform
+    # rollouts. We track these in fork-changes.yaml; CI link-checking
+    # them adds noise without catching real drift.
+    '^https://platform\.claude\.com/docs/.*/(managed-agents|dreams)',
+
+    # Mailto and tel: schemes — not useful to validate.
+    '^mailto:',
+    '^tel:',
+
+    # Example.com and reserved demo domains used in code samples.
+    '^https?://(www\.)?example\.(com|org|net)(/|$)',
+]
+
+# Exclude path patterns from the *scan* (not just from URL checking).
+# These directories contain intentionally-broken examples or
+# scratch/working state that shouldn't gate CI.
+exclude_path = [
+    "scratch/",
+    "node_modules/",
+    ".venv/",
+    "venv/",
+    ".git/",
+    "build/",
+    "dist/",
+    "htmlcov/",
+    "tests/",
+    "website/_site/",
+]
+
+# Don't fail on missing input files — globs may not match anything in
+# subset checkouts.
+skip_missing = true

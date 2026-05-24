@@ -1,0 +1,2 @@
+# Words to flag. Empty for now — add domain-specific forbidden terms
+# as they emerge (e.g. accidentally-leaked internal names).
