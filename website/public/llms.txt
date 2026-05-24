@@ -1,0 +1,18 @@
+# MemPalace (techempower-org fork)
+
+> A verbatim-first local AI memory system. Stores every word the user shares — exactly as said, on their own machine. Postgres + pgvector + Apache AGE behind palace-daemon, 335K+ drawers in production. Surfaces memory to LLMs via MCP. Companion to Anthropic's Auto Dream: MemPalace keeps the verbatim corpus; Auto Dream consolidates.
+
+## Docs
+
+- [README](https://github.com/techempower-org/mempalace/blob/main/README.md): Overview, memory-system landscape comparison (25+ systems), fork-ahead state, installation.
+- [Architecture](https://github.com/techempower-org/mempalace/blob/main/docs/ARCHITECTURE.md): The four-layer model (storage / encoder / retrieval / consumption), verbatim-vs-derivative axis, and the operational principles that drive PR review.
+- [Ecosystem](https://github.com/techempower-org/mempalace/blob/main/docs/ECOSYSTEM.md): Peer builds (Familiar, CampaignGenerator, Kent, adaptmem), companion tools (palace-daemon, engram), evaluation frameworks (SME), adjacent memory systems.
+- [Bibliography](https://github.com/techempower-org/mempalace/blob/main/docs/BIBLIOGRAPHY.md): Research grounding for the fork's design choices.
+- [CLAUDE.md](https://github.com/techempower-org/mempalace/blob/main/CLAUDE.md): The mission, design principles, and contribution guidelines.
+- [Fork changelog](https://github.com/techempower-org/mempalace/blob/main/FORK_CHANGELOG.md): Every fork-ahead change, rendered from `docs/fork-changes.yaml`.
+
+## Optional
+
+- [Upstream MemPalace](https://github.com/MemPalace/mempalace): The base project this forks. Same mission, different deployment shape.
+- [palace-daemon](https://github.com/rboarescu/palace-daemon): FastAPI gateway + MCP-over-HTTP proxy this fork runs behind.
+- [Full context](/llms-full.txt): All of the above concatenated for one-shot LLM ingestion.
