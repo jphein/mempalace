@@ -1,0 +1,54 @@
+name: Sync docs to Outline
+
+# Nightly one-way push of repo docs to JP's Outline wiki at
+# outline.jphe.in. Repo is the source of truth; Outline gets created or
+# updated content so wiki searches return current docs.
+#
+# Issue: techempower-org/mempalace#177
+#
+# Secrets required:
+#   OUTLINE_API_KEY  — Outline API token with write access to the
+#                      "MemPalace" collection.
+#   OUTLINE_BASE_URL — Optional; defaults to https://outline.jphe.in.
+#
+# Security note: only secrets and workflow_dispatch inputs are
+# referenced; no untrusted event payload strings (issue titles, commit
+# messages, PR bodies, etc.) flow into any run: block. The dry_run input
+# is a boolean GitHub validates before substitution.
+#
+# To run manually with a preview, dispatch with dry_run=true.
+
+on:
+  schedule:
+    # 03:17 UTC nightly — off-minute so we do not pile onto Outline at :00.
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Preview changes without writing to Outline'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-outline
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Sync docs to Outline
+        env:
+          OUTLINE_API_KEY: ${{ secrets.OUTLINE_API_KEY }}
+          OUTLINE_BASE_URL: ${{ secrets.OUTLINE_BASE_URL }}
+          DRY_RUN: ${{ inputs.dry_run && '1' || '' }}
+        run: python scripts/sync-outline.py
