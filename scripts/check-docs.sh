@@ -10,7 +10,8 @@
 #   4. Every upstream PR mentioned (#NNNN) has a state matching what the
 #      doc claims (OPEN / MERGED / CLOSED). Uses `gh pr view`; skipped
 #      gracefully if `gh` isn't authenticated.
-#   5. Every `commit:` hash in docs/fork-changes.yaml is referenced
+#   5. website/public/llms-full.txt regenerates clean from its sources.
+#   6. Every `commit:` hash in docs/fork-changes.yaml is referenced
 #      somewhere in CLAUDE.md (catches drift between the structured DB
 #      and the hand-maintained row inventory).
 #
@@ -44,7 +45,7 @@ fail()  { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; ((failures++)); }
 failures=0
 
 # ── 1. test count ────────────────────────────────────────────────────────
-step "1/4  test count in README"
+step "1/5  test count in README"
 readme_count=$(grep -oE '[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
 if [ -z "$readme_count" ]; then
     warn "README has no '<N> tests pass on \`main\`' phrase — skipping"
@@ -75,7 +76,7 @@ else
 fi
 
 # ── 2. commit hash references ────────────────────────────────────────────
-step "2/4  commit hashes referenced in docs resolve"
+step "2/5  commit hashes referenced in docs resolve"
 docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # Strip cross-repo URLs first so we only check hashes that should resolve
 # in *this* fork. Pattern: anything inside (https://github.com/<other>/<repo>/commit/HASH)
@@ -103,7 +104,7 @@ if (( unresolved == 0 )) && (( ${#hashes[@]} > 0 )); then
 fi
 
 # ── 3. FORK_CHANGELOG.md is up-to-date with the canonical YAML ───────────
-step "3/4  FORK_CHANGELOG.md regenerates clean"
+step "3/5  FORK_CHANGELOG.md regenerates clean"
 render_bin="$REPO_ROOT/scripts/render-docs.py"
 if [ -x "$render_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -120,7 +121,7 @@ else
 fi
 
 # ── 4. upstream PR states ────────────────────────────────────────────────
-step "4/4  upstream PR states match doc claims"
+step "4/5  upstream PR states match doc claims"
 if ! command -v gh >/dev/null 2>&1; then
     warn "gh not on PATH — skipping PR state check"
 elif ! gh auth status >/dev/null 2>&1; then
@@ -199,7 +200,24 @@ else
     fi
 fi
 
-# Check 5 (fork-only YAML commits → CLAUDE.md row inventory) retired
+# ── 5. llms-full.txt regenerates clean from its sources ─────────────────
+step "5/5  llms-full.txt regenerates clean"
+llms_bin="$REPO_ROOT/scripts/render-llms-full.py"
+if [ -x "$llms_bin" ]; then
+    py="$REPO_ROOT/.venv/bin/python"
+    [ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
+    if [ -z "$py" ]; then
+        warn "no python interpreter — skipping llms-full check"
+    elif "$py" "$llms_bin" --check >/dev/null 2>&1; then
+        ok "website/public/llms-full.txt matches its sources"
+    else
+        fail "website/public/llms-full.txt is stale — run scripts/render-llms-full.py"
+    fi
+else
+    warn "scripts/render-llms-full.py not present — skipping llms-full check"
+fi
+
+# Check 6 (fork-only YAML commits → CLAUDE.md row inventory) retired
 # 2026-05-11: the CLAUDE.md row inventory it validated was removed in
 # favor of a pointer block to FORK_CHANGELOG.md + techempower-org/mempalace
 # issues. Check 3 (FORK_CHANGELOG.md ↔ YAML) already guarantees the
