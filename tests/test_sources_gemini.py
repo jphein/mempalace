@@ -16,10 +16,14 @@ def _make_session_jsonl(messages, include_meta=True):
         lines.append(json.dumps({"type": "session_metadata", "session_id": "test"}))
     for role, text in messages:
         entry_type = "user" if role == "user" else "gemini"
-        lines.append(json.dumps({
-            "type": entry_type,
-            "content": [{"text": text}],
-        }))
+        lines.append(
+            json.dumps(
+                {
+                    "type": entry_type,
+                    "content": [{"text": text}],
+                }
+            )
+        )
     return "\n".join(lines)
 
 
@@ -33,18 +37,22 @@ def gemini_dir(tmp_path):
     chats_dir = tmp_path / "project_hash" / "chats"
     chats_dir.mkdir(parents=True)
     (chats_dir / "session-001.jsonl").write_text(
-        _make_session_jsonl([
-            ("user", "How do I deploy this?"),
-            ("gemini", "You can deploy using the provided Dockerfile."),
-            ("user", "What about CI/CD?"),
-            ("gemini", "Set up a GitHub Actions workflow with the docker build step."),
-        ])
+        _make_session_jsonl(
+            [
+                ("user", "How do I deploy this?"),
+                ("gemini", "You can deploy using the provided Dockerfile."),
+                ("user", "What about CI/CD?"),
+                ("gemini", "Set up a GitHub Actions workflow with the docker build step."),
+            ]
+        )
     )
     (chats_dir / "session-002.jsonl").write_text(
-        _make_session_jsonl([
-            ("user", "Explain the database schema."),
-            ("gemini", "The schema has users, sessions, and events tables."),
-        ])
+        _make_session_jsonl(
+            [
+                ("user", "Explain the database schema."),
+                ("gemini", "The schema has users, sessions, and events tables."),
+            ]
+        )
     )
     return tmp_path
 
@@ -52,26 +60,34 @@ def gemini_dir(tmp_path):
 @pytest.fixture
 def palace_ctx():
     class _FC:
-        def add(self, **kw): pass
-        def upsert(self, **kw): pass
-        def query(self, **kw): return {"ids": [], "documents": []}
-        def get(self, **kw): return {"ids": [], "documents": [], "metadatas": []}
-        def delete(self, **kw): pass
-        def count(self): return 0
+        def add(self, **kw):
+            pass
+
+        def upsert(self, **kw):
+            pass
+
+        def query(self, **kw):
+            return {"ids": [], "documents": []}
+
+        def get(self, **kw):
+            return {"ids": [], "documents": [], "metadatas": []}
+
+        def delete(self, **kw):
+            pass
+
+        def count(self):
+            return 0
 
     class _FK:
-        def add_triple(self, *a, **kw): pass
+        def add_triple(self, *a, **kw):
+            pass
 
-    return PalaceContext(
-        drawer_collection=_FC(), knowledge_graph=_FK(), palace_path="/tmp/fake"
-    )
+    return PalaceContext(drawer_collection=_FC(), knowledge_graph=_FK(), palace_path="/tmp/fake")
 
 
 class TestGeminiParser:
     def test_parse_valid_session(self):
-        content = _make_session_jsonl([
-            ("user", "hello"), ("gemini", "hi there")
-        ])
+        content = _make_session_jsonl([("user", "hello"), ("gemini", "hi there")])
         result = _parse_gemini_jsonl(content)
         assert result is not None
         assert len(result) == 2
@@ -79,9 +95,7 @@ class TestGeminiParser:
         assert result[1] == ("assistant", "hi there")
 
     def test_parse_rejects_without_metadata(self):
-        content = _make_session_jsonl([
-            ("user", "hello"), ("gemini", "hi")
-        ], include_meta=False)
+        content = _make_session_jsonl([("user", "hello"), ("gemini", "hi")], include_meta=False)
         assert _parse_gemini_jsonl(content) is None
 
     def test_parse_skips_message_update(self):
@@ -139,4 +153,5 @@ class TestGeminiAdapter:
 
     def test_registered_entry_point(self):
         from mempalace.sources.registry import available_adapters
+
         assert "gemini" in available_adapters()

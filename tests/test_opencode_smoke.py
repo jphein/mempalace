@@ -211,8 +211,7 @@ class TestOpenCodeSmokeRealDB:
         # user messages in the exchange format
         has_user_quote = any(">" in dr.content for dr in sample_drawers)
         assert has_user_quote, (
-            "Expected at least some drawers with '>' user-quote markers "
-            "from the exchange format"
+            "Expected at least some drawers with '>' user-quote markers from the exchange format"
         )
 
     def test_wing_derived_from_project_dir(self):
@@ -278,8 +277,7 @@ class TestOpenCodeSmokeRealDB:
                 if isinstance(obj, DrawerRecord):
                     for key, val in obj.metadata.items():
                         assert isinstance(val, (str, int, float, bool)), (
-                            f"metadata[{key!r}] has non-scalar type "
-                            f"{type(val).__name__}: {val!r}"
+                            f"metadata[{key!r}] has non-scalar type {type(val).__name__}: {val!r}"
                         )
         finally:
             adapter.close()

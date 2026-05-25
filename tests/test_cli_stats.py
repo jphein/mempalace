@@ -307,8 +307,7 @@ class TestCmdStatsErrors:
             if name == "mempalace_kg_stats":
                 # JSON-RPC error envelope — triggers DaemonError downstream.
                 return _FakeResp(
-                    b'{"jsonrpc":"2.0","id":1,"error":'
-                    b'{"code":-32603,"message":"KG offline"}}'
+                    b'{"jsonrpc":"2.0","id":1,"error":{"code":-32603,"message":"KG offline"}}'
                 )
             if name == "mempalace_status":
                 return _FakeResp(_envelope({"total_drawers": 5, "wings": {"projects": 5}}))

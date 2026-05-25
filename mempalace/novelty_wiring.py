@@ -58,9 +58,7 @@ def is_novelty_tagging_enabled(config: Optional[Any] = None) -> bool:
     return True
 
 
-def fetch_recent_window(
-    collection: Any, wing: str, room: str, window_size: int
-) -> list[str]:
+def fetch_recent_window(collection: Any, wing: str, room: str, window_size: int) -> list[str]:
     """Return up to ``window_size`` recent drawer documents from ``wing``/``room``.
 
     "Recent" is approximated as the first ``window_size`` rows the
@@ -81,9 +79,7 @@ def fetch_recent_window(
             include=["documents"],
         )
     except Exception:
-        logger.debug(
-            "novelty window fetch failed for %s/%s", wing, room, exc_info=True
-        )
+        logger.debug("novelty window fetch failed for %s/%s", wing, room, exc_info=True)
         return []
 
     documents = _extract_documents(result)

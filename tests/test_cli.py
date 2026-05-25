@@ -326,8 +326,13 @@ def test_cmd_rename_wing_local(tmp_path, capsys):
     )
 
     args = argparse.Namespace(
-        from_wing="alpha", to_wing="renamed", dry_run=False,
-        batch_size=500, palace=str(palace), json=False, quiet=False,
+        from_wing="alpha",
+        to_wing="renamed",
+        dry_run=False,
+        batch_size=500,
+        palace=str(palace),
+        json=False,
+        quiet=False,
     )
     with patch("mempalace.cli._daemon_strict", return_value=False):
         cmd_rename_wing(args)
@@ -357,8 +362,13 @@ def test_cmd_rename_wing_dry_run(tmp_path, capsys):
     )
 
     args = argparse.Namespace(
-        from_wing="old", to_wing="new", dry_run=True,
-        batch_size=500, palace=str(palace), json=False, quiet=False,
+        from_wing="old",
+        to_wing="new",
+        dry_run=True,
+        batch_size=500,
+        palace=str(palace),
+        json=False,
+        quiet=False,
     )
     with patch("mempalace.cli._daemon_strict", return_value=False):
         cmd_rename_wing(args)
@@ -376,18 +386,34 @@ def test_cmd_rename_wing_daemon_mode(monkeypatch, capsys):
     from mempalace.cli import cmd_rename_wing
 
     args = argparse.Namespace(
-        from_wing="src", to_wing="dst", dry_run=False,
-        batch_size=500, json=False, quiet=False,
+        from_wing="src",
+        to_wing="dst",
+        dry_run=False,
+        batch_size=500,
+        json=False,
+        quiet=False,
     )
-    with patch("mempalace.cli._daemon_strict", return_value=True), \
-         patch("mempalace.cli._call_daemon_tool", return_value={
-             "success": True, "renamed": 42, "errors": 0,
-         }) as mock_call:
+    with (
+        patch("mempalace.cli._daemon_strict", return_value=True),
+        patch(
+            "mempalace.cli._call_daemon_tool",
+            return_value={
+                "success": True,
+                "renamed": 42,
+                "errors": 0,
+            },
+        ) as mock_call,
+    ):
         cmd_rename_wing(args)
 
-    mock_call.assert_called_once_with("mempalace_rename_wing", {
-        "from_wing": "src", "to_wing": "dst", "batch_size": 500,
-    })
+    mock_call.assert_called_once_with(
+        "mempalace_rename_wing",
+        {
+            "from_wing": "src",
+            "to_wing": "dst",
+            "batch_size": 500,
+        },
+    )
     out = capsys.readouterr().out
     assert "42" in out
 

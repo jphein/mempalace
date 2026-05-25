@@ -7,7 +7,6 @@ fail-open behaviour, opt-out via env/config, recent-window scoping.
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -61,9 +60,7 @@ def test_compute_novelty_tag_opt_out_returns_none(monkeypatch):
     """Callers MUST treat None as 'do not add the metadata key' so an
     opt-out palace never sees a stale or empty novelty_tag value."""
     monkeypatch.setenv("MEMPALACE_NOVELTY_TAGGING", "0")
-    tag = novelty_wiring.compute_novelty_tag(
-        MagicMock(), "w", "r", "anything", config=None
-    )
+    tag = novelty_wiring.compute_novelty_tag(MagicMock(), "w", "r", "anything", config=None)
     assert tag is None
 
 
@@ -80,9 +77,7 @@ def test_compute_novelty_tag_fails_open_on_collection_error(monkeypatch):
         def get(self, **kwargs):
             raise RuntimeError("backend down")
 
-    tag = novelty_wiring.compute_novelty_tag(
-        BrokenCollection(), "w", "r", "new content"
-    )
+    tag = novelty_wiring.compute_novelty_tag(BrokenCollection(), "w", "r", "new content")
     assert tag == "novel"
 
 
@@ -163,9 +158,7 @@ def test_compute_novelty_tag_passes_window_filter(monkeypatch):
     novelty_wiring.compute_novelty_tag(
         SpyCollection(), "myproject", "decisions", "new", window_size=7
     )
-    assert captured["where"] == {
-        "$and": [{"wing": "myproject"}, {"room": "decisions"}]
-    }
+    assert captured["where"] == {"$and": [{"wing": "myproject"}, {"room": "decisions"}]}
     assert captured["limit"] == 7
 
 
@@ -249,9 +242,7 @@ def test_tool_add_drawer_omits_tag_when_disabled(monkeypatch, config, palace_pat
     assert "novelty_tag" not in meta
 
 
-def test_tool_add_drawer_first_drawer_in_fresh_wing_is_novel(
-    monkeypatch, config, palace_path, kg
-):
+def test_tool_add_drawer_first_drawer_in_fresh_wing_is_novel(monkeypatch, config, palace_path, kg):
     """Empty-window convention from novelty_score: the first drawer in a
     fresh wing scores 1.0 and classifies as 'novel'."""
     monkeypatch.delenv("MEMPALACE_NOVELTY_TAGGING", raising=False)
@@ -274,9 +265,7 @@ def test_tool_add_drawer_first_drawer_in_fresh_wing_is_novel(
     assert meta["novelty_tag"] == "novel"
 
 
-def test_tool_add_drawer_does_not_block_on_novelty_failure(
-    monkeypatch, config, palace_path, kg
-):
+def test_tool_add_drawer_does_not_block_on_novelty_failure(monkeypatch, config, palace_path, kg):
     """If the novelty scoring path raises, the write must still succeed —
     novelty is a TAG, not a GATE."""
     monkeypatch.delenv("MEMPALACE_NOVELTY_TAGGING", raising=False)
@@ -320,9 +309,7 @@ def test_miner_add_drawer_stamps_novelty_tag(monkeypatch, palace_path, tmp_path)
     from mempalace.miner import add_drawer
 
     client = chromadb.PersistentClient(path=palace_path)
-    col = client.get_or_create_collection(
-        "mempalace_drawers", metadata={"hnsw:space": "cosine"}
-    )
+    col = client.get_or_create_collection("mempalace_drawers", metadata={"hnsw:space": "cosine"})
 
     src = tmp_path / "notes.md"
     src.write_text("hello")
@@ -349,9 +336,7 @@ def test_miner_add_drawer_disabled_omits_tag(monkeypatch, palace_path, tmp_path)
     from mempalace.miner import add_drawer
 
     client = chromadb.PersistentClient(path=palace_path)
-    col = client.get_or_create_collection(
-        "mempalace_drawers", metadata={"hnsw:space": "cosine"}
-    )
+    col = client.get_or_create_collection("mempalace_drawers", metadata={"hnsw:space": "cosine"})
     src = tmp_path / "notes.md"
     src.write_text("hello")
 
@@ -373,9 +358,7 @@ def test_miner_add_drawer_disabled_omits_tag(monkeypatch, palace_path, tmp_path)
 # ── miner.add_drawers integration ─────────────────────────────────────
 
 
-def test_miner_add_drawers_stamps_shared_novelty_tag(
-    monkeypatch, palace_path, tmp_path
-):
+def test_miner_add_drawers_stamps_shared_novelty_tag(monkeypatch, palace_path, tmp_path):
     """When a file mines into multiple chunks, all chunks share one
     file-level novelty_tag — computed once against the joined content."""
     monkeypatch.delenv("MEMPALACE_NOVELTY_TAGGING", raising=False)
@@ -384,9 +367,7 @@ def test_miner_add_drawers_stamps_shared_novelty_tag(
     from mempalace.miner import add_drawers
 
     client = chromadb.PersistentClient(path=palace_path)
-    col = client.get_or_create_collection(
-        "mempalace_drawers", metadata={"hnsw:space": "cosine"}
-    )
+    col = client.get_or_create_collection("mempalace_drawers", metadata={"hnsw:space": "cosine"})
     src = tmp_path / "doc.md"
     src.write_text("hello")
 
@@ -418,9 +399,7 @@ def test_convo_miner_stamps_novelty_tag(monkeypatch, palace_path, tmp_path):
     from mempalace.convo_miner import _file_chunks_locked
 
     client = chromadb.PersistentClient(path=palace_path)
-    col = client.get_or_create_collection(
-        "mempalace_drawers", metadata={"hnsw:space": "cosine"}
-    )
+    col = client.get_or_create_collection("mempalace_drawers", metadata={"hnsw:space": "cosine"})
     src = tmp_path / "convo.jsonl"
     src.write_text("placeholder")
 

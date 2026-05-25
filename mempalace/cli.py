@@ -31,6 +31,8 @@ Examples:
     mempalace search "pricing discussion" --wing my_app --room costs
 """
 
+from __future__ import annotations
+
 import os
 import sys
 import json
@@ -465,9 +467,7 @@ def _print_search_header(
     print(f"{'=' * 60}\n")
 
 
-def _print_hit_table(
-    index: int, hit: dict, *, full: bool, use_color: bool
-) -> None:
+def _print_hit_table(index: int, hit: dict, *, full: bool, use_color: bool) -> None:
     """Render a single hit in ``table`` (default) or ``full`` format."""
     wing = _color(hit.get("wing", "?"), _ANSI_CYAN, use_color)
     room = _color(hit.get("room", "?"), _ANSI_MAGENTA, use_color)
@@ -481,13 +481,8 @@ def _print_hit_table(
         # Cosine bar is the primary signal; show BM25 inline when both
         # exist so hybrid hits don't lose their second score.
         sim_str = f"{sim:.3f}" if isinstance(sim, (int, float)) else str(sim)
-        bm25_suffix = (
-            f"  bm25={bm25}" if bm25 is not None else ""
-        )
-        print(
-            f"      {_color(bar, _ANSI_GREEN, use_color)}  "
-            f"cosine={sim_str}{bm25_suffix}"
-        )
+        bm25_suffix = f"  bm25={bm25}" if bm25 is not None else ""
+        print(f"      {_color(bar, _ANSI_GREEN, use_color)}  cosine={sim_str}{bm25_suffix}")
     elif bm25 is not None:
         # BM25-only hit (rare; vector store missing or filter forced it).
         matched_via = hit.get("matched_via", "drawer")
@@ -1100,9 +1095,7 @@ def _mine_via_adapter(args) -> None:
     from .knowledge_graph import KnowledgeGraph
     from .palace import get_collection
 
-    palace_path = (
-        os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
-    )
+    palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     try:
         collection = get_collection(palace_path, create=True)
     except Exception as e:
@@ -1144,8 +1137,8 @@ def _mine_via_adapter(args) -> None:
                 # back to CLI-specified wing and a default room.
                 meta = dict(result.metadata)
                 hint = result.route_hint
-                meta["wing"] = (hint.wing if hint and hint.wing else wing)
-                meta["room"] = (hint.room if hint and hint.room else "general")
+                meta["wing"] = hint.wing if hint and hint.wing else wing
+                meta["room"] = hint.room if hint and hint.room else "general"
                 meta["agent"] = agent
                 meta["source_file"] = result.source_file
 
@@ -1507,9 +1500,7 @@ def cmd_search(args):
             data = None
 
             if search_mode == "hybrid":
-                data = _daemon_search_hybrid(
-                    args.query, n_results, wing=args.wing, room=args.room
-                )
+                data = _daemon_search_hybrid(args.query, n_results, wing=args.wing, room=args.room)
             elif search_mode == "fast":
                 data = _daemon_search_fast(args.query, n_results, wing=args.wing)
             elif search_mode == "auto":
@@ -1531,9 +1522,7 @@ def cmd_search(args):
         if not quiet:
             source = data.get("source", "mcp")
             print(f"  [{source}]", file=sys.stderr)
-        _print_daemon_search(
-            args.query, data, wing=args.wing, room=args.room, fmt=fmt, quiet=quiet
-        )
+        _print_daemon_search(args.query, data, wing=args.wing, room=args.room, fmt=fmt, quiet=quiet)
         if "error" in data and not data.get("results"):
             sys.exit(2)
         return
@@ -1938,9 +1927,13 @@ def cmd_rename_wing(args):
     if _daemon_strict():
         if dry_run:
             try:
-                data = _call_daemon_tool("mempalace_list_drawers", {
-                    "wing": from_wing, "limit": 1,
-                })
+                data = _call_daemon_tool(
+                    "mempalace_list_drawers",
+                    {
+                        "wing": from_wing,
+                        "limit": 1,
+                    },
+                )
             except DaemonError as e:
                 if want_json:
                     _emit_json({"error": str(e)})
@@ -1949,17 +1942,24 @@ def cmd_rename_wing(args):
                 sys.exit(2)
             total = data.get("total", 0)
             if want_json:
-                _emit_json({"dry_run": True, "from_wing": from_wing, "to_wing": to_wing, "count": total})
+                _emit_json(
+                    {"dry_run": True, "from_wing": from_wing, "to_wing": to_wing, "count": total}
+                )
             else:
-                print(f"\n  Dry run: {total:,} drawers would be renamed from '{from_wing}' to '{to_wing}'\n")
+                print(
+                    f"\n  Dry run: {total:,} drawers would be renamed from '{from_wing}' to '{to_wing}'\n"
+                )
             return
 
         try:
-            data = _call_daemon_tool("mempalace_rename_wing", {
-                "from_wing": from_wing,
-                "to_wing": to_wing,
-                "batch_size": batch_size,
-            })
+            data = _call_daemon_tool(
+                "mempalace_rename_wing",
+                {
+                    "from_wing": from_wing,
+                    "to_wing": to_wing,
+                    "batch_size": batch_size,
+                },
+            )
         except DaemonError as e:
             if want_json:
                 _emit_json({"error": str(e)})
@@ -1982,7 +1982,9 @@ def cmd_rename_wing(args):
     from .backends.base import PalaceRef
 
     palace_path = os.path.abspath(
-        os.path.expanduser(args.palace) if getattr(args, "palace", None) else MempalaceConfig().palace_path
+        os.path.expanduser(args.palace)
+        if getattr(args, "palace", None)
+        else MempalaceConfig().palace_path
     )
     backend = ChromaBackend()
     try:
@@ -1998,9 +2000,13 @@ def cmd_rename_wing(args):
         matched = col.get(where={"wing": from_wing}, include=[])
         count = len(matched.ids) if hasattr(matched, "ids") else len(matched.get("ids", []))
         if want_json:
-            _emit_json({"dry_run": True, "from_wing": from_wing, "to_wing": to_wing, "count": count})
+            _emit_json(
+                {"dry_run": True, "from_wing": from_wing, "to_wing": to_wing, "count": count}
+            )
         else:
-            print(f"\n  Dry run: {count:,} drawers would be renamed from '{from_wing}' to '{to_wing}'\n")
+            print(
+                f"\n  Dry run: {count:,} drawers would be renamed from '{from_wing}' to '{to_wing}'\n"
+            )
         return
 
     result = col.rename_wing(from_wing=from_wing, to_wing=to_wing, batch_size=batch_size)
@@ -2373,7 +2379,7 @@ def _print_stats_dashboard(bundle: dict, top: int) -> None:
             print(f"    {wing:<28} {count:>7}  {bar}")
         remaining = len(items) - len(shown)
         if remaining > 0:
-            tail = sum(c for _, c in items[len(shown):])
+            tail = sum(c for _, c in items[len(shown) :])
             print(f"    ... {remaining} more wings ({tail} drawers; --top 0 shows all)")
     elif "error" in status:
         print(f"    (status error: {status.get('error')})")
@@ -2409,7 +2415,9 @@ def _print_stats_dashboard(bundle: dict, top: int) -> None:
         print(f"    (error: {graph.get('error')})")
     else:
         print(f"    total rooms      : {graph.get('total_rooms', 0):>7}")
-        print(f"    tunnel rooms     : {graph.get('tunnel_rooms', 0):>7}  (rooms shared by 2+ wings)")
+        print(
+            f"    tunnel rooms     : {graph.get('tunnel_rooms', 0):>7}  (rooms shared by 2+ wings)"
+        )
         print(f"    edges            : {graph.get('total_edges', 0):>7}")
         top_tunnels = graph.get("top_tunnels") or []
         if top_tunnels:
@@ -3465,8 +3473,15 @@ def main():
     )
     p_rename_wing.add_argument("--from", dest="from_wing", required=True, help="Source wing name")
     p_rename_wing.add_argument("--to", dest="to_wing", required=True, help="Target wing name")
-    p_rename_wing.add_argument("--dry-run", action="store_true", help="Count matching drawers without renaming")
-    p_rename_wing.add_argument("--batch-size", type=int, default=500, help="Batch size for non-postgres backends (default: 500)")
+    p_rename_wing.add_argument(
+        "--dry-run", action="store_true", help="Count matching drawers without renaming"
+    )
+    p_rename_wing.add_argument(
+        "--batch-size",
+        type=int,
+        default=500,
+        help="Batch size for non-postgres backends (default: 500)",
+    )
 
     # ── rooms — manage the canonical room set (hybrid-search-taxonomy follow-up) ────
     p_rooms = sub.add_parser(

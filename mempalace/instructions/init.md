@@ -41,7 +41,7 @@ If the install command fails, try these fallbacks in order:
    - On Linux/macOS: suggest `sudo apt-get install build-essential python3-dev`
      (Debian/Ubuntu) or `xcode-select --install` (macOS)
    - On Windows: suggest installing Microsoft C++ Build Tools from
-     https://visualstudio.microsoft.com/visual-cpp-build-tools/
+     <https://visualstudio.microsoft.com/visual-cpp-build-tools/>
    - Then retry the install command
 5. If all attempts fail, report the error clearly and stop.
 

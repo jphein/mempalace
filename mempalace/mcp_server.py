@@ -678,6 +678,7 @@ def _get_collection_postgres(create=False):
 
             if hasattr(_collection_cache, "set_kg_writethrough"):
                 from .palace import _maybe_attach_writethrough
+
                 _maybe_attach_writethrough(_collection_cache, _config.postgres_dsn)
 
         _last_backend_error = None
@@ -2114,7 +2115,9 @@ def tool_rename_wing(from_wing: str, to_wing: str, batch_size: int = 500):
 
     try:
         result = col.rename_wing(
-            from_wing=from_wing, to_wing=to_wing, batch_size=batch_size,
+            from_wing=from_wing,
+            to_wing=to_wing,
+            batch_size=batch_size,
         )
         _metadata_cache = None
 

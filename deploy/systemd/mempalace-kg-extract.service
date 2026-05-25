@@ -1,0 +1,27 @@
+[Unit]
+Description=MemPalace KG triple extraction worker
+Documentation=https://github.com/techempower-org/mempalace/blob/main/docs/kg-extraction.md
+After=network.target llama-server-extractor.service
+Wants=llama-server-extractor.service
+
+[Service]
+Type=simple
+User=jp
+EnvironmentFile=/etc/mempalace/kg-extract.env
+ExecStart=/usr/local/bin/mempalace-kg-extract --workers 8 --batch-size 20 --poll-interval 30
+Restart=on-failure
+RestartSec=10
+
+# Resource hints — extraction is HTTP-bound (waits on llama-server),
+# so CPU/memory budgets are modest. Tune if running multiple workers.
+MemoryMax=512M
+CPUQuota=200%
+
+# Logging — journalctl is the operator's primary observability channel.
+# See docs/kg-extraction.md for tail commands.
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=mempalace-kg-extract
+
+[Install]
+WantedBy=multi-user.target

@@ -299,9 +299,7 @@ class BaseCollection(ABC):
             embeddings=embeddings,
         )
 
-    def rename_wing(
-        self, *, from_wing: str, to_wing: str, batch_size: int = 500
-    ) -> dict:
+    def rename_wing(self, *, from_wing: str, to_wing: str, batch_size: int = 500) -> dict:
         """Rename all drawers from one wing to another.
 
         Default implementation iterates in batches using metadata-only

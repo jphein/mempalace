@@ -302,20 +302,20 @@ The multipass-structural-memory-eval (SME) framework currently has:
 
 ### Medium-term (would differentiate SME)
 
-4. **Implement E2E QA scoring.** The cross-validation design in `docs/cross_validation_2026.md` is 80% specified. Completing this makes SME the first framework that can produce both R@K retrieval numbers AND E2E QA accuracy on the same runs, showing the gap between the two metrics.
+1. **Implement E2E QA scoring.** The cross-validation design in `docs/cross_validation_2026.md` is 80% specified. Completing this makes SME the first framework that can produce both R@K retrieval numbers AND E2E QA accuracy on the same runs, showing the gap between the two metrics.
 
-5. **Add adapters for 2-3 competing systems.** Priority order by information value:
+2. **Add adapters for 2-3 competing systems.** Priority order by information value:
    - OMEGA (highest claimed LongMemEval QA, local-only, pip-installable -- easiest to benchmark fairly)
    - Hindsight (published their benchmark data, MCP-compatible)
    - Mem0 OSS (widely cited, open eval framework, Python SDK)
 
-6. **Run structural categories (Cat 4, 5, 8) on competing systems.** No other benchmark tests ingestion integrity, gap detection, or ontology coherence. This is SME's unique contribution and would be the first published structural quality comparison across memory systems.
+3. **Run structural categories (Cat 4, 5, 8) on competing systems.** No other benchmark tests ingestion integrity, gap detection, or ontology coherence. This is SME's unique contribution and would be the first published structural quality comparison across memory systems.
 
 ### Long-term (research-grade contribution)
 
-7. **Build a unified leaderboard** with mandatory disclosure of: metric type (R@K vs. QA), answer model, judge model, dataset split, question count, and whether adversarial/category-5 questions were included. The landscape desperately needs this -- every existing comparison table mixes metrics, models, and dataset versions.
+1. **Build a unified leaderboard** with mandatory disclosure of: metric type (R@K vs. QA), answer model, judge model, dataset split, question count, and whether adversarial/category-5 questions were included. The landscape desperately needs this -- every existing comparison table mixes metrics, models, and dataset versions.
 
-8. **Cross-validate Cat 9 (The Handshake) across systems.** The RLM adapter data (46.67% recall despite available tool) demonstrates that invocation rate is a real failure mode no benchmark captures. Extending this to other MCP-based memory systems would quantify the "works in theory, fails in practice" gap.
+2. **Cross-validate Cat 9 (The Handshake) across systems.** The RLM adapter data (46.67% recall despite available tool) demonstrates that invocation rate is a real failure mode no benchmark captures. Extending this to other MCP-based memory systems would quantify the "works in theory, fails in practice" gap.
 
 ---
 

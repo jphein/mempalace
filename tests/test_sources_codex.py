@@ -16,10 +16,14 @@ def _make_session_jsonl(messages, include_meta=True):
         lines.append(json.dumps({"type": "session_meta", "session_id": "test-session"}))
     for role, text in messages:
         payload_type = "user_message" if role == "user" else "agent_message"
-        lines.append(json.dumps({
-            "type": "event_msg",
-            "payload": {"type": payload_type, "message": text},
-        }))
+        lines.append(
+            json.dumps(
+                {
+                    "type": "event_msg",
+                    "payload": {"type": payload_type, "message": text},
+                }
+            )
+        )
     return "\n".join(lines)
 
 
@@ -33,18 +37,28 @@ def codex_dir(tmp_path):
     sessions_dir = tmp_path / "sessions" / "2026" / "05" / "23"
     sessions_dir.mkdir(parents=True)
     (sessions_dir / "rollout-001.jsonl").write_text(
-        _make_session_jsonl([
-            ("user", "How do I fix the authentication bug?"),
-            ("assistant", "The issue is in the auth middleware. You need to check the token expiry."),
-            ("user", "Can you show the fix?"),
-            ("assistant", "Here's the corrected code for the auth middleware validation."),
-        ])
+        _make_session_jsonl(
+            [
+                ("user", "How do I fix the authentication bug?"),
+                (
+                    "assistant",
+                    "The issue is in the auth middleware. You need to check the token expiry.",
+                ),
+                ("user", "Can you show the fix?"),
+                ("assistant", "Here's the corrected code for the auth middleware validation."),
+            ]
+        )
     )
     (sessions_dir / "rollout-002.jsonl").write_text(
-        _make_session_jsonl([
-            ("user", "Explain the project architecture."),
-            ("assistant", "The project follows a layered architecture with controllers, services, and repositories."),
-        ])
+        _make_session_jsonl(
+            [
+                ("user", "Explain the project architecture."),
+                (
+                    "assistant",
+                    "The project follows a layered architecture with controllers, services, and repositories.",
+                ),
+            ]
+        )
     )
     return tmp_path
 
@@ -52,26 +66,34 @@ def codex_dir(tmp_path):
 @pytest.fixture
 def palace_ctx():
     class _FC:
-        def add(self, **kw): pass
-        def upsert(self, **kw): pass
-        def query(self, **kw): return {"ids": [], "documents": []}
-        def get(self, **kw): return {"ids": [], "documents": [], "metadatas": []}
-        def delete(self, **kw): pass
-        def count(self): return 0
+        def add(self, **kw):
+            pass
+
+        def upsert(self, **kw):
+            pass
+
+        def query(self, **kw):
+            return {"ids": [], "documents": []}
+
+        def get(self, **kw):
+            return {"ids": [], "documents": [], "metadatas": []}
+
+        def delete(self, **kw):
+            pass
+
+        def count(self):
+            return 0
 
     class _FK:
-        def add_triple(self, *a, **kw): pass
+        def add_triple(self, *a, **kw):
+            pass
 
-    return PalaceContext(
-        drawer_collection=_FC(), knowledge_graph=_FK(), palace_path="/tmp/fake"
-    )
+    return PalaceContext(drawer_collection=_FC(), knowledge_graph=_FK(), palace_path="/tmp/fake")
 
 
 class TestCodexParser:
     def test_parse_valid_session(self):
-        content = _make_session_jsonl([
-            ("user", "hello"), ("assistant", "hi there")
-        ])
+        content = _make_session_jsonl([("user", "hello"), ("assistant", "hi there")])
         result = _parse_codex_jsonl(content)
         assert result is not None
         assert len(result) == 2
@@ -79,9 +101,7 @@ class TestCodexParser:
         assert result[1] == ("assistant", "hi there")
 
     def test_parse_rejects_without_session_meta(self):
-        content = _make_session_jsonl([
-            ("user", "hello"), ("assistant", "hi")
-        ], include_meta=False)
+        content = _make_session_jsonl([("user", "hello"), ("assistant", "hi")], include_meta=False)
         assert _parse_codex_jsonl(content) is None
 
     def test_parse_rejects_too_few_messages(self):
@@ -133,4 +153,5 @@ class TestCodexAdapter:
 
     def test_registered_entry_point(self):
         from mempalace.sources.registry import available_adapters
+
         assert "codex" in available_adapters()

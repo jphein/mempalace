@@ -57,6 +57,7 @@ Repository = "https://github.com/MemPalace/mempalace"
 [project.scripts]
 mempalace = "mempalace.cli:main"
 mempalace-mcp = "mempalace.mcp_server:main"
+mempalace-kg-extract = "mempalace.kg_triple_worker:cli_main"
 
 [project.entry-points."mempalace.backends"]
 chroma = "mempalace.backends.chroma:ChromaBackend"
@@ -87,6 +88,10 @@ dev = [
 ]
 postgres = ["psycopg2-binary>=2.9"]
 spellcheck = ["autocorrect>=2.0"]
+# Async LLM-based KG triple extraction worker (mempalace-kg-extract CLI).
+# httpx for the OpenAI-compatible chat-completions client; psycopg2 for
+# the queue + AGE writes (same driver the rest of the postgres backend uses).
+kg-extract = ["httpx>=0.27", "psycopg2-binary>=2.9"]
 # Hardware acceleration for the ONNX embedding model. Install exactly one:
 #   pip install mempalace[gpu]       — NVIDIA CUDA
 #   pip install mempalace[dml]       — DirectML (Windows AMD/Intel/NVIDIA)

@@ -48,9 +48,7 @@ from .context import PalaceContext
 
 logger = logging.getLogger(__name__)
 
-_DEFAULT_DB_PATHS: Tuple[str, ...] = (
-    "~/.local/state/warp-terminal/warp.sqlite",
-)
+_DEFAULT_DB_PATHS: Tuple[str, ...] = ("~/.local/state/warp-terminal/warp.sqlite",)
 
 
 def _detect_hall(content: str) -> str:
@@ -344,10 +342,7 @@ class WarpSourceAdapter(BaseSourceAdapter):
             primary_pwd = cmd_list[0].get("pwd") or ""
             primary_host = cmd_list[0].get("hostname") or ""
             filed_at = (
-                datetime.now(timezone.utc)
-                .replace(microsecond=0)
-                .isoformat()
-                .replace("+00:00", "Z")
+                datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
             )
 
             for chunk in chunks:
@@ -394,9 +389,7 @@ class WarpSourceAdapter(BaseSourceAdapter):
         # Check if ai_queries table exists (may not on older Warp versions)
         tables = {
             r[0]
-            for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
         if "ai_queries" not in tables:
             return
@@ -467,10 +460,7 @@ class WarpSourceAdapter(BaseSourceAdapter):
             last_ts = row["last_ts"] or ""
             wd = (queries[0]["working_directory"] or "") if queries else ""
             filed_at = (
-                datetime.now(timezone.utc)
-                .replace(microsecond=0)
-                .isoformat()
-                .replace("+00:00", "Z")
+                datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
             )
 
             for chunk in chunks:
@@ -567,14 +557,10 @@ class WarpSourceAdapter(BaseSourceAdapter):
         """Confirm the SQLite has the tables the adapter relies on."""
         tables = {
             r[0]
-            for r in conn.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            ).fetchall()
+            for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
         }
         if "commands" not in tables:
-            raise SourceNotFoundError(
-                f"Warp database at {db_path} is missing the 'commands' table"
-            )
+            raise SourceNotFoundError(f"Warp database at {db_path} is missing the 'commands' table")
 
     def _wing_for(self, source: SourceRef) -> str:
         """Resolve the wing for Warp records.

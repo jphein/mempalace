@@ -128,9 +128,7 @@ def _escape_for_vitepress(text: str) -> str:
                 rebuilt.append(ch)
                 i += 1
                 continue
-            if ch == "<" and i + 1 < len(line) and (
-                line[i + 1].isalpha() or line[i + 1] == "/"
-            ):
+            if ch == "<" and i + 1 < len(line) and (line[i + 1].isalpha() or line[i + 1] == "/"):
                 rebuilt.append("&lt;")
                 i += 1
                 continue
@@ -399,15 +397,19 @@ def render_sidebar(modules: list[ModuleDoc]) -> list[dict]:
         children = []
         for mod in grouped[group]:
             link = _output_path_for(mod).relative_to(OUTPUT_ROOT).with_suffix("")
-            children.append({
-                "text": mod.qualname,
-                "link": f"/reference/python-api/{link}",
-            })
-        items.append({
-            "text": group,
-            "collapsed": True,
-            "items": children,
-        })
+            children.append(
+                {
+                    "text": mod.qualname,
+                    "link": f"/reference/python-api/{link}",
+                }
+            )
+        items.append(
+            {
+                "text": group,
+                "collapsed": True,
+                "items": children,
+            }
+        )
     return items
 
 
@@ -450,12 +452,10 @@ def main() -> int:
         path.write_text(content, encoding="utf-8")
 
     if not args.check:
-        existing_files = {
-            p for p in OUTPUT_ROOT.rglob("*.md") if p.is_file()
+        existing_files = {p for p in OUTPUT_ROOT.rglob("*.md") if p.is_file()}
+        expected_files = {p for p in outputs if p.suffix == ".md" and OUTPUT_ROOT in p.parents} | {
+            OUTPUT_ROOT / "index.md"
         }
-        expected_files = {
-            p for p in outputs if p.suffix == ".md" and OUTPUT_ROOT in p.parents
-        } | {OUTPUT_ROOT / "index.md"}
         for stale in existing_files - expected_files:
             stale.unlink()
 

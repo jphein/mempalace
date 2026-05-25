@@ -98,7 +98,9 @@ class ConversationSourceAdapter(BaseSourceAdapter):
             chunks = chunk_exchanges(content)
 
             for i, chunk in enumerate(chunks):
-                chunk_content = chunk if isinstance(chunk, str) else chunk.get("content", str(chunk))
+                chunk_content = (
+                    chunk if isinstance(chunk, str) else chunk.get("content", str(chunk))
+                )
                 yield DrawerRecord(
                     content=chunk_content,
                     source_file=source_file,

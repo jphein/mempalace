@@ -96,6 +96,14 @@
         "link": "/reference/python-api/instructions_cli"
       },
       {
+        "text": "mempalace.kg_llm_extractor",
+        "link": "/reference/python-api/kg_llm_extractor"
+      },
+      {
+        "text": "mempalace.kg_triple_worker",
+        "link": "/reference/python-api/kg_triple_worker"
+      },
+      {
         "text": "mempalace.kg_writethrough",
         "link": "/reference/python-api/kg_writethrough"
       },
@@ -146,6 +154,10 @@
       {
         "text": "mempalace.novelty",
         "link": "/reference/python-api/novelty"
+      },
+      {
+        "text": "mempalace.novelty_wiring",
+        "link": "/reference/python-api/novelty_wiring"
       },
       {
         "text": "mempalace.onboarding",

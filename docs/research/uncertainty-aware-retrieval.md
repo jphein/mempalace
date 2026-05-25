@@ -10,7 +10,6 @@ Training LMs to Reason About Their Uncertainty* ([arXiv:2507.16806][arxiv], ICLR
 [csail-news]: https://www.csail.mit.edu/news/teaching-ai-models-say-im-not-sure
 [mit-news]: https://news.mit.edu/2026/teaching-ai-models-to-say-im-not-sure-0422
 [arxiv]: https://arxiv.org/abs/2507.16806
-[project-page]: https://rl-calibration.github.io/
 
 ## TL;DR — recommendation
 
@@ -249,11 +248,11 @@ Each candidate source has a different score scale and a different
 
 | Source | Score domain | Calibration target |
 |---|---|---|
-| Vector hit | cosine distance ∈ [0, 2] | P(relevant | semantic similarity) |
-| BM25-postgres / sqlite | `ts_rank_cd` or normalized Okapi | P(relevant | keyword overlap) |
-| Graph (AGE) seeded | binary (in expanded set or not) | P(relevant | shares entities with seeds) |
-| Graph (NER) | binary | P(relevant | mentions query entity) |
-| Closet boost | bounded constant subtract | P(relevant | source-level closet hit) |
+| Vector hit | cosine distance ∈ [0, 2] | P(relevant \| semantic similarity) |
+| BM25-postgres / sqlite | `ts_rank_cd` or normalized Okapi | P(relevant \| keyword overlap) |
+| Graph (AGE) seeded | binary (in expanded set or not) | P(relevant \| shares entities with seeds) |
+| Graph (NER) | binary | P(relevant \| mentions query entity) |
+| Closet boost | bounded constant subtract | P(relevant \| source-level closet hit) |
 
 A single `confidence` field on the final reranked hit hides this
 heterogeneity. Two options:
