@@ -31,6 +31,7 @@ from .novelty import classify_novelty, novelty_score
 __all__ = [
     "DEFAULT_WINDOW_SIZE",
     "compute_novelty_tag",
+    "fetch_recent_window",
     "is_novelty_tagging_enabled",
 ]
 
@@ -53,13 +54,11 @@ def is_novelty_tagging_enabled(config: Optional[Any] = None) -> bool:
     if env_val is not None:
         return env_val.strip().lower() not in ("0", "false", "no", "off", "")
     if config is not None:
-        file_cfg = getattr(config, "_file_config", None)
-        if isinstance(file_cfg, dict) and "novelty_tagging" in file_cfg:
-            return bool(file_cfg["novelty_tagging"])
+        return bool(getattr(config, "novelty_tagging", True))
     return True
 
 
-def _fetch_recent_window(
+def fetch_recent_window(
     collection: Any, wing: str, room: str, window_size: int
 ) -> list[str]:
     """Return up to ``window_size`` recent drawer documents from ``wing``/``room``.
@@ -113,12 +112,20 @@ def compute_novelty_tag(
     *,
     window_size: int = DEFAULT_WINDOW_SIZE,
     config: Optional[Any] = None,
+    recent: Optional[list[str]] = None,
 ) -> Optional[str]:
     """Return a novelty tag for ``content`` relative to recent drawers.
 
     Fetches up to ``window_size`` peer drawers in the same wing+room,
     computes the mean NCD novelty score, and classifies it into one of
     ``"novel"``, ``"routine"``, ``"redundant"``.
+
+    When ``recent`` is provided, the DB fetch is skipped and the given
+    window is used directly — callers that process many chunks in the
+    same room can pre-fetch once and pass the window to avoid N+1 queries.
+
+    Content is truncated to 1 MB before scoring to bound gzip cost on
+    oversized drawers.
 
     Returns ``None`` when novelty tagging is disabled by env/config —
     callers MUST treat ``None`` as "do not add the metadata key" so
@@ -131,8 +138,9 @@ def compute_novelty_tag(
     if not is_novelty_tagging_enabled(config):
         return None
     try:
-        recent = _fetch_recent_window(collection, wing, room, window_size)
-        score = novelty_score(content or "", recent)
+        if recent is None:
+            recent = fetch_recent_window(collection, wing, room, window_size)
+        score = novelty_score((content or "")[:1_048_576], recent)
         return classify_novelty(score)
     except Exception:
         logger.debug(

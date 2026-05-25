@@ -39,7 +39,7 @@ def test_is_novelty_tagging_enabled_config_false_disables(monkeypatch):
     monkeypatch.delenv("MEMPALACE_NOVELTY_TAGGING", raising=False)
 
     class FakeConfig:
-        _file_config = {"novelty_tagging": False}
+        novelty_tagging = False
 
     assert novelty_wiring.is_novelty_tagging_enabled(FakeConfig()) is False
 
@@ -49,7 +49,7 @@ def test_env_overrides_config(monkeypatch):
     monkeypatch.setenv("MEMPALACE_NOVELTY_TAGGING", "1")
 
     class FakeConfig:
-        _file_config = {"novelty_tagging": False}
+        novelty_tagging = False
 
     assert novelty_wiring.is_novelty_tagging_enabled(FakeConfig()) is True
 
