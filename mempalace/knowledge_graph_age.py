@@ -138,6 +138,7 @@ class KnowledgeGraphAGE:
         # own changes; subsequent write operations control their own
         # transactions.
         self._conn.autocommit = False
+        self._age_loaded = False
         self._ensure_graph()
 
     def _ensure_graph(self) -> None:
@@ -792,8 +793,10 @@ class KnowledgeGraphAGE:
 
         rows: list = []
         with self._conn.cursor() as cur:
-            cur.execute("LOAD 'age'")
-            cur.execute('SET search_path = ag_catalog, "$user", public')
+            if not self._age_loaded:
+                cur.execute("LOAD 'age'")
+                cur.execute('SET search_path = ag_catalog, "$user", public')
+                self._age_loaded = True
             cur.execute(
                 f"SELECT * FROM cypher(%s, {_AGE_DQ_OPEN}{cypher_inlined}{_AGE_DQ_CLOSE}) AS ({cols_decl})",
                 (self.GRAPH_NAME,),

@@ -48,7 +48,8 @@ import sys
 import time
 from typing import Optional
 
-from .knowledge_graph_age import KnowledgeGraphAGE
+from .knowledge_graph_age import KnowledgeGraphAGE, _cypher_literal
+from .config import sanitize_kg_value
 from .palace_graph_age import populate_from_postgres
 
 # Postgres identifier whitelist: ``[A-Za-z_][A-Za-z0-9_]*`` is the
@@ -115,6 +116,16 @@ def _checkpoint_clear(conn) -> int:
         cur.execute(f"DELETE FROM {CHECKPOINT_TABLE}")
         conn.commit()
         return cur.rowcount
+
+
+def _checkpoint_done_set(conn, phase: str) -> set[str]:
+    """Load all checkpoint keys for a phase into a set — O(1) lookups."""
+    with conn.cursor() as cur:
+        cur.execute(
+            f"SELECT key FROM {CHECKPOINT_TABLE} WHERE phase = %s",
+            (phase,),
+        )
+        return {row[0] for row in cur.fetchall()}
 
 
 def _get_extractor(name: str = "regex"):
@@ -258,6 +269,9 @@ def backfill(
                 _checkpoint_mark(checkpoint_conn, "drawer", did)
             pending_marks.clear()
 
+        done_set = _checkpoint_done_set(checkpoint_conn, "drawer")
+        logger.info("backfill: preloaded %d drawer checkpoints", len(done_set))
+
         try:
             with scan_conn.cursor(name="drawer_scan_cur") as cur:
                 cur.itersize = 1000
@@ -265,7 +279,7 @@ def backfill(
                 t0 = time.time()
                 for drawer_id, document, wing, room in cur:
                     counters["drawers_seen"] += 1
-                    if _checkpoint_done(checkpoint_conn, "drawer", drawer_id):
+                    if drawer_id in done_set:
                         counters["drawers_skipped_checkpoint"] += 1
                         continue
 
@@ -292,32 +306,45 @@ def backfill(
                         pending_marks.clear()
                         continue
 
-                    # Extract + add MENTIONS edges (Drawer)-[:MENTIONS]->(Entity).
+                    # Extract entities (pure CPU, no DB).
                     try:
                         ents = extractor(document)
                     except Exception as e:  # noqa: BLE001
                         counters["errors"] += 1
                         logger.debug("extractor failed for %s: %s", drawer_id, e)
                         ents = []
-                    for ent in (ents or [])[:max_entities_per_drawer]:
+                    ents = (ents or [])[:max_entities_per_drawer]
+
+                    # Batch all MENTIONS edges via UNWIND in a single Cypher call.
+                    if ents:
+                        ent_list = ", ".join(
+                            "{{name: {}, etype: {}, cnt: {}, conf: {}}}".format(
+                                _cypher_literal(sanitize_kg_value(ent.name, "entity_name")),
+                                _cypher_literal(getattr(ent, "type", "unknown")),
+                                getattr(ent, "count", 1),
+                                confidence,
+                            )
+                            for ent in ents
+                        )
                         try:
-                            kg.add_mention(
-                                drawer_id=drawer_id,
-                                entity_name=ent.name,
-                                entity_type=getattr(ent, "type", "unknown"),
-                                count=getattr(ent, "count", 1),
-                                confidence=confidence,
+                            kg._run_cypher(
+                                f"""
+                                MATCH (d:Drawer {{id: $did}})
+                                WITH d
+                                UNWIND [{ent_list}] AS ent
+                                MERGE (e:Entity {{name: ent.name}})
+                                CREATE (d)-[:MENTIONS {{count: ent.cnt, confidence: ent.conf, etype: ent.etype}}]->(e)
+                                """,
+                                {"did": drawer_id},
                                 commit=False,
                             )
-                            counters["entities_added"] += 1
+                            counters["entities_added"] += len(ents)
                         except Exception as e:  # noqa: BLE001
                             counters["errors"] += 1
-                            logger.debug(
-                                "add_mention failed (%s, %s): %s",
-                                drawer_id,
-                                ent.name,
-                                e,
-                            )
+                            logger.debug("UNWIND mentions failed for %s: %s", drawer_id, e)
+                            kg._conn.rollback()
+                            pending_marks.clear()
+                            continue
 
                     pending_marks.append(drawer_id)
 
