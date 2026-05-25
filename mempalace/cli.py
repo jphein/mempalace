@@ -209,6 +209,35 @@ def _call_daemon_tool(name: str, arguments: dict) -> dict:
         return {"_raw": text}
 
 
+def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
+    """GET a daemon REST endpoint directly — no MCP envelope, no AGE locks.
+
+    Falls back to _call_daemon_tool on non-2xx (endpoint might not exist
+    on older daemons). Raises DaemonError on network failure.
+    """
+    import urllib.error
+    import urllib.request
+    import urllib.parse
+
+    url = f"{_daemon_url()}{path}"
+    if params:
+        url += "?" + urllib.parse.urlencode(params)
+    headers = {}
+    api_key = os.environ.get("PALACE_API_KEY", "").strip()
+    if api_key:
+        headers["x-api-key"] = api_key
+    req = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None  # endpoint not available, caller falls back
+        raise DaemonError(f"daemon REST {path} failed ({e.code}): {e.reason}") from e
+    except (urllib.error.URLError, ConnectionError, OSError) as e:
+        raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
+
+
 def _post_daemon_mine_cli(directory: str, wing: str, mode: str = "convos") -> bool:
     """POST a mine request to the daemon's ``/mine`` endpoint.
 
@@ -1415,7 +1444,21 @@ def cmd_search(args):
         if tags:
             arguments["tags"] = tags
         try:
-            data = _call_daemon_tool("mempalace_search", arguments)
+            data = None
+            if not args.room and not tags:
+                rest_params = {"q": args.query, "limit": n_results}
+                if args.wing:
+                    rest_params["wing"] = args.wing
+                raw = _call_daemon_rest("/search/fast", rest_params)
+                if raw is not None:
+                    for hit in raw:
+                        hit["text"] = hit.pop("snippet", "")
+                        hit["bm25_score"] = round(hit.pop("rank", 0), 3)
+                        if hit.get("source_file"):
+                            hit["source"] = hit["source_file"]
+                    data = {"results": raw, "query": args.query, "source": "bm25-fast"}
+            if data is None:
+                data = _call_daemon_tool("mempalace_search", arguments)
         except DaemonError as e:
             if want_json:
                 _emit_json({"error": str(e), "source": "daemon", "query": args.query})
@@ -1963,7 +2006,9 @@ def cmd_status(args):
         # --palace overrides routing: an explicit local-path argument
         # means the user wants to inspect THAT palace, not the daemon.
         try:
-            data = _call_daemon_tool("mempalace_status", {})
+            data = _call_daemon_rest("/status/fast")
+            if data is None:
+                data = _call_daemon_tool("mempalace_status", {})
         except DaemonError as e:
             if want_json:
                 _emit_json({"error": str(e), "source": "daemon"})
@@ -2215,7 +2260,9 @@ def _gather_daemon_stats(want_tags: bool) -> dict:
     """
     bundle: dict = {}
 
-    status_data = _call_daemon_tool("mempalace_status", {})
+    status_data = _call_daemon_rest("/status/fast")
+    if status_data is None:
+        status_data = _call_daemon_tool("mempalace_status", {})
     bundle["status"] = status_data
 
     try:

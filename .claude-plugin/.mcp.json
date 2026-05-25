@@ -3,7 +3,7 @@
     "command": "${CLAUDE_PLUGIN_ROOT}/venv/bin/python",
     "args": [
       "/home/jp/Projects/palace-daemon/clients/mempalace-mcp.py",
-      "--daemon", "http://disks.jphe.in:8085"
+      "--daemon", "http://familiar:8085"
     ]
   }
 }
