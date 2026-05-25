@@ -7,7 +7,6 @@ fail-open behaviour, opt-out via env/config, recent-window scoping.
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock
 
 import pytest
