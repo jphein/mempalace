@@ -285,8 +285,218 @@ def _print_daemon_status(data: dict) -> None:
     print(f"\n{'=' * 55}\n")
 
 
-def _print_daemon_search(query: str, data: dict, wing: str = None, room: str = None) -> None:
-    """Format ``mempalace_search`` JSON; mirrors ``searcher.search`` output."""
+# ── enhanced search output (#191) ──────────────────────────────────────
+# Three human-facing formats share a single hit shape from the daemon
+# (or from ``searcher.search`` on local fallback): ``wing``, ``room``,
+# ``source_file``, ``similarity``, ``bm25_score``, ``matched_via``,
+# ``text``, ``created_at``, optional ``tags``. ``table`` is the default
+# enhanced view (multi-line per hit with metadata + a relevance bar
+# proportional to cosine similarity). ``compact`` collapses each hit to
+# a single line for fast scanning. ``full`` is identical to ``table``
+# but skips content truncation so long drawers render in full.
+#
+# ANSI colour is opt-in via ``_search_use_color``: only when stdout is a
+# TTY, ``--quiet`` / ``--json`` is off, and the ``NO_COLOR`` env var is
+# unset (per https://no-color.org). Honouring NO_COLOR means CI logs
+# and accessibility users get plain text without extra flags.
+
+_ANSI_RESET = "\033[0m"
+_ANSI_DIM = "\033[2m"
+_ANSI_BOLD = "\033[1m"
+_ANSI_CYAN = "\033[36m"
+_ANSI_GREEN = "\033[32m"
+_ANSI_YELLOW = "\033[33m"
+_ANSI_MAGENTA = "\033[35m"
+
+# Default content truncation budget for ``table`` format. Long drawers
+# get the first N lines with a ``... +M more lines`` marker so the
+# terminal stays readable on a 5-result page. ``full`` skips truncation.
+_SEARCH_TABLE_MAX_LINES = 12
+
+
+def _search_use_color(quiet: bool) -> bool:
+    """True when ANSI colour codes are safe to emit.
+
+    Suppressed for ``--quiet`` / ``--json`` callers (machine consumption),
+    when stdout is not a TTY (piped/redirected output), and when the
+    ``NO_COLOR`` env var is set (https://no-color.org convention).
+    """
+    if quiet:
+        return False
+    if os.environ.get("NO_COLOR"):
+        return False
+    try:
+        return bool(sys.stdout.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
+def _color(text: str, code: str, use_color: bool) -> str:
+    """Wrap ``text`` in an ANSI colour code only when ``use_color`` is True."""
+    if not use_color or not text:
+        return text
+    return f"{code}{text}{_ANSI_RESET}"
+
+
+def _relevance_bar(similarity, width: int = 16) -> str:
+    """Render a horizontal bar proportional to cosine ``similarity``.
+
+    Mirrors ``_stats_bar``'s Unicode block fill so search and stats
+    look like siblings. Returns an empty string when similarity is
+    unavailable (e.g. BM25-only hit) so the caller can fall back to
+    a numeric BM25 line instead of an empty bar.
+    """
+    if similarity is None:
+        return ""
+    try:
+        ratio = max(0.0, min(1.0, float(similarity)))
+    except (TypeError, ValueError):
+        return ""
+    filled = int(round(ratio * width))
+    return "█" * filled + "░" * (width - filled)
+
+
+def _format_hit_metadata(hit: dict) -> str:
+    """Inline metadata line — source file + creation timestamp.
+
+    Both fields are best-effort. ``created_at`` is the ``filed_at``
+    timestamp the daemon attaches at write time (see #184 fork-changes
+    entry on ``filed_at``); missing values render as ``unknown`` rather
+    than an empty placeholder so the column alignment stays readable.
+    """
+    source = hit.get("source_file") or "?"
+    created = hit.get("created_at") or "unknown"
+    return f"{source}  ·  {created}"
+
+
+def _truncate_content(text: str, max_lines: int) -> tuple:
+    """Return (shown_lines, truncated_count) for ``table`` format.
+
+    Preserves newlines (we never collapse multi-line drawers) and
+    appends a ``+N more lines`` marker when truncated so the reader
+    knows there's more behind the ellipsis. ``--format full`` skips
+    this helper entirely.
+    """
+    if not text:
+        return [], 0
+    lines = text.strip().split("\n")
+    if max_lines <= 0 or len(lines) <= max_lines:
+        return lines, 0
+    return lines[:max_lines], len(lines) - max_lines
+
+
+def _print_search_header(
+    query: str, data: dict, wing, room, warnings, quiet: bool, use_color: bool
+) -> None:
+    """Header chrome for ``table`` / ``full`` formats. Suppressed under --quiet."""
+    if quiet:
+        return
+    print(f"\n{'=' * 60}")
+    print(f'  Results for: "{_color(query, _ANSI_BOLD, use_color)}"')
+    if wing:
+        print(f"  Wing: {_color(wing, _ANSI_CYAN, use_color)}")
+    if room:
+        print(f"  Room: {_color(room, _ANSI_MAGENTA, use_color)}")
+    if data.get("available_in_scope") is not None:
+        print(f"  Scope has: {data['available_in_scope']} drawers matching filter")
+    for w in warnings:
+        print(f"  ! {w}")
+    print(f"  via palace-daemon @ {_daemon_url()}")
+    print(f"{'=' * 60}\n")
+
+
+def _print_hit_table(
+    index: int, hit: dict, *, full: bool, use_color: bool
+) -> None:
+    """Render a single hit in ``table`` (default) or ``full`` format."""
+    wing = _color(hit.get("wing", "?"), _ANSI_CYAN, use_color)
+    room = _color(hit.get("room", "?"), _ANSI_MAGENTA, use_color)
+    sim = hit.get("similarity")
+    bm25 = hit.get("bm25_score")
+
+    print(f"  [{index}] {wing} / {room}")
+
+    bar = _relevance_bar(sim)
+    if bar:
+        # Cosine bar is the primary signal; show BM25 inline when both
+        # exist so hybrid hits don't lose their second score.
+        sim_str = f"{sim:.3f}" if isinstance(sim, (int, float)) else str(sim)
+        bm25_suffix = (
+            f"  bm25={bm25}" if bm25 is not None else ""
+        )
+        print(
+            f"      {_color(bar, _ANSI_GREEN, use_color)}  "
+            f"cosine={sim_str}{bm25_suffix}"
+        )
+    elif bm25 is not None:
+        # BM25-only hit (rare; vector store missing or filter forced it).
+        matched_via = hit.get("matched_via", "drawer")
+        print(f"      BM25: {bm25}  (matched_via: {matched_via})")
+
+    meta = _format_hit_metadata(hit)
+    print(f"      {_color(meta, _ANSI_DIM, use_color)}")
+
+    tags = hit.get("tags")
+    if tags:
+        tag_str = ", ".join(str(t) for t in tags)
+        print(f"      {_color('tags:', _ANSI_DIM, use_color)} {tag_str}")
+
+    print()
+    max_lines = 0 if full else _SEARCH_TABLE_MAX_LINES
+    shown, hidden = _truncate_content(hit.get("text") or "", max_lines)
+    for line in shown:
+        print(f"      {line}")
+    if hidden:
+        marker = f"... +{hidden} more lines (use --format full to see all)"
+        print(f"      {_color(marker, _ANSI_DIM, use_color)}")
+    print()
+    print(f"  {'─' * 56}")
+
+
+def _print_hit_compact(index: int, hit: dict, *, use_color: bool) -> None:
+    """One-line-per-hit rendering for ``--format compact``.
+
+    Format: ``[N] wing/room  ▰▰▰▰░░░░░░░░  0.812  source  preview``.
+    Preview is the first non-empty line of the drawer, truncated to
+    fit a reasonable terminal width (~110 cols). Newlines collapse
+    into a single space so the preview never wraps.
+    """
+    wing = _color(hit.get("wing", "?"), _ANSI_CYAN, use_color)
+    room = _color(hit.get("room", "?"), _ANSI_MAGENTA, use_color)
+    sim = hit.get("similarity")
+    bar = _relevance_bar(sim, width=12)
+    sim_str = f"{sim:.3f}" if isinstance(sim, (int, float)) else "  -  "
+    bar_part = _color(bar, _ANSI_GREEN, use_color) if bar else "  -  "
+    text = (hit.get("text") or "").strip()
+    first_line = next((ln for ln in text.split("\n") if ln.strip()), "")
+    if len(first_line) > 70:
+        first_line = first_line[:67] + "…"
+    source = hit.get("source_file") or "?"
+    if len(source) > 28:
+        source = "…" + source[-27:]
+    print(
+        f"  [{index}] {wing}/{room}  {bar_part}  {sim_str}  "
+        f"{_color(source, _ANSI_DIM, use_color)}  {first_line}"
+    )
+
+
+def _print_daemon_search(
+    query: str,
+    data: dict,
+    wing: str = None,
+    room: str = None,
+    *,
+    fmt: str = "table",
+    quiet: bool = False,
+) -> None:
+    """Format ``mempalace_search`` JSON; mirrors ``searcher.search`` output.
+
+    ``fmt`` selects ``table`` (default — multi-line, metadata + relevance
+    bar + truncated content), ``compact`` (one line per hit), or ``full``
+    (table layout with no content truncation). ``quiet`` suppresses the
+    header chrome and ANSI colour, intended for piped output and
+    ``--quiet``/``--json`` callers.
+    """
     if "error" in data and not data.get("results"):
         print(f"\n  {data['error']}")
         if "hint" in data:
@@ -302,37 +512,21 @@ def _print_daemon_search(query: str, data: dict, wing: str = None, room: str = N
             print(f"  ! {w}")
         return
 
-    print(f"\n{'=' * 60}")
-    print(f'  Results for: "{query}"')
-    if wing:
-        print(f"  Wing: {wing}")
-    if room:
-        print(f"  Room: {room}")
-    if data.get("available_in_scope") is not None:
-        print(f"  Scope has: {data['available_in_scope']} drawers matching filter")
-    if warnings:
-        for w in warnings:
-            print(f"  ! {w}")
-    print(f"  via palace-daemon @ {_daemon_url()}")
-    print(f"{'=' * 60}\n")
+    use_color = _search_use_color(quiet)
+    _print_search_header(query, data, wing, room, warnings, quiet, use_color)
 
+    if fmt == "compact":
+        for i, hit in enumerate(hits, 1):
+            _print_hit_compact(i, hit, use_color=use_color)
+        if not quiet:
+            print()
+        return
+
+    full = fmt == "full"
     for i, hit in enumerate(hits, 1):
-        print(f"  [{i}] {hit.get('wing', '?')} / {hit.get('room', '?')}")
-        print(f"      Source: {hit.get('source_file', '?')}")
-        sim = hit.get("similarity")
-        bm25 = hit.get("bm25_score")
-        if sim is not None and bm25 is not None:
-            print(f"      Match:  cosine={sim}  bm25={bm25}")
-        elif sim is not None:
-            print(f"      Match:  {sim}")
-        elif bm25 is not None:
-            print(f"      BM25:   {bm25}  (matched_via: {hit.get('matched_via', 'drawer')})")
+        _print_hit_table(i, hit, full=full, use_color=use_color)
+    if not quiet:
         print()
-        for line in (hit.get("text") or "").strip().split("\n"):
-            print(f"      {line}")
-        print()
-        print(f"  {'─' * 56}")
-    print()
 
 
 _MEMPALACE_PROJECT_FILES = ("mempalace.yaml", "entities.json")
@@ -1178,11 +1372,42 @@ def cmd_sync(args):
     print(f"\n{'=' * 55}\n")
 
 
+def _resolve_search_format(args) -> str:
+    """Pick the output format for ``mempalace search``.
+
+    ``--format`` always wins. ``--json`` (legacy flag) maps to ``json``.
+    Defaults to ``table`` — the enhanced multi-line view. ``getattr``
+    fallbacks keep older test fixtures (which build ``argparse.Namespace``
+    without the new attrs) working unchanged.
+    """
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def _resolve_search_limit(args) -> int:
+    """Pick the result limit. ``--limit`` overrides legacy ``--results``."""
+    limit = getattr(args, "limit", None)
+    if limit:
+        return limit
+    return getattr(args, "results", 5)
+
+
 def cmd_search(args):
-    want_json = getattr(args, "json", False)
+    fmt = _resolve_search_format(args)
+    want_json = fmt == "json"
+    n_results = _resolve_search_limit(args)
     tags = list(args.tags) if getattr(args, "tags", None) else None
+    # ``_resolve_quiet`` also flips on a non-TTY stdout. For ``search`` we
+    # only want explicit ``--quiet`` / ``--json`` to suppress chrome —
+    # capsys-piped test output and shell redirects should still get the
+    # rendered header so callers can echo the query and filters back.
+    quiet = bool(getattr(args, "quiet", False)) or want_json
     if _daemon_strict() and not args.palace:
-        arguments = {"query": args.query, "limit": args.results}
+        arguments = {"query": args.query, "limit": n_results}
         if args.wing:
             arguments["wing"] = args.wing
         if args.room:
@@ -1206,7 +1431,9 @@ def cmd_search(args):
             # (per issue #44's exit-code contract).
             sys.exit(0 if (data.get("results") or []) else 1)
         try:
-            _print_daemon_search(args.query, data, wing=args.wing, room=args.room)
+            _print_daemon_search(
+                args.query, data, wing=args.wing, room=args.room, fmt=fmt, quiet=quiet
+            )
         except DaemonError as e:
             print(f"\n  ERROR: {e}", file=sys.stderr)
             sys.exit(1)
@@ -1223,10 +1450,33 @@ def cmd_search(args):
             wing=args.wing,
             room=args.room,
             tags=tags,
-            n_results=args.results,
+            n_results=n_results,
             search_memories=search_memories,
         )
         return
+
+    # Local-path fallback for ``compact`` / ``full`` reuses the daemon
+    # renderer by calling ``search_memories`` directly. Plain ``table``
+    # stays on the legacy ``searcher.search`` printer so existing local
+    # callers keep their familiar output.
+    if fmt in ("compact", "full"):
+        result = search_memories(
+            args.query,
+            palace_path,
+            wing=args.wing,
+            room=args.room,
+            tags=tags,
+            n_results=n_results,
+        )
+        try:
+            _print_daemon_search(
+                args.query, result, wing=args.wing, room=args.room, fmt=fmt, quiet=quiet
+            )
+        except DaemonError:
+            sys.exit(1)
+        if "error" in result and not result.get("results"):
+            sys.exit(2)
+        sys.exit(0 if (result.get("results") or []) else 1)
 
     try:
         search(
@@ -1235,7 +1485,7 @@ def cmd_search(args):
             wing=args.wing,
             room=args.room,
             tags=tags,
-            n_results=args.results,
+            n_results=n_results,
         )
     except SearchError:
         sys.exit(1)
@@ -2863,6 +3113,22 @@ def main():
         ),
     )
     p_search.add_argument("--results", type=int, default=5, help="Number of results")
+    p_search.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Alias of --results (overrides --results when both given)",
+    )
+    p_search.add_argument(
+        "--format",
+        choices=("table", "compact", "full", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, multi-line + relevance bar), "
+            "compact (one line per hit), full (table layout, no content "
+            "truncation), json (machine-readable; same as --json)"
+        ),
+    )
 
     # compress
     p_compress = sub.add_parser(
