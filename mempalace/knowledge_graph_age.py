@@ -185,6 +185,16 @@ class KnowledgeGraphAGE:
         to always wrap `LOAD 'age'; SET search_path = ag_catalog, "$user",
         public` around each cypher block; for the bootstrap that's done
         here, downstream methods will repeat as needed.
+
+        Also installs a unique index on ``Drawer.properties->>'id'``. AGE
+        ``MERGE (d:Drawer {id: X})`` has a read-then-create gap that is
+        not atomic — two writers MERGE'ing the same id concurrently both
+        miss and both CREATE, producing duplicate Drawer nodes. The index
+        makes the second CREATE fail at the Postgres layer; callers must
+        catch UniqueViolation and retry as a MATCH. Postgres allows a
+        ``CREATE UNIQUE INDEX IF NOT EXISTS`` on an existing populated
+        table only if no duplicates exist, so the migration sequence is:
+        dedup first, then run setup.
         """
         with self._conn.cursor() as cur:
             cur.execute("CREATE EXTENSION IF NOT EXISTS age")
@@ -196,6 +206,41 @@ class KnowledgeGraphAGE:
             )
             if cur.fetchone() is None:
                 cur.execute("SELECT create_graph(%s)", (self.GRAPH_NAME,))
+        self._conn.commit()
+        self._ensure_drawer_unique_index()
+
+    def _ensure_drawer_unique_index(self) -> None:
+        """Install the Drawer.id unique index if the table exists and is dedup'd.
+
+        Skips silently if (a) the Drawer label hasn't been created yet
+        (no writethrough or backfill has fired), or (b) the table still
+        has duplicate ids (cleanup hasn't run). Logs at debug for both.
+        Callers can re-invoke after dedup to install the index then.
+        """
+        graph = self.GRAPH_NAME
+        with self._conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM information_schema.tables "
+                "WHERE table_schema = %s AND table_name = 'Drawer'",
+                (graph,),
+            )
+            if cur.fetchone() is None:
+                return
+            cur.execute(
+                f'SELECT COUNT(*) - COUNT(DISTINCT (properties::text)::jsonb->>\'id\') '
+                f'FROM "{graph}"."Drawer"'
+            )
+            dup_excess = cur.fetchone()[0]
+            if dup_excess and dup_excess > 0:
+                logger.debug(
+                    "skipping Drawer unique index: %d duplicate rows exist; run dedup first",
+                    dup_excess,
+                )
+                return
+            cur.execute(
+                f'CREATE UNIQUE INDEX IF NOT EXISTS drawer_id_unique '
+                f'ON "{graph}"."Drawer" (((properties::text)::jsonb->>\'id\'))'
+            )
         self._conn.commit()
 
     def close(self) -> None:
@@ -679,6 +724,51 @@ class KnowledgeGraphAGE:
         per batch. The single-statement default still commits per call.
         """
         self._conn.commit()
+
+    def delete_drawer(self, drawer_id: str, *, commit: bool = True) -> int:
+        """Remove a Drawer node and all its edges from the AGE graph.
+
+        Returns the number of Drawer nodes removed (0 if the id wasn't
+        present, ≥1 if dedup hasn't run and there are duplicates).
+        Idempotent — calling on an already-deleted id is a no-op.
+
+        Used by the delete-through hook so drawer deletes propagate to
+        the graph; without it, orphan Drawer nodes accumulate over time
+        (one per delete since 2026-05-22 AGE rollout).
+        """
+        drawer_id = sanitize_kg_value(drawer_id, "drawer_id")
+        rows = self._run_cypher(
+            """
+            MATCH (d:Drawer {id: $did})
+            DETACH DELETE d
+            RETURN 1 AS deleted
+            """,
+            {"did": drawer_id},
+            commit=commit,
+        )
+        return len(rows)
+
+    def delete_drawers(self, drawer_ids: list, *, commit: bool = True) -> int:
+        """Batched delete via UNWIND. Returns total Drawer nodes removed.
+
+        Use when removing many drawers in one logical transaction — one
+        Cypher round-trip instead of N — mirroring the UNWIND batching
+        ``backfill_age`` uses for adds (commit ``4fbd8c6``).
+        """
+        if not drawer_ids:
+            return 0
+        ids = [sanitize_kg_value(d, "drawer_id") for d in drawer_ids]
+        rows = self._run_cypher(
+            """
+            UNWIND $ids AS did
+            MATCH (d:Drawer {id: did})
+            DETACH DELETE d
+            RETURN 1 AS deleted
+            """,
+            {"ids": ids},
+            commit=commit,
+        )
+        return len(rows)
 
     def seed_from_entity_facts(self, entity_facts: dict) -> int:
         """Seed the graph from fact_checker.py ENTITY_FACTS dict.
