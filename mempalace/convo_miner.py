@@ -482,6 +482,16 @@ def _file_chunks_locked(collection, source_file, chunks, wing, room, agent, extr
         # one filed_at per source file so all transcript drawers share an
         # ingest timestamp.
         filed_at = datetime.now().isoformat()
+        from .novelty_wiring import (
+            DEFAULT_WINDOW_SIZE,
+            compute_novelty_tag,
+            fetch_recent_window,
+        )
+
+        # Pre-fetch novelty windows per room so batch processing avoids
+        # N+1 DB queries — one fetch per distinct room instead of per chunk.
+        window_cache: dict[str, list[str]] = {}
+
         for batch_start in range(0, len(chunks), DRAWER_UPSERT_BATCH_SIZE):
             batch_docs: list = []
             batch_ids: list = []
@@ -497,20 +507,29 @@ def _file_chunks_locked(collection, source_file, chunks, wing, room, agent, extr
                 )
                 batch_docs.append(chunk["content"])
                 batch_ids.append(drawer_id)
-                batch_metas.append(
-                    {
-                        "wing": wing,
-                        "room": chunk_room,
-                        "hall": _detect_hall_cached(chunk["content"]),
-                        "source_file": source_file,
-                        "chunk_index": chunk["chunk_index"],
-                        "added_by": agent,
-                        "filed_at": filed_at,
-                        "ingest_mode": "convos",
-                        "extract_mode": extract_mode,
-                        "normalize_version": NORMALIZE_VERSION,
-                    }
+                chunk_meta = {
+                    "wing": wing,
+                    "room": chunk_room,
+                    "hall": _detect_hall_cached(chunk["content"]),
+                    "source_file": source_file,
+                    "chunk_index": chunk["chunk_index"],
+                    "added_by": agent,
+                    "filed_at": filed_at,
+                    "ingest_mode": "convos",
+                    "extract_mode": extract_mode,
+                    "normalize_version": NORMALIZE_VERSION,
+                }
+                if chunk_room not in window_cache:
+                    window_cache[chunk_room] = fetch_recent_window(
+                        collection, wing, chunk_room, DEFAULT_WINDOW_SIZE
+                    )
+                novelty_tag = compute_novelty_tag(
+                    collection, wing, chunk_room, chunk["content"],
+                    recent=window_cache[chunk_room],
                 )
+                if novelty_tag is not None:
+                    chunk_meta["novelty_tag"] = novelty_tag
+                batch_metas.append(chunk_meta)
             try:
                 collection.upsert(
                     documents=batch_docs,

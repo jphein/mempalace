@@ -1690,6 +1690,12 @@ def tool_add_drawer(
     }
     apply_tags_to_metadata(base_meta, normalised_tags)
 
+    from .novelty_wiring import compute_novelty_tag
+
+    novelty_tag = compute_novelty_tag(col, wing, room, content, config=_config)
+    if novelty_tag is not None:
+        base_meta["novelty_tag"] = novelty_tag
+
     # Idempotency. Three cases to detect a prior committed write:
     # (a) Single-doc path: drawer_id row exists (the only id used).
     # (b) Chunked path: probe the LAST chunk id — its presence implies
