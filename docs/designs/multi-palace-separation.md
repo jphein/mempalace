@@ -156,7 +156,7 @@ the partition surface proves insufficient.
 
 Hooks today flow:
 
-- Stop-hook: `mempal-stop-hook.sh` → `palace-daemon/clients/hook.py` → `disks.jphe.in:8085/silent-save`
+- Stop-hook: `mempal-stop-hook.sh` → `palace-daemon/clients/hook.py` → `familiar.jphe.in:8085/silent-save`
 - Manual mine: `mempalace mine <dir>` → `miner.run_mine` → `get_collection(...)`
 
 Each writer needs to declare its target partition. The minimal surface:
@@ -251,7 +251,7 @@ out of the default federation.
 ### Q4 — Daemon routing
 
 Today the daemon (`palace-daemon`) is one process, one palace
-(`PALACE_DAEMON_URL → http://disks.jphe.in:8085`). It serves `/search`, `/silent-save`,
+(`PALACE_DAEMON_URL → http://familiar.jphe.in:8085`). It serves `/search`, `/silent-save`,
 `/mcp`, etc., all rooted on a single `palace_path` baked into its config at startup.
 
 **For collection partitioning:** the daemon stays one-process-one-palace. The
@@ -377,7 +377,7 @@ until multi-palace promotion is on the table; when it lands, alias the legacy
 
 ```
 ┌──────────────┐         ┌──────────────────────────────┐
-│ Claude Code  │         │ palace-daemon (disks:8085)   │
+│ Claude Code  │         │ palace-daemon (familiar:8085)   │
 │              │ POST    │                              │
 │ Stop-hook    ├────────▶│  /silent-save                │
 │ shell shim   │         │       │                      │
@@ -396,7 +396,7 @@ until multi-palace promotion is on the table; when it lands, alias the legacy
 
 ```
 ┌──────────────┐         ┌─────────────────────────────────────────┐
-│ Claude Code  │         │ palace-daemon (disks:8085)              │
+│ Claude Code  │         │ palace-daemon (familiar:8085)              │
 │              │ POST    │                                         │
 │ Stop-hook    ├────────▶│  /silent-save?partition=drawers         │
 │   ↑ writes   │         │       │                                 │
@@ -442,8 +442,8 @@ The Stop-hook shim grows a `PALACE_DAEMON_URL_BY_TARGET` env or config table:
 ```bash
 # In palace-daemon/clients/hook.py
 PALACE_DAEMON_URL_BY_TARGET = {
-    "chat":      "http://disks.jphe.in:8085",
-    "authority": "http://disks.jphe.in:8086",
+    "chat":      "http://familiar.jphe.in:8085",
+    "authority": "http://familiar.jphe.in:8086",
 }
 ```
 

@@ -242,7 +242,7 @@ The injected block is capped at **1500 tokens** (≈ 6000 chars). Drawers exceed
 | Injection serialization | 40 ms | string formatting, no LLM |
 | **Total** | **500 ms** | matches existing hook budget per CLAUDE.md "Performance budgets" |
 
-**Cancellation semantics:** if any stage exceeds budget, the classifier emits an "auto-query skipped (deadline)" line into the feedback log and proceeds with no injection. The assistant turn must not be delayed by classifier failure modes. The 400 ms MCP-call budget is the dominant slice; in measurements on `palace-daemon` at `disks.jphe.in:8085`, `mempalace_search` with `limit=3` returns in 80-200 ms p50 / 300-400 ms p99, so the budget is realistic but tight.
+**Cancellation semantics:** if any stage exceeds budget, the classifier emits an "auto-query skipped (deadline)" line into the feedback log and proceeds with no injection. The assistant turn must not be delayed by classifier failure modes. The 400 ms MCP-call budget is the dominant slice; in measurements on `palace-daemon` at `familiar.jphe.in:8085`, `mempalace_search` with `limit=3` returns in 80-200 ms p50 / 300-400 ms p99, so the budget is realistic but tight.
 
 **Cold-start carve-out:** on the very first auto-query in a session, the classifier may consume up to 1500 ms (palace-daemon connection establishment + first-query overhead). Subsequent queries in the same session use the 500 ms budget.
 

@@ -39,18 +39,18 @@ The sections above are the fork's inherited mission and principles — same word
 
 ## What This Is
 
-TechEmpower's production fork of [MemPalace/mempalace](https://github.com/MemPalace/mempalace) — a local AI memory system. Transferred from `jphein/mempalace` to `techempower-org/mempalace` in May 2026. Drawer storage is postgres + pgvector behind a palace-daemon at `disks.jphe.in:8085`; the legacy ChromaDB-on-katana palace has been retired (see `~/.mempalace/RETIRED`).
+TechEmpower's production fork of [MemPalace/mempalace](https://github.com/MemPalace/mempalace) — a local AI memory system. Transferred from `jphein/mempalace` to `techempower-org/mempalace` in May 2026. Drawer storage is postgres + pgvector behind a palace-daemon at `familiar.jphe.in:8085`; the legacy ChromaDB-on-katana palace has been retired (see `~/.mempalace/RETIRED`).
 
 - **Fork**: `techempower-org/mempalace` (origin) / `MemPalace/mempalace` (upstream)
 - **Version + sync state**: `cat mempalace/__init__.py` for fork version; `git log --oneline upstream/develop ^HEAD | head -5` for unmerged upstream commits. Release/landed-PR history in `FORK_CHANGELOG.md`.
 - **Python**: venv at `./.venv/` (uv-managed), editable install with dev deps. Activate via `source .venv/bin/activate` or invoke binaries directly (`.venv/bin/python -m pytest`, `.venv/bin/mempalace status`).
-- **Palace data**: production lives in postgres on `disks.jphe.in`; the local `~/.mempalace/palace/` chroma store was retired on the 2026-05-14 pgvector cutover and renamed to `~/.mempalace/palace.retired-pre-pgcutover-2026-05-14/`. Daemon connection via `~/.config/palace-daemon/env` (sourced by the MCP wrapper at `~/Projects/palace-daemon/clients/mempalace-mcp-wrapper.sh`).
+- **Palace data**: production lives in postgres on `familiar.jphe.in`; the local `~/.mempalace/palace/` chroma store was retired on the 2026-05-14 pgvector cutover and renamed to `~/.mempalace/palace.retired-pre-pgcutover-2026-05-14/`. Daemon connection via `~/.config/palace-daemon/env` (sourced by the MCP wrapper at `~/Projects/palace-daemon/clients/mempalace-mcp-wrapper.sh`).
 
 ## Key Files
 
 - `~/Projects/mempalace.yaml` — **do not delete**. Mining config with wing/room definitions. Regenerate with `mempalace init ~/Projects --yes` if lost.
 - `~/.mempalace/config.json` — topic wings and hall keywords, customized for JP's domains (infrastructure, development, tools, creative, projects, system).
-- **Palace data lives in postgres on `disks.jphe.in`**, reached via palace-daemon at `http://disks.jphe.in:8085`. The local `~/.mempalace/palace/` ChromaDB store was retired on the 2026-05-14 pgvector cutover (renamed to `~/.mempalace/palace.retired-pre-pgcutover-2026-05-14/`); a `~/.mempalace/RETIRED` marker refuses default-palace opens so misconfigured tools can't silently fall back to the stale local store.
+- **Palace data lives in postgres on `familiar.jphe.in`**, reached via palace-daemon at `http://familiar.jphe.in:8085`. The local `~/.mempalace/palace/` ChromaDB store was retired on the 2026-05-14 pgvector cutover (renamed to `~/.mempalace/palace.retired-pre-pgcutover-2026-05-14/`); a `~/.mempalace/RETIRED` marker refuses default-palace opens so misconfigured tools can't silently fall back to the stale local store.
 - `~/.mempalace/hook_state/` — stop hook session tracking.
 
 ## Development
@@ -83,7 +83,7 @@ Workflow for landing new fork-ahead changes lives in [Documentation maintenance]
 Claude Code has two complementary memory layers, used in tandem:
 
 - **Auto-memory** (`~/.claude/projects/*/memory/`) — lightweight preferences, context, feedback. Manual writes only. (Anthropic's "Auto Dream" research-preview shipped late April 2026 in Claude Code `/dream` + the Managed Agents Dreams API; MemPalace deliberately stays un-consolidated and the Dreams API design ratifies the verbatim-vs-derivative axis. See `~/.claude/projects/-home-jp-Projects-memorypalace/memory/project_auto_dream.md`.)
-- **MemPalace** (postgres + pgvector + AGE on `disks.jphe.in`, reached via palace-daemon at `http://disks.jphe.in:8085`, 300K+ drawers) — verbatim conversations, tool output, code. Write-only archive, searchable via MCP. Completeness is the feature. Wing/room layout follows the canonical 7-room taxonomy (see `palace-taxonomy` skill / `~/Projects/familiar.realm.watch/docs/superpowers/specs/2026-05-13-palace-room-taxonomy.md`).
+- **MemPalace** (postgres + pgvector + AGE on `familiar.jphe.in`, reached via palace-daemon at `http://familiar.jphe.in:8085`, 300K+ drawers) — verbatim conversations, tool output, code. Write-only archive, searchable via MCP. Completeness is the feature. Wing/room layout follows the canonical 7-room taxonomy (see `palace-taxonomy` skill / `~/Projects/familiar.realm.watch/docs/superpowers/specs/2026-05-13-palace-room-taxonomy.md`).
 
 Both systems coexist. Hook saves are scoped to MemPalace ("For THIS save, use MemPalace MCP tools only") — this is not a permanent ban on auto-memory.
 

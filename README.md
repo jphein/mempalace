@@ -128,7 +128,7 @@ When the HNSW index is genuinely degraded (rare, post-fix), the same call return
 
 ## Current state
 
-**Substrate (2026-05-15).** Postgres + pgvector + Apache AGE shipped on `main` and serving production traffic. PG16 + pgvector 0.8.2 + AGE 1.6.0 on `disks.jphe.in:5433`. One engine consolidates vector search, full-text search (tsvector BM25), graph traversal, and the temporal entity-relationship store — previously four separate systems (ChromaDB + SQLite + graph cache). 8/9 bench suites pass. Full operator narrative at [`docs/operators/pgvector-cutover-runbook.md`](docs/operators/pgvector-cutover-runbook.md).
+**Substrate (2026-05-15).** Postgres + pgvector + Apache AGE shipped on `main` and serving production traffic. PG16 + pgvector 0.8.2 + AGE 1.6.0 on `familiar.jphe.in:5433`. One engine consolidates vector search, full-text search (tsvector BM25), graph traversal, and the temporal entity-relationship store — previously four separate systems (ChromaDB + SQLite + graph cache). 8/9 bench suites pass. Full operator narrative at [`docs/operators/pgvector-cutover-runbook.md`](docs/operators/pgvector-cutover-runbook.md).
 
 **AGE integration (2026-05-22).** [PR #101](https://github.com/techempower-org/mempalace/pull/101) merged — six-phase AGE integration complete. Writethrough middleware on every drawer write extracts entities and creates `:MENTIONS` edges in the AGE graph. Backfill running against 335K+ existing drawers at ~5/s. The `mempalace_walk_palace` MCP tool enables Cypher traversal by wing, room, or entity. A [2026-05-17 spike](https://github.com/techempower-org/multipass-structural-memory-eval/blob/feat/rlm-adapter/docs/benchmarks/2026-05-17-age-write-through-spike.md) showed graph signal adds **+9pp R@5** over vector-only retrieval.
 

@@ -13,7 +13,7 @@ Plan: [`docs/superpowers/plans/2026-05-10-pgvector-age-migration-impl.md`](../su
 
 **If you're stopping the daemon** (cleanest):
 ```bash
-ssh disks 'sudo systemctl stop palace-daemon && \
+ssh familiar 'sudo systemctl stop palace-daemon && \
            cp -al /mnt/raid/projects/mempalace-data/palace \
                   /mnt/raid/projects/mempalace-data/palace.dry-run-$(date +%Y-%m-%d)'
 ```
@@ -21,7 +21,7 @@ ssh disks 'sudo systemctl stop palace-daemon && \
 
 **If you're leaving the daemon running** (use `cp -a`, NOT `cp -al`):
 ```bash
-ssh disks 'cp -a /mnt/raid/projects/mempalace-data/palace \
+ssh familiar 'cp -a /mnt/raid/projects/mempalace-data/palace \
                  /mnt/raid/projects/mempalace-data/palace.dry-run-$(date +%Y-%m-%d)'
 ```
 Real copy (~2 min for 8 GB on local SSD). Hardlinks share inodes with the live palace — ChromaDB 1.5.x's concurrent-writer SIGSEGV will trip when the daemon's client and the migration's client touch the same HNSW files.
@@ -35,19 +35,19 @@ Symptom: faulthandler trace ends in `chromadb/api/rust.py:440 in _get` returning
 Workaround: rebuild HNSW from sqlite (which has all the drawer data intact):
 
 ```bash
-ssh disks '/mnt/raid/projects/mempalace-dryrun-venv/bin/mempalace \
+ssh familiar '/mnt/raid/projects/mempalace-dryrun-venv/bin/mempalace \
     --palace /mnt/raid/projects/mempalace-data/palace.dry-run-$(date +%Y-%m-%d) \
     repair --mode from-sqlite --archive-existing --yes'
 ```
 
 This moves the broken snapshot to `palace.dry-run-<date>.pre-rebuild-<timestamp>` and constructs a fresh palace at the original path with the sqlite data re-vectored into clean HNSW segments. Expect 30–60 min for ~270K embeddings.
 
-### 2. Stand up Postgres on disks
+### 2. Stand up Postgres on familiar
 
 Pragmatic option:
 
 ```bash
-ssh disks 'docker run -d --name mempalace-dryrun-pg \
+ssh familiar 'docker run -d --name mempalace-dryrun-pg \
     -e POSTGRES_PASSWORD=palace \
     -e POSTGRES_DB=mempalace_dryrun \
     -p 5433:5432 \
@@ -57,7 +57,7 @@ ssh disks 'docker run -d --name mempalace-dryrun-pg \
 `pgvector/pgvector:pg16` ships pgvector but NOT AGE. For full migration:
 
 ```bash
-ssh disks 'docker run -d --name mempalace-dryrun-pg \
+ssh familiar 'docker run -d --name mempalace-dryrun-pg \
     -e POSTGRES_PASSWORD=palace \
     -e POSTGRES_DB=mempalace_dryrun \
     -p 5433:5432 \
@@ -67,7 +67,7 @@ ssh disks 'docker run -d --name mempalace-dryrun-pg \
 Then install pgvector inside the AGE container:
 
 ```bash
-ssh disks 'docker exec mempalace-dryrun-pg \
+ssh familiar 'docker exec mempalace-dryrun-pg \
     apt-get update && apt-get install -y postgresql-16-pgvector'
 ```
 
@@ -76,13 +76,13 @@ ssh disks 'docker exec mempalace-dryrun-pg \
 ### 3. Stop palace-daemon (the migration refuses to run while it's responsive)
 
 ```bash
-ssh disks 'sudo systemctl stop palace-daemon'
+ssh familiar 'sudo systemctl stop palace-daemon'
 ```
 
 ### 4. Run the migration
 
 ```bash
-ssh disks '/home/jp/.local/share/palace-daemon/venv/bin/mempalace \
+ssh familiar '/home/jp/.local/share/palace-daemon/venv/bin/mempalace \
     migrate-to-postgres \
     --from /mnt/raid/projects/mempalace-data/palace.dry-run-$(date +%Y-%m-%d) \
     --to "postgresql://postgres:palace@localhost:5433/mempalace_dryrun" \
@@ -104,7 +104,7 @@ Record total duration per phase. Phase 2 is the long pole (drawer batch copy thr
 ### 5. Smoke-test the dry-run Postgres palace
 
 ```bash
-ssh disks 'MEMPALACE_BACKEND=postgres \
+ssh familiar 'MEMPALACE_BACKEND=postgres \
     MEMPALACE_POSTGRES_DSN="postgresql://postgres:palace@localhost:5433/mempalace_dryrun" \
     MEMPALACE_KG_BACKEND=age \
     /home/jp/.local/share/palace-daemon/venv/bin/mempalace search "palace taxonomy"'
@@ -127,7 +127,7 @@ The migration tool's phase 7 output prints the exact steps. Reproduced here for 
 ### 2. Snapshot the production palace one more time
 
 ```bash
-ssh disks 'cp -al /mnt/raid/projects/mempalace-data/palace \
+ssh familiar 'cp -al /mnt/raid/projects/mempalace-data/palace \
                   /mnt/raid/projects/mempalace-data/palace.pre-cutover-$(date +%Y-%m-%d)'
 ```
 
@@ -138,7 +138,7 @@ Decision point: same container with a different DB name, or a separate system Po
 ### 4. Stop palace-daemon
 
 ```bash
-ssh disks 'sudo systemctl stop palace-daemon'
+ssh familiar 'sudo systemctl stop palace-daemon'
 ```
 
 ### 5. Run the migration against production
@@ -158,20 +158,20 @@ MEMPALACE_KG_BACKEND=age
 ### 7. Reload + start
 
 ```bash
-ssh disks 'sudo systemctl daemon-reload && sudo systemctl start palace-daemon'
+ssh familiar 'sudo systemctl daemon-reload && sudo systemctl start palace-daemon'
 ```
 
 ### 8. Smoke
 
 ```bash
-curl http://disks:8085/health
-curl -H "X-API-Key: $PALACE_API_KEY" 'http://disks:8085/search?q=palace+taxonomy'
+curl http://familiar:8085/health
+curl -H "X-API-Key: $PALACE_API_KEY" 'http://familiar:8085/search?q=palace+taxonomy'
 ```
 
 ### 9. Watch hook activity for an hour
 
 ```bash
-ssh disks 'journalctl -u palace-daemon -f'
+ssh familiar 'journalctl -u palace-daemon -f'
 ```
 
 Confirm Stop hooks, transcript ingests, diary writes all succeed. Time them — postgres should match or beat ChromaDB.
@@ -179,19 +179,19 @@ Confirm Stop hooks, transcript ingests, diary writes all succeed. Time them — 
 ### 10. After 24h of clean operation, archive the chromadb backup
 
 ```bash
-ssh disks 'mv /mnt/raid/projects/mempalace-data/palace \
+ssh familiar 'mv /mnt/raid/projects/mempalace-data/palace \
               /mnt/raid/projects/mempalace-data/palace.chromadb-backup-$(date +%Y-%m-%d)'
 ```
 
-The borg backup on disks picks the directory up by name; the rename means the next backup snapshots BOTH the new postgres palace AND the chromadb backup until you decide to drop the latter.
+The borg backup on familiar picks the directory up by name; the rename means the next backup snapshots BOTH the new postgres palace AND the chromadb backup until you decide to drop the latter.
 
 ---
 
 ## Rollback (if cutover goes wrong)
 
-1. `ssh disks 'sudo systemctl stop palace-daemon'`
+1. `ssh familiar 'sudo systemctl stop palace-daemon'`
 2. Remove the three `MEMPALACE_*` env additions from the daemon's `EnvironmentFile`
-3. `ssh disks 'sudo systemctl daemon-reload && sudo systemctl start palace-daemon'`
+3. `ssh familiar 'sudo systemctl daemon-reload && sudo systemctl start palace-daemon'`
 4. The daemon resumes against the ChromaDB palace as if nothing happened.
 
 The Postgres palace stays around; you can re-attempt or investigate.
@@ -208,8 +208,8 @@ this on a fresh palace.
 ### 1. chromadb open SIGSEGVs on long-lived palaces — even with repair
 
 The runbook's Step 1b suggests `mempalace repair --mode from-sqlite` to
-rebuild HNSW from sqlite before migration. On disks's 270k-drawer
-palace, that repair script estimated **7+ hours** of wall time (disks's
+rebuild HNSW from sqlite before migration. On familiar's 270k-drawer
+palace, that repair script estimated **7+ hours** of wall time (familiar's
 2011 i5 maxes at ~6 vectors/sec for ONNX embedding). Migration timed
 out before it finished.
 
@@ -286,7 +286,7 @@ mismatch. Tracked at [#71](https://github.com/techempower-org/mempalace/issues/7
 
 Daemon's systemd `WorkingDirectory` is `/mnt/raid/projects/palace-daemon/`,
 but I'd been scp-ing my hand-patches to `/home/jp/.local/share/palace-daemon/`
-trusting syncthing to mirror. It does, eventually, but a fresh disks
+trusting syncthing to mirror. It does, eventually, but a fresh familiar
 reboot could read either side first. Resolved by writing a proper
 deploy script (palace-daemon `b303b29`) that rsyncs directly to the
 canonical `/mnt/raid/projects/palace-daemon/`.
@@ -298,8 +298,8 @@ canonical `/mnt/raid/projects/palace-daemon/`.
 After the above commits land, the canonical happy path is:
 
 ```bash
-ssh disks 'sudo systemctl stop palace-daemon'
-ssh disks '/home/jp/.local/share/palace-daemon/venv/bin/mempalace \
+ssh familiar 'sudo systemctl stop palace-daemon'
+ssh familiar '/home/jp/.local/share/palace-daemon/venv/bin/mempalace \
     migrate-to-postgres \
     --from /mnt/raid/projects/mempalace-data/palace \
     --to "postgresql://postgres:<pass>@localhost:5432/mempalace" \

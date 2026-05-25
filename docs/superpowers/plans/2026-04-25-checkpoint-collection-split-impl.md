@@ -77,7 +77,7 @@ cd ~/Projects/memorypalace
 
 # Phase E (palace-daemon)
 cd ~/Projects/palace-daemon
-PALACE_DAEMON_URL=http://disks.jphe.in:8085 \
+PALACE_DAEMON_URL=http://familiar.jphe.in:8085 \
 PALACE_API_KEY=$(jq -r .env.PALACE_API_KEY ~/.claude/settings.local.json) \
     ./scripts/verify-routes.sh
 

@@ -238,20 +238,20 @@ On the canonical 160K-drawer palace at the disks NVMe array:
 Manual, deliberate, documented in the migration tool's final output. The tool **does not modify config files** — the cutover is a sequence of operator steps:
 
 1. Stop daemon: `sudo systemctl stop palace-daemon` (system unit per familiar agent's foundation-rework spec)
-2. Verify daemon is stopped: `curl http://disks:8085/health` returns connection refused
-3. Run: `mempalace migrate-to-postgres --from /mnt/raid/projects/mempalace-data/palace --to "postgresql://palace@disks/mempalace"`
+2. Verify daemon is stopped: `curl http://familiar:8085/health` returns connection refused
+3. Run: `mempalace migrate-to-postgres --from /mnt/raid/projects/mempalace-data/palace --to "postgresql://palace@familiar/mempalace"`
 4. Verify phase 6 output is clean (drawer counts match, triple counts match, sample round-trips pass)
 5. Update palace-daemon's systemd unit `EnvironmentFile=` to add:
    ```
    MEMPALACE_BACKEND=postgres
-   MEMPALACE_POSTGRES_DSN=postgresql://palace@disks/mempalace
+   MEMPALACE_POSTGRES_DSN=postgresql://palace@familiar/mempalace
    MEMPALACE_KG_BACKEND=age
    ```
 6. `sudo systemctl daemon-reload && sudo systemctl start palace-daemon`
 7. Smoke tests:
-   - `curl http://disks:8085/health` returns 200
-   - `curl 'http://disks:8085/search?q=<known-recent-content>'` returns expected drawers (proves vector path)
-   - `curl http://disks:8085/graph` returns expected node/edge counts (proves AGE path)
+   - `curl http://familiar:8085/health` returns 200
+   - `curl 'http://familiar:8085/search?q=<known-recent-content>'` returns expected drawers (proves vector path)
+   - `curl http://familiar:8085/graph` returns expected node/edge counts (proves AGE path)
 8. Move (don't delete) old palace dir: `mv /mnt/raid/projects/mempalace-data/palace /mnt/raid/projects/mempalace-data/palace.chromadb-backup-2026-05-10`
 9. Update fork CLAUDE.md: bump version line to note the substrate change; add a new fork-ahead row noting AGE-backed KG.
 
