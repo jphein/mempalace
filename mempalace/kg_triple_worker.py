@@ -131,7 +131,7 @@ def _mark_error(conn, drawer_id: str, message: str) -> None:
         cur.execute(
             """
             UPDATE mempalace_kg_extraction_queue
-            SET error = %s, started_at = NULL
+            SET error = %s, started_at = NULL, queued_at = NOW()
             WHERE drawer_id = %s
               AND COALESCE(triples_extracted, 0) = 0
             """,

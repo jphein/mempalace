@@ -43,10 +43,12 @@ import argparse
 import logging
 import os
 import signal
+import socket
 import subprocess
 import sys
 import threading
 import time
+import uuid
 from typing import Optional
 
 
@@ -74,13 +76,17 @@ SELECT COUNT(*) FROM mempalace_kg_extraction_queue WHERE error IS NOT NULL
 # for the next run (or a parallel worker still running). We scope the
 # reset to rows whose started_at is older than 1s to avoid racing with
 # a worker that just claimed in the window between SIGTERM delivery
-# and process exit.
+# and process exit. We also filter by ``worker_id`` so that a SIGTERM
+# in one parallel backfill process only releases rows that process had
+# claimed — a global release would re-queue rows other processes are
+# actively working, causing duplicate LLM calls.
 RELEASE_IN_FLIGHT_SQL = """
 UPDATE mempalace_kg_extraction_queue
    SET started_at = NULL
  WHERE started_at IS NOT NULL
    AND completed_at IS NULL
    AND error IS NULL
+   AND worker_id = %s
    AND started_at < NOW() - INTERVAL '1 second'
 """
 
@@ -149,9 +155,11 @@ def _read_counters(dsn: str) -> Optional[dict]:
         return None
 
 
-def _release_in_flight(dsn: str) -> int:
+def _release_in_flight(dsn: str, worker_id: str) -> int:
     """SIGTERM handler hook: re-queue rows the worker had claimed.
 
+    Filters by ``worker_id`` so this driver only releases its own
+    subprocess's claims — parallel backfill processes are not disturbed.
     Returns row count released. On error returns 0 — we never want
     SIGTERM cleanup to crash the shutdown path.
     """
@@ -162,7 +170,7 @@ def _release_in_flight(dsn: str) -> int:
         with psycopg2.connect(dsn, connect_timeout=5) as conn:
             conn.autocommit = True
             with conn.cursor() as cur:
-                cur.execute(RELEASE_IN_FLIGHT_SQL)
+                cur.execute(RELEASE_IN_FLIGHT_SQL, (worker_id,))
                 return cur.rowcount or 0
     except Exception as exc:
         logger.warning("release-in-flight failed: %s", exc)
@@ -218,8 +226,11 @@ def run(
     poll_interval: int = 30,
     progress_interval: float = 60.0,
     extra_args: Optional[list[str]] = None,
+    worker_id: Optional[str] = None,
 ) -> int:
     """Drive the backfill. Returns the worker process's exit code."""
+    if worker_id is None:
+        worker_id = f"{socket.gethostname()}:{os.getpid()}:{uuid.uuid4().hex[:8]}"
     cmd = [
         sys.executable,
         "-m",
@@ -233,10 +244,12 @@ def run(
         str(batch_size),
         "--poll-interval",
         str(poll_interval),
+        "--worker-id",
+        worker_id,
     ]
     if extra_args:
         cmd.extend(extra_args)
-    logger.info("launching worker: %s", " ".join(cmd[:6]) + " ...")
+    logger.info("launching worker (id=%s): %s", worker_id, " ".join(cmd[:6]) + " ...")
 
     progress = _ProgressLogger(dsn, interval=progress_interval)
     progress.start()
@@ -249,7 +262,7 @@ def run(
             proc.terminate()
         except Exception:
             pass
-        released = _release_in_flight(dsn)
+        released = _release_in_flight(dsn, worker_id)
         logger.warning("released %d in-flight rows back to pending", released)
 
     signal.signal(signal.SIGTERM, _handle_signal)

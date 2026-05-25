@@ -276,7 +276,12 @@ async def extract_triples(
         return []
 
     status = getattr(resp, "status_code", 500)
-    if status >= 400 and use_response_format:
+    # Only retry without response_format on the two status codes that
+    # actually mean "I don't know that param" — 400 Bad Request and
+    # 422 Unprocessable Entity. Retrying on 5xx (server overload,
+    # backend down) without response_format just hammers a struggling
+    # server and rarely succeeds.
+    if status in (400, 422) and use_response_format:
         try:
             resp = await _post(base_payload)
             status = getattr(resp, "status_code", 500)

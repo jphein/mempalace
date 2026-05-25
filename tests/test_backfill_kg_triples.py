@@ -166,7 +166,8 @@ def test_progress_logging_eta_scales_to_hours_and_days():
 def test_release_in_flight_runs_expected_sql():
     """SIGTERM hook must reset started_at on rows the worker had claimed
     so a restart re-queues them. The released rowcount must come back to
-    the caller (used in the WARNING log)."""
+    the caller (used in the WARNING log). The release must filter by
+    worker_id so parallel backfill processes don't disturb each other."""
     driver = _load_driver()
 
     cursor = _FakeCursor()
@@ -184,17 +185,20 @@ def test_release_in_flight_runs_expected_sql():
                 )
             },
         ):
-            released = driver._release_in_flight("postgresql://test")
+            released = driver._release_in_flight("postgresql://test", "host:42:deadbeef")
 
     # The release SQL ran with the documented shape.
     assert len(cursor.executes) == 1
-    sql, _params = cursor.executes[0]
+    sql, params = cursor.executes[0]
     assert "UPDATE mempalace_kg_extraction_queue" in sql
     assert "started_at = NULL" in sql
     assert "started_at IS NOT NULL" in sql
     assert "completed_at IS NULL" in sql
     # Race guard — only release rows older than 1 second.
     assert "INTERVAL '1 second'" in sql
+    # Multi-process safety — only release rows the calling worker claimed.
+    assert "worker_id = %s" in sql
+    assert params == ("host:42:deadbeef",)
 
     # And the rowcount comes back so the warning log can include it.
     assert released == 3
@@ -212,7 +216,7 @@ def test_release_in_flight_swallows_db_errors():
         {"mempalace.backends.postgres": MagicMock(_load_psycopg2=lambda: (fake_psycopg2, None))},
     ):
         # No exception escapes, returns 0.
-        assert driver._release_in_flight("postgresql://test") == 0
+        assert driver._release_in_flight("postgresql://test", "any:worker:id") == 0
 
 
 # ──────────────────────────────────────────────────────────────────────
