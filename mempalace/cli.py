@@ -238,6 +238,37 @@ def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
 
 
+def _post_daemon_rest(path: str, body: dict) -> dict:
+    """POST to a daemon REST endpoint — for hybrid/keyword/age-fused search.
+
+    Returns the parsed JSON response. Returns None on 404 (endpoint not
+    available on older daemons). Raises DaemonError on network failure.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = f"{_daemon_url()}{path}"
+    headers = {"content-type": "application/json"}
+    api_key = os.environ.get("PALACE_API_KEY", "").strip()
+    if api_key:
+        headers["x-api-key"] = api_key
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_daemon_timeout()) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            return None
+        raise DaemonError(f"daemon REST {path} failed ({e.code}): {e.reason}") from e
+    except (urllib.error.URLError, ConnectionError, OSError) as e:
+        raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
+
+
 def _post_daemon_mine_cli(directory: str, wing: str, mode: str = "convos") -> bool:
     """POST a mine request to the daemon's ``/mine`` endpoint.
 
@@ -1425,15 +1456,44 @@ def _resolve_search_limit(args) -> int:
     return getattr(args, "results", 5)
 
 
+def _daemon_search_fast(query: str, n_results: int, wing: str = None) -> dict | None:
+    """BM25 fast path via GET /search/fast. Returns normalised data dict or None."""
+    rest_params = {"q": query, "limit": n_results}
+    if wing:
+        rest_params["wing"] = wing
+    raw = _call_daemon_rest("/search/fast", rest_params)
+    if raw is None:
+        return None
+    for hit in raw:
+        hit["text"] = hit.pop("snippet", "")
+        hit["bm25_score"] = round(hit.pop("rank", 0), 3)
+        if hit.get("source_file"):
+            hit["source"] = hit["source_file"]
+    return {"results": raw, "query": query, "source": "bm25-fast"}
+
+
+def _daemon_search_hybrid(
+    query: str, n_results: int, wing: str = None, room: str = None
+) -> dict | None:
+    """Hybrid search via POST /search/hybrid (vector + BM25 + AGE graph)."""
+    body = {"query": query, "limit": n_results}
+    if wing:
+        body["wing"] = wing
+    if room:
+        body["room"] = room
+    data = _post_daemon_rest("/search/hybrid", body)
+    if data is None:
+        return None
+    data.setdefault("source", "hybrid")
+    return data
+
+
 def cmd_search(args):
     fmt = _resolve_search_format(args)
     want_json = fmt == "json"
     n_results = _resolve_search_limit(args)
     tags = list(args.tags) if getattr(args, "tags", None) else None
-    # ``_resolve_quiet`` also flips on a non-TTY stdout. For ``search`` we
-    # only want explicit ``--quiet`` / ``--json`` to suppress chrome —
-    # capsys-piped test output and shell redirects should still get the
-    # rendered header so callers can echo the query and filters back.
+    search_mode = getattr(args, "mode", None) or "auto"
     quiet = bool(getattr(args, "quiet", False)) or want_json
     if _daemon_strict() and not args.palace:
         arguments = {"query": args.query, "limit": n_results}
@@ -1445,18 +1505,17 @@ def cmd_search(args):
             arguments["tags"] = tags
         try:
             data = None
-            if not args.room and not tags:
-                rest_params = {"q": args.query, "limit": n_results}
-                if args.wing:
-                    rest_params["wing"] = args.wing
-                raw = _call_daemon_rest("/search/fast", rest_params)
-                if raw is not None:
-                    for hit in raw:
-                        hit["text"] = hit.pop("snippet", "")
-                        hit["bm25_score"] = round(hit.pop("rank", 0), 3)
-                        if hit.get("source_file"):
-                            hit["source"] = hit["source_file"]
-                    data = {"results": raw, "query": args.query, "source": "bm25-fast"}
+
+            if search_mode == "hybrid":
+                data = _daemon_search_hybrid(
+                    args.query, n_results, wing=args.wing, room=args.room
+                )
+            elif search_mode == "fast":
+                data = _daemon_search_fast(args.query, n_results, wing=args.wing)
+            elif search_mode == "auto":
+                if not args.room and not tags:
+                    data = _daemon_search_fast(args.query, n_results, wing=args.wing)
+
             if data is None:
                 data = _call_daemon_tool("mempalace_search", arguments)
         except DaemonError as e:
@@ -1466,13 +1525,12 @@ def cmd_search(args):
                 print(f"\n  ERROR: {e}", file=sys.stderr)
             sys.exit(2)
         if want_json:
-            # Normalise: ensure ``query`` is present so agents can echo
-            # the request back without parsing argv.
             data.setdefault("query", args.query)
             _emit_json(data)
-            # Exit 1 when no results so shell scripts can branch on it
-            # (per issue #44's exit-code contract).
             sys.exit(0 if (data.get("results") or []) else 1)
+        if not quiet:
+            source = data.get("source", "mcp")
+            print(f"  [{source}]", file=sys.stderr)
         _print_daemon_search(
             args.query, data, wing=args.wing, room=args.room, fmt=fmt, quiet=quiet
         )
@@ -3160,6 +3218,15 @@ def main():
         type=int,
         default=None,
         help="Alias of --results (overrides --results when both given)",
+    )
+    p_search.add_argument(
+        "--mode",
+        choices=("auto", "fast", "hybrid"),
+        default=None,
+        help=(
+            "Search mode: auto (default — BM25 when possible, MCP fallback), "
+            "fast (BM25 only, ~100ms), hybrid (vector + BM25 + AGE graph, ~500ms)"
+        ),
     )
     p_search.add_argument(
         "--format",
