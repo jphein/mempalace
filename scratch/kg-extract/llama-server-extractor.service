@@ -1,0 +1,22 @@
+[Unit]
+Description=llama.cpp inference server for KG triple extraction
+After=network.target
+
+[Service]
+Type=simple
+User=jp
+Environment=CUDA_VISIBLE_DEVICES=0
+ExecStart=/opt/llama.cpp/build/bin/llama-server \
+  --model /var/cache/llama/models/Phi-4-mini-instruct-Q4_K_M.gguf \
+  --port 11436 --host 0.0.0.0 \
+  --n-gpu-layers 999 \
+  --ctx-size 4096 \
+  --parallel 8 \
+  --threads 12 \
+  --cont-batching \
+  --alias phi-4-mini
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
