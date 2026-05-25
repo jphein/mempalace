@@ -317,34 +317,44 @@ def backfill(
 
                     # Batch all MENTIONS edges via UNWIND in a single Cypher call.
                     if ents:
-                        ent_list = ", ".join(
-                            "{{name: {}, etype: {}, cnt: {}, conf: {}}}".format(
-                                _cypher_literal(sanitize_kg_value(ent.name, "entity_name")),
-                                _cypher_literal(getattr(ent, "type", "unknown")),
-                                getattr(ent, "count", 1),
-                                confidence,
-                            )
-                            for ent in ents
-                        )
-                        try:
-                            kg._run_cypher(
-                                f"""
-                                MATCH (d:Drawer {{id: $did}})
-                                WITH d
-                                UNWIND [{ent_list}] AS ent
-                                MERGE (e:Entity {{name: ent.name}})
-                                CREATE (d)-[:MENTIONS {{count: ent.cnt, confidence: ent.conf, etype: ent.etype}}]->(e)
-                                """,
-                                {"did": drawer_id},
-                                commit=False,
-                            )
-                            counters["entities_added"] += len(ents)
-                        except Exception as e:  # noqa: BLE001
-                            counters["errors"] += 1
-                            logger.debug("UNWIND mentions failed for %s: %s", drawer_id, e)
-                            kg._conn.rollback()
-                            pending_marks.clear()
-                            continue
+                        # Build entity literals, skipping any that contain
+                        # the AGE dollar-quote tag (would raise ValueError
+                        # in _cypher_literal). Log and continue rather than
+                        # crashing the whole backfill.
+                        ent_literals = []
+                        for ent in ents:
+                            try:
+                                lit = "{{name: {}, etype: {}, cnt: {}, conf: {}}}".format(
+                                    _cypher_literal(sanitize_kg_value(ent.name, "entity_name")),
+                                    _cypher_literal(getattr(ent, "type", "unknown")),
+                                    getattr(ent, "count", 1),
+                                    confidence,
+                                )
+                                ent_literals.append(lit)
+                            except ValueError as e:
+                                logger.debug("skipping entity %r in %s: %s", ent.name, drawer_id, e)
+
+                        if ent_literals:
+                            ent_list = ", ".join(ent_literals)
+                            try:
+                                kg._run_cypher(
+                                    f"""
+                                    MATCH (d:Drawer {{id: $did}})
+                                    WITH d
+                                    UNWIND [{ent_list}] AS ent
+                                    MERGE (e:Entity {{name: ent.name}})
+                                    CREATE (d)-[:MENTIONS {{count: ent.cnt, confidence: ent.conf, etype: ent.etype}}]->(e)
+                                    """,
+                                    {"did": drawer_id},
+                                    commit=False,
+                                )
+                                counters["entities_added"] += len(ent_literals)
+                            except Exception as e:  # noqa: BLE001
+                                counters["errors"] += 1
+                                logger.debug("UNWIND mentions failed for %s: %s", drawer_id, e)
+                                kg._conn.rollback()
+                                pending_marks.clear()
+                                continue
 
                     pending_marks.append(drawer_id)
 
