@@ -6,8 +6,6 @@ into the AGE knowledge graph. Complements the existing regex
 triples that enable temporal queries, dependency maps, and
 relationship-aware graph search.
 
-Spec: [`docs/specs/kg-triple-extraction.md`](specs/kg-triple-extraction.md).
-
 ## Architecture
 
 ```
@@ -124,8 +122,8 @@ curl -H "X-API-Key: $PALACE_API_KEY" \
   http://familiar.jphe.in:8085/kg-extract/status | jq
 ```
 
-Returns JSON — see `scratch/kg-extract/palace-daemon-patch.md` for the
-shape. Pair with the existing `/backfill-age/status` endpoint for a
+Returns JSON with queue depth, in-flight workers, and throughput.
+Pair with the existing `/backfill-age/status` endpoint for a
 complete picture of graph-population state.
 
 ### Journal tail
@@ -170,7 +168,7 @@ edges across the typical predicate set (`works_on`, `depends_on`,
 
 ## See also
 
-- Spec: [`docs/specs/kg-triple-extraction.md`](specs/kg-triple-extraction.md)
-- Companion: [`docs/AGE_NOTES.md`](AGE_NOTES.md) for the underlying graph
-- Daemon patch: [`scratch/kg-extract/palace-daemon-patch.md`](../scratch/kg-extract/palace-daemon-patch.md)
-- llama-server unit: [`scratch/kg-extract/llama-server-extractor.service`](../scratch/kg-extract/llama-server-extractor.service)
+- `mempalace/kg_writethrough.py` — extraction-queue enqueue hook
+- `mempalace/kg_llm_extractor.py` — LLM client + JSON parsing
+- `mempalace/kg_triple_worker.py` — worker loop + atomic queue claim
+- `scripts/backfill_kg_triples.py` — 24-thread backfill driver

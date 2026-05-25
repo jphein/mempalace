@@ -1,7 +1,5 @@
 """Unit tests for the KG extraction queue writethrough.
 
-Phase 1 of docs/specs/kg-triple-extraction.md.
-
 These tests use the same psycopg2-cursor-shaped fake as
 ``test_age_kg_units.py`` — they verify SQL shape and composition without
 needing a live postgres. A separate live-postgres integration suite can
@@ -10,7 +8,6 @@ exercise the actual DDL when a DSN is available.
 
 from __future__ import annotations
 
-import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -142,7 +139,7 @@ def test_enqueue_idempotent_on_conflict(fake_psycopg):
     make_conn, created = fake_psycopg
     hook = make_extraction_enqueue_writethrough("postgresql://fake/db")
 
-    conn_a = make_conn()
+    make_conn()  # register first connection for the initial hook call
     hook(drawer_id="drw-1", document="v1", metadata={"wing": "w", "room": "r"})
     conn_b = make_conn()
     hook(drawer_id="drw-1", document="v2", metadata={"wing": "w", "room": "r"})

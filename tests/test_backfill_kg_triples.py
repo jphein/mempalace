@@ -1,7 +1,5 @@
 """Unit tests for scripts/backfill_kg_triples.py.
 
-Phase 4 of docs/specs/kg-triple-extraction.md.
-
 The backfill driver is a thin wrapper around the worker CLI — these
 tests pin the load-bearing contract:
 
