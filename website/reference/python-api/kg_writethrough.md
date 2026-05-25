@@ -86,20 +86,57 @@ A no-op hook. Useful for disabling KG writes in tests or rollouts
 without removing the ``set_kg_writethrough`` call from the writer
 setup path.
 
+### `make_extraction_enqueue_writethrough`
+
+```python
+def make_extraction_enqueue_writethrough(dsn: str)
+```
+
+Returns a writethrough callable that enqueues drawers for LLM triple extraction.
+
+Idempotent: re-mines of the same drawer reset the queue row so it
+gets re-processed (drawer content may have changed; the old triples
+were extracted from the prior text). ON CONFLICT (drawer_id) DO
+UPDATE clears started_at / completed_at / error / worker_id and
+bumps queued_at to NOW().
+
+Connection strategy mirrors the rest of the codebase — uses
+``_load_psycopg2`` (psycopg2 v2) and opens a fresh connection per
+drawer write. The drawer write path is already inside a transaction
+on its own connection, so doing the enqueue on a separate connection
+keeps the schemas independent and avoids dirty-read coupling.
+
+Args:
+    dsn: Postgres DSN — must point at the same database as the
+        drawer collection (queue table lives in the public schema
+        alongside ``mempalace_drawers``).
+
+Returns:
+    A hook callable matching the ``PostgresCollection.set_kg_writethrough``
+    contract.
+
 ### `make_writethrough_from_env`
 
 ```python
-def make_writethrough_from_env(kg: Optional[Any] = None)
+def make_writethrough_from_env(kg: Optional[Any] = None, dsn: Optional[str] = None)
 ```
 
 Build a hook based on environment variables.
 
 Env vars:
-  MEMPALACE_KG_WRITETHROUGH=0|1     — master switch (default off)
+  MEMPALACE_KG_WRITETHROUGH=0|1         — master switch for MENTIONS (default off)
   MEMPALACE_KG_EXTRACTOR=regex|spacy|llm|null  — choose extractor (default regex)
+  MEMPALACE_KG_EXTRACTION_QUEUE=0|1     — also enqueue drawers for async
+                                          LLM triple extraction (default off,
+                                          composes with MENTIONS, never replaces)
 
-Returns ``None`` if write-through is disabled. Returns a hook
-otherwise. ``kg`` is required when the master switch is on.
+Returns ``None`` if no writethrough stage is enabled. Returns a
+single hook otherwise — if both MENTIONS and queue are enabled, the
+hook calls them in order (MENTIONS first since it's the fast path).
+
+``kg`` is required when the master switch is on. ``dsn`` is required
+when ``MEMPALACE_KG_EXTRACTION_QUEUE`` is on (queue lives in
+postgres, separate from AGE).
 
 Regex extractor needs an SME-repo import — kept optional so the
 mempalace package doesn't hard-require SME. If unavailable, falls

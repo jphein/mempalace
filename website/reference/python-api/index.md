@@ -32,6 +32,8 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.hallways`](./hallways) — Hallways — within-wing entity-to-entity connectors.
 - [`mempalace.hooks_cli`](./hooks_cli) — Hook logic for MemPalace — Python implementation of session-start, stop, and precompact hooks.
 - [`mempalace.instructions_cli`](./instructions_cli) — Instruction text output for MemPalace CLI commands.
+- [`mempalace.kg_llm_extractor`](./kg_llm_extractor) — LLM-based triple extractor for the async KG worker.
+- [`mempalace.kg_triple_worker`](./kg_triple_worker) — Async worker that drains ``mempalace_kg_extraction_queue``.
 - [`mempalace.kg_writethrough`](./kg_writethrough) — KG write-through hooks for PostgresCollection drawer writes.
 - [`mempalace.knowledge_graph`](./knowledge_graph) — knowledge_graph.py — Temporal Entity-Relationship Graph for MemPalace
 - [`mempalace.knowledge_graph_age`](./knowledge_graph_age) — AGE-backed implementation of KnowledgeGraph (Apache AGE on Postgres).
@@ -45,6 +47,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.multi_encoder`](./multi_encoder) — Multi-encoder retrieval — query N encoder-bound palaces, RRF-fuse.
 - [`mempalace.normalize`](./normalize) — normalize.py — Convert any chat export format to MemPalace transcript format.
 - [`mempalace.novelty`](./novelty) — novelty.py — Gzip-based novelty scoring for drawers
+- [`mempalace.novelty_wiring`](./novelty_wiring) — novelty_wiring.py — write-time novelty tagging
 - [`mempalace.onboarding`](./onboarding) — onboarding.py — MemPalace first-run setup.
 - [`mempalace.palace`](./palace) — palace.py — Shared palace operations.
 - [`mempalace.palace_graph`](./palace_graph) — palace_graph.py — Graph traversal layer for MemPalace
