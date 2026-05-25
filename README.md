@@ -29,11 +29,11 @@
 
 A verbatim-first local AI memory system. This fork tracks `upstream/develop` through the 2026-05-23 sync (commit `eb77c8c`) and runs in production on a **335K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon). It carries ~507 fork-ahead commits that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. 3009 tests pass on `main`.
 
-The fork's architectural thinking — the four-layer memory model, the verbatim-vs-derivative thesis, design principles, and the two-memory-layer pairing with Auto Dream — lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The new things here are *what we've learned*, not just what we've fixed.
+The fork's architectural thinking — the four-layer memory model, the [verbatim-vs-derivative thesis](docs/research/verbatim-vs-derivative-axis.md), design principles, and the two-memory-layer pairing with Auto Dream — lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The new things here are *what we've learned*, not just what we've fixed.
 
 ## Why this fork exists
 
-We surveyed the memory-system landscape in April 2026 and found no verbatim-first local system with MCP. The landscape has since fragmented — MCP memory servers proliferated in May 2026 — but the verbatim-vs-derivative axis remains the clearest architectural dividing line. Updated survey as of 2026-05-24:
+We surveyed the memory-system landscape in April 2026 and found no verbatim-first local system with MCP. The landscape has since fragmented — MCP memory servers proliferated in May 2026 — but the [verbatim-vs-derivative axis](docs/research/verbatim-vs-derivative-axis.md) remains the clearest architectural dividing line. Updated survey as of 2026-05-24:
 
 ### Verbatim-first systems
 
@@ -252,6 +252,13 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 - [#1146](https://github.com/MemPalace/mempalace/pull/1146), [#1115](https://github.com/MemPalace/mempalace/pull/1115), [#629](https://github.com/MemPalace/mempalace/pull/629), [#632](https://github.com/MemPalace/mempalace/pull/632), [#662](https://github.com/MemPalace/mempalace/pull/662), [#663](https://github.com/MemPalace/mempalace/pull/663), [#738](https://github.com/MemPalace/mempalace/pull/738), [#1036](https://github.com/MemPalace/mempalace/pull/1036) — all superseded
 
 ## Sources
+
+### Synthesis and research
+
+- [**The Verbatim-vs-Derivative Axis**](docs/research/verbatim-vs-derivative-axis.md) — standalone treatment of [Principle 1](docs/ARCHITECTURE.md#1-verbatim-vs-derivative-is-the-canonical-axis). Structural argument, the April-May 2026 recovery-collection episode (210× token-budget gap closed by one structural change), and Anthropic's Dreams API as independent vendor-API ratification of the same axis.
+- [**True Memory vs MemPalace**](docs/research/2026-05-24-true-memory-comparison.md) — six-vs-four layers, benchmark comparison, convergent verbatim-first design.
+- [**Memory System Benchmarks (2026-05)**](docs/research/2026-05-24-memory-system-benchmarks.md) — LongMemEval/LoCoMo/BEAM landscape survey across 20+ systems.
+- [**Three Patterns for Agent Memory**](docs/research/three-patterns-for-agent-memory.md) — Familiar / RLM / parallel hybrid on jp-realm-v0.1; invocation as bottleneck.
 
 See [`docs/BIBLIOGRAPHY.md`](docs/BIBLIOGRAPHY.md) for the complete documentation index and external references.
 
