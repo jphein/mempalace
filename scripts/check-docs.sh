@@ -11,6 +11,8 @@
 #      doc claims (OPEN / MERGED / CLOSED). Uses `gh pr view`; skipped
 #      gracefully if `gh` isn't authenticated.
 #   5. website/public/llms-full.txt regenerates clean from its sources.
+#   6. website/reference/python-api/ regenerates clean from mempalace/
+#      docstrings (re-runs render-api-docs.py --check internally).
 #
 # Exit codes:
 #   0 — clean
@@ -198,7 +200,7 @@ else
 fi
 
 # ── 5. llms-full.txt regenerates clean from its sources ─────────────────
-step "5/5  llms-full.txt regenerates clean"
+step "5/6  llms-full.txt regenerates clean"
 llms_bin="$REPO_ROOT/scripts/render-llms-full.py"
 if [ -x "$llms_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -212,6 +214,23 @@ if [ -x "$llms_bin" ]; then
     fi
 else
     warn "scripts/render-llms-full.py not present — skipping llms-full check"
+fi
+
+# ── 6. Python API reference regenerates clean from source docstrings ────
+step "6/6  python-api/ regenerates clean"
+api_bin="$REPO_ROOT/scripts/render-api-docs.py"
+if [ -x "$api_bin" ]; then
+    py="$REPO_ROOT/.venv/bin/python"
+    [ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
+    if [ -z "$py" ]; then
+        warn "no python interpreter — skipping api-docs check"
+    elif "$py" "$api_bin" --check >/dev/null 2>&1; then
+        ok "website/reference/python-api/ matches mempalace/ docstrings"
+    else
+        fail "website/reference/python-api/ is stale — run scripts/render-api-docs.py"
+    fi
+else
+    warn "scripts/render-api-docs.py not present — skipping api-docs check"
 fi
 
 # Check 6 (fork-only YAML commits → CLAUDE.md row inventory) retired

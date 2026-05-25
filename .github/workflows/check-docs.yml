@@ -17,19 +17,27 @@ on:
     paths:
       - 'docs/fork-changes.yaml'
       - 'scripts/render-docs.py'
+      - 'scripts/render-api-docs.py'
       - 'scripts/check-docs.sh'
       - 'FORK_CHANGELOG.md'
       - 'README.md'
       - 'CLAUDE.md'
+      - 'mempalace/**/*.py'
+      - 'website/reference/python-api/**'
+      - 'website/.vitepress/api-sidebar.json'
       - '.github/workflows/check-docs.yml'
   pull_request:
     paths:
       - 'docs/fork-changes.yaml'
       - 'scripts/render-docs.py'
+      - 'scripts/render-api-docs.py'
       - 'scripts/check-docs.sh'
       - 'FORK_CHANGELOG.md'
       - 'README.md'
       - 'CLAUDE.md'
+      - 'mempalace/**/*.py'
+      - 'website/reference/python-api/**'
+      - 'website/.vitepress/api-sidebar.json'
       - '.github/workflows/check-docs.yml'
   workflow_dispatch:
 

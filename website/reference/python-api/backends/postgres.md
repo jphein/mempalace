@@ -1,0 +1,141 @@
+# `mempalace.backends.postgres`
+
+Source: [`mempalace/backends/postgres.py`](https://github.com/techempower-org/mempalace/blob/main/mempalace/backends/postgres.py)
+
+Optional PostgreSQL-backed MemPalace storage backend.
+
+The backend prefers ``pg_sorted_heap`` when available and falls back to
+``pgvector``. Optional dependencies are imported lazily so the default Chroma
+install remains zero-config.
+
+## Classes
+
+### `class PostgresCollection(BaseCollection)`
+
+PostgreSQL collection adapter implementing the RFC 001 collection contract.
+
+#### `__init__`
+
+```python
+def __init__(self, dsn: str, table_name: str = 'mempalace_drawers')
+```
+
+#### `add`
+
+```python
+def add(self, *, documents: list[str], ids: list[str], metadatas: Optional[list[dict[str, Any]]] = None, embeddings: Optional[list[list[float]]] = None) -> None
+```
+
+#### `upsert`
+
+```python
+def upsert(self, *, documents: list[str], ids: list[str], metadatas: Optional[list[dict[str, Any]]] = None, embeddings: Optional[list[list[float]]] = None) -> None
+```
+
+#### `set_kg_writethrough`
+
+```python
+def set_kg_writethrough(self, hook) -> None
+```
+
+Register a callable invoked after each successful drawer write.
+
+Hook signature: ``hook(drawer_id: str, document: str, metadata: dict)``.
+Called once per drawer in ``_insert_rows`` after the row commits.
+Exceptions inside the hook are caught + logged; they never propagate.
+
+Set to ``None`` to disable. The default (no hook registered) is
+zero overhead — vector-only write path matches the pre-Phase-2
+behavior byte-identically.
+
+Typical use: configure an entity-extracting hook that populates
+the AGE KG. See ``mempalace.kg_writethrough.make_age_writethrough``
+for the canonical implementation.
+
+#### `query`
+
+```python
+def query(self, *, query_texts: Optional[list[str]] = None, query_embeddings: Optional[list[list[float]]] = None, n_results: int = 10, where: Optional[dict] = None, where_document: Optional[dict] = None, include: Optional[list[str]] = None) -> QueryResult
+```
+
+#### `get`
+
+```python
+def get(self, *, ids: Optional[list[str]] = None, where: Optional[dict] = None, where_document: Optional[dict] = None, limit: Optional[int] = None, offset: Optional[int] = None, include: Optional[list[str]] = None) -> GetResult
+```
+
+#### `delete`
+
+```python
+def delete(self, *, ids: Optional[list[str]] = None, where: Optional[dict] = None) -> None
+```
+
+#### `update`
+
+```python
+def update(self, *, ids: list[str], documents: Optional[list[str]] = None, metadatas: Optional[list[dict]] = None, embeddings: Optional[list[list[float]]] = None) -> None
+```
+
+#### `rename_wing`
+
+```python
+def rename_wing(self, *, from_wing: str, to_wing: str, batch_size: int = 500) -> dict
+```
+
+#### `count`
+
+```python
+def count(self) -> int
+```
+
+#### `estimated_count`
+
+```python
+def estimated_count(self) -> int
+```
+
+#### `close`
+
+```python
+def close(self) -> None
+```
+
+### `class PostgresBackend(BaseBackend)`
+
+Factory for optional PostgreSQL collections.
+
+#### `__init__`
+
+```python
+def __init__(self, dsn: Optional[str] = None)
+```
+
+#### `get_collection`
+
+```python
+def get_collection(self, *, palace: PalaceRef, collection_name: str, create: bool = False, options: Optional[dict] = None) -> PostgresCollection
+```
+
+#### `close_palace`
+
+```python
+def close_palace(self, palace: PalaceRef) -> None
+```
+
+#### `close`
+
+```python
+def close(self) -> None
+```
+
+#### `health`
+
+```python
+def health(self, palace: Optional[PalaceRef] = None) -> HealthStatus
+```
+
+#### `detect`
+
+```python
+def detect(cls, path: str) -> bool
+```
