@@ -41,6 +41,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`, `tests/test_cli_stats.py`
 
 
+### Changed
+
+
+- **Promote verbatim-vs-derivative essay from research/ to README (#170)** ([`6a264d9`](https://github.com/techempower-org/mempalace/commit/6a264d9))
+  The verbatim-vs-derivative axis essay
+  (``docs/research/verbatim-vs-derivative-axis.md``) is the
+  standalone treatment of Principle 1. Linked inline from the
+  README's "What this is" and "Why this fork exists" sections,
+  and called out by name in a new "Sources — Synthesis and
+  research" subsection alongside the True Memory comparison,
+  benchmark survey, and three-patterns research. Also fixes
+  two broken anchors in the essay's Further reading section
+  (pointed at the old README locations of "the four layers"
+  and "the thesis"; both moved to ``docs/ARCHITECTURE.md`` in
+  the README pivot) and refreshes the essay's Last-revised
+  date. Closes #170.
+
+  *Files:* `README.md`, `docs/research/verbatim-vs-derivative-axis.md`
+
+
 ## [2026-05-23]
 
 

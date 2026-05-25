@@ -4,7 +4,7 @@
 storage layer: store verbatim, derive lazily, treat every derivative as
 replaceable. Companion to the README's four-layer model and operational thesis.*
 
-Last revised: 2026-05-22.
+Last revised: 2026-05-24.
 
 ## TL;DR
 
@@ -29,7 +29,7 @@ The decision creates an asymmetric contract. **Verbatim writes must always succe
 2. **Lazy derivation.** Derivative artifacts are produced when needed (background processes, on-demand re-derivation, opt-in enrichment), not synchronously inside the write path. The write path is the drawer plus minimum unambiguous metadata (wing/room from cwd or transcript path, timestamp, content hash).
 3. **Replaceable.** Any derivative store can be dropped, rebuilt under a different algorithm, re-embedded, or re-keyed — because the verbatim record underneath is intact.
 
-The README's thesis section names this as Principle 1 ("verbatim vs. derivative is the canonical axis"). This essay is the longer argument for why the call is load-bearing, what alternatives fail at, and where the line actually sits.
+[`docs/ARCHITECTURE.md`](../ARCHITECTURE.md#1-verbatim-vs-derivative-is-the-canonical-axis) names this as Principle 1 ("verbatim vs. derivative is the canonical axis"). This essay is the longer argument for why the call is load-bearing, what alternatives fail at, and where the line actually sits.
 
 ## 2. Why derive-on-write accumulates failure modes
 
@@ -127,8 +127,8 @@ The fork's working slogan is "derivatives next to, never on top of." This essay 
 
 Background on the four-layer model the axis sits inside:
 
-- [README — the four layers](../../README.md#the-four-layers) — storage / encoder / retrieval / consumption.
-- [README — the thesis](../../README.md#the-thesis-operational-principles) — Principle 1 is the README's compressed statement of the verbatim-vs-derivative axis.
+- [`docs/ARCHITECTURE.md` — the four layers](../ARCHITECTURE.md#the-four-layers) — storage / encoder / retrieval / consumption.
+- [`docs/ARCHITECTURE.md` — the thesis](../ARCHITECTURE.md#the-thesis-operational-principles) — Principle 1 is the compressed statement of the verbatim-vs-derivative axis.
 
 Adjacent fork research:
 
