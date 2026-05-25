@@ -115,17 +115,25 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
     Called once per collection instance. Idempotent — tracks by collection id
     so repeated get_collection() calls don't stack hooks.
     """
+    import os as _os
+
     cid = id(collection)
     if cid in _writethrough_attached:
         return
     try:
         from .kg_writethrough import make_writethrough_from_env
-        from .knowledge_graph_age import KnowledgeGraphAGE
 
         if not dsn:
             return
-        kg = KnowledgeGraphAGE(dsn=dsn)
-        hook = make_writethrough_from_env(kg=kg)
+        # Only bootstrap AGE when MENTIONS write-through is requested —
+        # queue-only mode (MEMPALACE_KG_EXTRACTION_QUEUE=1) doesn't need
+        # the apache_age extension or the graph at all.
+        mentions_on = _os.environ.get("MEMPALACE_KG_WRITETHROUGH") in ("1", "true", "yes")
+        kg = None
+        if mentions_on:
+            from .knowledge_graph_age import KnowledgeGraphAGE
+            kg = KnowledgeGraphAGE(dsn=dsn)
+        hook = make_writethrough_from_env(kg=kg, dsn=dsn)
         if hook is not None:
             collection.set_kg_writethrough(hook)
             _writethrough_attached.add(cid)
