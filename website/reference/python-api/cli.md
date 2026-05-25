@@ -1,0 +1,297 @@
+# `mempalace.cli`
+
+Source: [`mempalace/cli.py`](https://github.com/techempower-org/mempalace/blob/main/mempalace/cli.py)
+
+MemPalace — Give your AI a memory. No API key required.
+
+Three ways to ingest:
+  Projects:      mempalace mine ~/projects/my_app                  (code, docs, notes)
+  Conversations: mempalace mine &lt;convo-dir> --mode convos          (Claude Code, Claude.ai, ChatGPT, Slack exports)
+  Documents:     mempalace mine &lt;docs-dir> --mode extract          (PDF, DOCX, PPTX, XLSX, RTF, EPUB — requires mempalace[extract])
+
+Same palace. Same search. Different ingest strategies.
+
+Commands:
+    mempalace init &lt;dir>                  Detect rooms from folder structure
+    mempalace split &lt;dir>                 Split concatenated mega-files into per-session files
+    mempalace mine &lt;dir>                  Mine project files (default)
+    mempalace mine &lt;dir> --mode convos    Mine conversation exports
+    mempalace mine &lt;dir> --mode extract   Mine binary office documents (PDF/DOCX/etc.)
+    mempalace search "query"              Find anything, exact words
+    mempalace mcp                         Show MCP setup command
+    mempalace wake-up                     Show L0 + L1 wake-up context
+    mempalace wake-up --wing my_app       Wake-up for a specific project
+    mempalace status                      Show what's been filed
+    mempalace mined                       List mined source files grouped by wing
+    mempalace purge --source-file &lt;path>  Remove drawers mined from a specific file
+
+Examples:
+    mempalace init ~/projects/my_app
+    mempalace mine ~/projects/my_app
+    mempalace mine ~/.claude/projects/-Users-you-Projects-my_app --mode convos --wing my_app
+    mempalace search "why did we switch to GraphQL"
+    mempalace search "pricing discussion" --wing my_app --room costs
+
+## Classes
+
+### `class DaemonError(RuntimeError)`
+
+Raised when a daemon HTTP call fails or returns a JSON-RPC error.
+
+## Functions
+
+### `cmd_init`
+
+```python
+def cmd_init(args)
+```
+
+### `cmd_mine`
+
+```python
+def cmd_mine(args)
+```
+
+### `cmd_sweep`
+
+```python
+def cmd_sweep(args)
+```
+
+Sweep a transcript file or directory.
+
+The sweeper deduplicates against its own prior writes via
+deterministic drawer IDs + a timestamp cursor. It does NOT currently
+coordinate with the file-level miners (miner.py / convo_miner.py) —
+those produce char-chunked drawers without compatible message
+metadata, so running both miners may store overlapping content under
+different IDs.
+
+### `cmd_sync`
+
+```python
+def cmd_sync(args)
+```
+
+Prune drawers whose source files are gitignored, deleted, or moved (#1252).
+
+### `cmd_search`
+
+```python
+def cmd_search(args)
+```
+
+### `cmd_wakeup`
+
+```python
+def cmd_wakeup(args)
+```
+
+Show L0 (identity) + L1 (essential story) — the wake-up context.
+
+### `cmd_split`
+
+```python
+def cmd_split(args)
+```
+
+Split concatenated transcript mega-files into per-session files.
+
+### `cmd_export`
+
+```python
+def cmd_export(args)
+```
+
+### `cmd_migrate`
+
+```python
+def cmd_migrate(args)
+```
+
+Migrate palace from a different ChromaDB version.
+
+### `cmd_migrate_to_postgres`
+
+```python
+def cmd_migrate_to_postgres(args)
+```
+
+Migrate a ChromaDB palace to Postgres (pgvector + AGE).
+
+Different from `cmd_migrate` (which handles intra-ChromaDB version
+upgrades). This one moves the entire substrate. See
+`mempalace/migrate_to_postgres.py` for the 7-phase pipeline.
+
+### `cmd_rooms`
+
+```python
+def cmd_rooms(args)
+```
+
+Manage the canonical room set (mempalace_canonical_rooms table).
+
+hybrid-search-taxonomy follow-up. The FK constraint on mempalace_drawers.room
+means this CLI is the supported way to add/rename/remove canonical
+rooms without breaking the DB. ON UPDATE CASCADE on the FK makes
+renames safe (all drawers auto-update); removes fail if any drawer
+still in the target room.
+
+Requires postgres backend + MEMPALACE_POSTGRES_DSN env var.
+
+### `cmd_purge`
+
+```python
+def cmd_purge(args)
+```
+
+Delete drawers by wing and/or room.
+
+Uses ``collection.delete(where=...)`` — chromadb's filter-delete path
+doesn't go through ``updatePoint`` / ``repairConnectionsForUpdate``,
+which is the upsert-only race from #521 that an earlier draft of this
+command tried to side-step with a nuke-and-rebuild. The simpler path
+works without losing drawers if the process is interrupted, without
+re-embedding the survivors under a default model, and without
+bypassing the backend abstraction.
+
+``--room`` without ``--wing`` purges that room across ALL wings.
+Not idempotent — running purge twice on the same criteria prints
+"No drawers found" the second time.
+
+### `cmd_rename_wing`
+
+```python
+def cmd_rename_wing(args)
+```
+
+### `cmd_replay`
+
+```python
+def cmd_replay(args)
+```
+
+Drain ``~/.mempalace/pending/*.jsonl`` by re-issuing each request to the daemon.
+
+Pending requests accumulate when the Stop / PreCompact hooks fire while
+the daemon (or its backend) is unreachable — see the 2026-05-21
+power-resilience design. Drain semantics:
+
+* Each line is one ``&#123;"dir", "wing", "mode", "ts"}`` mine request.
+* On 2xx daemon response the line is consumed; on failure the line
+  stays in the file for the next attempt.
+* Duplicate ``(dir, wing, mode)`` tuples are deduped before transmit
+  so a long outage doesn't replay the same target N times.
+
+### `cmd_status`
+
+```python
+def cmd_status(args)
+```
+
+### `cmd_mined`
+
+```python
+def cmd_mined(args)
+```
+
+List mined source files grouped by wing.
+
+Companion to ``status`` (which groups by wing × room) — answers "which
+files have I mined into this wing?" so an operator can pick targets
+for ``mempalace purge --source-file &lt;path>``.
+
+Skips drawers without a ``source_file`` metadata key (typically
+diary entries, kg drawers, manually-added entries).
+
+### `cmd_stats`
+
+```python
+def cmd_stats(args)
+```
+
+Palace analytics dashboard (#191).
+
+Composes ``mempalace_status`` + ``mempalace_kg_stats`` +
+``mempalace_graph_stats`` (and optionally ``mempalace_list_tags``)
+into a single read-only view of corpus health. Daemon-only — there is
+no local fallback today because the KG/graph data lives in the
+daemon's postgres + AGE store; surfacing a misleading partial view
+from a stale local chromadb would re-introduce the split-brain
+``status`` already warns against. When the daemon URL is unset, we
+abort with the same "set PALACE_DAEMON_URL" hint as the rest of the
+CLI's daemon-strict surfaces.
+
+### `cmd_repair_status`
+
+```python
+def cmd_repair_status(args)
+```
+
+Read-only HNSW capacity health check (#1222).
+
+### `cmd_repair`
+
+```python
+def cmd_repair(args)
+```
+
+Repair palace state.
+
+Default mode is full HNSW rebuild via extract + re-upsert
+(``--mode rebuild`` / ``--mode legacy``, synonyms). Also handles
+``--mode max-seq-id`` for un-poisoning ``max_seq_id`` rows
+corrupted by the legacy 0.6.x → 1.5.x chromadb migration shim
+(#1208 / #1288 family). The earlier ``reorganize`` mode was
+retired alongside the recovery collection (PR #8 / row 32).
+
+Closes Copilot finding on jphein/mempalace#8: docstring claimed
+only "rebuild" while the function continued to dispatch
+``max-seq-id`` based on ``args.mode``.
+
+### `cmd_hook`
+
+```python
+def cmd_hook(args)
+```
+
+Run hook logic: reads JSON from stdin, outputs JSON to stdout.
+
+### `cmd_instructions`
+
+```python
+def cmd_instructions(args)
+```
+
+Output skill instructions to stdout.
+
+### `cmd_mcp`
+
+```python
+def cmd_mcp(args)
+```
+
+Show how to wire MemPalace into MCP-capable hosts.
+
+### `cmd_compress`
+
+```python
+def cmd_compress(args)
+```
+
+Compress drawers in a wing using AAAK Dialect.
+
+### `main`
+
+```python
+def main()
+```
+
+CLI entry point for the ``mempalace`` console script.
+
+Side effect: pops ``PYTHONPATH`` from ``os.environ`` (see #1423) so
+any subprocess this CLI spawns inherits a clean env. Host applications
+that call ``main()`` programmatically should be aware that the parent
+process loses ``PYTHONPATH`` as well. Library imports
+(``import mempalace.searcher`` from a host app) do NOT trigger this
+side effect; only the CLI/MCP entry points pop the env var.

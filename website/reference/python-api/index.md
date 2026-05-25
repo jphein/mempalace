@@ -1,0 +1,96 @@
+# Python API
+
+Auto-generated reference for the `mempalace` Python package.
+Source of truth lives in the docstrings under [`mempalace/`](https://github.com/techempower-org/mempalace/tree/main/mempalace) — edit there, not here. Regenerate with `scripts/render-api-docs.py`.
+
+For task-oriented overviews of the main interfaces (search, memory stack, knowledge graph, palace graph, AAAK dialect, configuration), see [Python API Overview](/reference/python-api).
+
+## Modules
+
+### Top-level modules
+
+- [`mempalace.auto_query`](./auto_query) — Auto-query integration for MemPalace.
+- [`mempalace.backends`](./backends) — Storage backend implementations for MemPalace (RFC 001).
+- [`mempalace.backfill_age`](./backfill_age) — Backfill the AGE graph from an existing drawer table.
+- [`mempalace.cli`](./cli) — MemPalace — Give your AI a memory. No API key required.
+- [`mempalace.closet_llm`](./closet_llm) — closet_llm.py — Generate closets via a user-configured LLM for richer indexing.
+- [`mempalace.config`](./config) — MemPalace configuration system.
+- [`mempalace.convo_miner`](./convo_miner) — convo_miner.py — Mine conversations into the palace.
+- [`mempalace.convo_scanner`](./convo_scanner) — convo_scanner.py — Parse Claude Code conversation directories into ProjectInfo.
+- [`mempalace.corpus_origin`](./corpus_origin) — corpus_origin.py — Detect whether a corpus is an AI-dialogue record and,
+- [`mempalace.dedup`](./dedup) — dedup.py — Detect and remove near-duplicate drawers
+- [`mempalace.dialect`](./dialect) — AAAK Dialect -- Structured Symbolic Summary Format
+- [`mempalace.diary_ingest`](./diary_ingest) — diary_ingest.py — Ingest daily summary files into the palace.
+- [`mempalace.dynamics`](./dynamics) — dynamics.py — Living-connection math for halls + tunnels.
+- [`mempalace.embedding`](./embedding) — Embedding function factory with hardware acceleration.
+- [`mempalace.entity_detector`](./entity_detector) — entity_detector.py — Auto-detect people and projects from file content.
+- [`mempalace.entity_registry`](./entity_registry) — entity_registry.py — Persistent personal entity registry for MemPalace.
+- [`mempalace.exporter`](./exporter) — exporter.py — Export the palace as a browsable folder of markdown files.
+- [`mempalace.fact_checker`](./fact_checker) — fact_checker.py — Verify text against known facts in the palace.
+- [`mempalace.format_miner`](./format_miner) — format_miner.py — proposed for mempalace 3.3.6.
+- [`mempalace.general_extractor`](./general_extractor) — general_extractor.py — Extract 5 types of memories from text.
+- [`mempalace.hallways`](./hallways) — Hallways — within-wing entity-to-entity connectors.
+- [`mempalace.hooks_cli`](./hooks_cli) — Hook logic for MemPalace — Python implementation of session-start, stop, and precompact hooks.
+- [`mempalace.instructions_cli`](./instructions_cli) — Instruction text output for MemPalace CLI commands.
+- [`mempalace.kg_writethrough`](./kg_writethrough) — KG write-through hooks for PostgresCollection drawer writes.
+- [`mempalace.knowledge_graph`](./knowledge_graph) — knowledge_graph.py — Temporal Entity-Relationship Graph for MemPalace
+- [`mempalace.knowledge_graph_age`](./knowledge_graph_age) — AGE-backed implementation of KnowledgeGraph (Apache AGE on Postgres).
+- [`mempalace.layers`](./layers) — layers.py — 4-Layer Memory Stack for mempalace
+- [`mempalace.llm_client`](./llm_client) — llm_client.py — Minimal provider abstraction for LLM-assisted entity refinement.
+- [`mempalace.llm_refine`](./llm_refine) — llm_refine.py — Optional LLM refinement of regex-detected entities.
+- [`mempalace.mcp_server`](./mcp_server) — MemPalace MCP Server — read/write palace access for Claude Code
+- [`mempalace.migrate`](./migrate) — mempalace migrate — Recover a palace created with a different ChromaDB version.
+- [`mempalace.migrate_to_postgres`](./migrate_to_postgres) — ChromaDB → Postgres (pgvector + AGE) migration tool.
+- [`mempalace.miner`](./miner) — miner.py — Files everything into the palace.
+- [`mempalace.multi_encoder`](./multi_encoder) — Multi-encoder retrieval — query N encoder-bound palaces, RRF-fuse.
+- [`mempalace.normalize`](./normalize) — normalize.py — Convert any chat export format to MemPalace transcript format.
+- [`mempalace.novelty`](./novelty) — novelty.py — Gzip-based novelty scoring for drawers
+- [`mempalace.onboarding`](./onboarding) — onboarding.py — MemPalace first-run setup.
+- [`mempalace.palace`](./palace) — palace.py — Shared palace operations.
+- [`mempalace.palace_graph`](./palace_graph) — palace_graph.py — Graph traversal layer for MemPalace
+- [`mempalace.palace_graph_age`](./palace_graph_age) — Palace structure (Wing → Room → Drawer) as native AGE graph nodes.
+- [`mempalace.pending_queue`](./pending_queue) — Append-only journal for mine requests that couldn't reach the daemon.
+- [`mempalace.project_scanner`](./project_scanner) — project_scanner.py — Detect projects and people from real signal.
+- [`mempalace.query_sanitizer`](./query_sanitizer) — query_sanitizer.py — Mitigate system prompt contamination in search queries.
+- [`mempalace.repair`](./repair) — repair.py — Scan, prune corrupt entries, and rebuild HNSW index
+- [`mempalace.room_detector_local`](./room_detector_local) — room_detector_local.py — Local setup, no API required.
+- [`mempalace.room_taxonomy`](./room_taxonomy) — Canonical room taxonomy — soft-warn validation.
+- [`mempalace.rrf`](./rrf) — Reciprocal Rank Fusion — combine ranked lists from N retrievers.
+- [`mempalace.searcher`](./searcher) — searcher.py — Find anything. Exact words.
+- [`mempalace.sources`](./sources) — Source adapter subsystem (RFC 002).
+- [`mempalace.spellcheck`](./spellcheck) — spellcheck.py — Spell-correct user messages before palace filing.
+- [`mempalace.split_mega_files`](./split_mega_files) — split_mega_files.py — Split concatenated transcript files into per-session files
+- [`mempalace.sweeper`](./sweeper) — sweeper.py — Message-granular miner that catches what the file-level
+- [`mempalace.sync`](./sync) — sync.py — Gitignore-aware drawer prune (#1252).
+- [`mempalace.tags`](./tags) — Multi-label tags for drawers (techempower-org/mempalace#39).
+- [`mempalace.version`](./version) — Single source of truth for the MemPalace package version.
+- [`mempalace.write_sanitizer`](./write_sanitizer) — write_sanitizer.py — Observation-grade input hygiene for the write path (#40).
+
+### auto_query
+
+- [`mempalace.auto_query.decisions`](./auto_query/decisions) — Decision logger for the auto-query system.
+- [`mempalace.auto_query.formatter`](./auto_query/formatter) — Result formatter for the auto-query integration.
+- [`mempalace.auto_query.router`](./auto_query/router) — Tool router for auto-query integration.
+- [`mempalace.auto_query.runner`](./auto_query/runner) — Auto-query runner — chains signal extraction, routing, and formatting.
+- [`mempalace.auto_query.signals`](./auto_query/signals) — Signal extraction for auto-query context classifier.
+
+### backends
+
+- [`mempalace.backends.base`](./backends/base) — Storage backend contract for MemPalace (RFC 001).
+- [`mempalace.backends.chroma`](./backends/chroma) — ChromaDB-backed MemPalace storage backend (RFC 001 reference implementation).
+- [`mempalace.backends.postgres`](./backends/postgres) — Optional PostgreSQL-backed MemPalace storage backend.
+- [`mempalace.backends.registry`](./backends/registry) — Backend registry + entry-point discovery (RFC 001 §3).
+
+### sources
+
+- [`mempalace.sources.aider`](./sources/aider) — Aider source adapter (RFC 002).
+- [`mempalace.sources.base`](./sources/base) — Source adapter contract for MemPalace (RFC 002).
+- [`mempalace.sources.codex`](./sources/codex) — Codex CLI source adapter (RFC 002).
+- [`mempalace.sources.context`](./sources/context) — ``PalaceContext`` facade passed to source adapters (RFC 002 §9).
+- [`mempalace.sources.conversations`](./sources/conversations) — Conversation source adapter (RFC 002 §9).
+- [`mempalace.sources.filesystem`](./sources/filesystem) — Filesystem source adapter (RFC 002 §9).
+- [`mempalace.sources.gemini`](./sources/gemini) — Gemini CLI source adapter (RFC 002).
+- [`mempalace.sources.opencode`](./sources/opencode) — OpenCode source adapter (RFC 002).
+- [`mempalace.sources.registry`](./sources/registry) — Source adapter registry + entry-point discovery (RFC 002 §3).
+- [`mempalace.sources.transforms`](./sources/transforms) — Reference implementations of the reserved content transformations (RFC 002 §1.4).
+- [`mempalace.sources.warp`](./sources/warp) — Warp terminal source adapter.
