@@ -1237,6 +1237,7 @@ def _build_drawer_metadata(
     line_start: Optional[int] = None,
     line_end: Optional[int] = None,
     content_date: Optional[str] = None,
+    novelty_tag: Optional[str] = None,
 ) -> dict:
     """Build the metadata dict for one drawer without upserting.
 
@@ -1274,6 +1275,8 @@ def _build_drawer_metadata(
     entities = _extract_entities_for_metadata(content)
     if entities:
         metadata["entities"] = entities
+    if novelty_tag is not None:
+        metadata["novelty_tag"] = novelty_tag
     return metadata
 
 
@@ -1288,6 +1291,7 @@ def add_drawer(
     canonical room is accepted and surfaced via the warning instead of
     rejected at the backend.
     """
+    from .novelty_wiring import compute_novelty_tag
     from .room_taxonomy import validate_room
 
     drawer_id = f"drawer_{wing}_{room}_{hashlib.sha256((source_file + str(chunk_index)).encode()).hexdigest()[:24]}"
@@ -1295,8 +1299,16 @@ def add_drawer(
         source_mtime = os.path.getmtime(source_file)
     except OSError:
         source_mtime = None
+    novelty_tag = compute_novelty_tag(collection, wing, room, content)
     metadata = _build_drawer_metadata(
-        wing, room, source_file, chunk_index, agent, content, source_mtime
+        wing,
+        room,
+        source_file,
+        chunk_index,
+        agent,
+        content,
+        source_mtime,
+        novelty_tag=novelty_tag,
     )
     collection.upsert(
         documents=[content],
@@ -1319,6 +1331,7 @@ def add_drawers(collection, wing, room, chunks, source_file, agent):
     across every chunk in a batch, so a single warning per call is
     sufficient — no per-drawer fan-out.
     """
+    from .novelty_wiring import compute_novelty_tag
     from .room_taxonomy import validate_room
 
     warnings = validate_room(room)
@@ -1327,7 +1340,11 @@ def add_drawers(collection, wing, room, chunks, source_file, agent):
     except OSError:
         source_mtime = None
 
-    file_content_date = _extract_content_date(source_file, "".join(c["content"] for c in chunks))
+    joined_content = "".join(c["content"] for c in chunks)
+    file_content_date = _extract_content_date(source_file, joined_content)
+    file_novelty_tag = (
+        compute_novelty_tag(collection, wing, room, joined_content) if chunks else None
+    )
 
     batch_docs = []
     batch_ids = []
@@ -1346,6 +1363,7 @@ def add_drawers(collection, wing, room, chunks, source_file, agent):
             line_start=chunk.get("line_start"),
             line_end=chunk.get("line_end"),
             content_date=file_content_date,
+            novelty_tag=file_novelty_tag,
         )
         batch_docs.append(chunk["content"])
         batch_ids.append(drawer_id)
@@ -1476,6 +1494,10 @@ def process_file(
 
         file_content_date = _extract_content_date(source_file, content)
 
+        from .novelty_wiring import compute_novelty_tag
+
+        file_novelty_tag = compute_novelty_tag(collection, wing, room, content)
+
         drawers_added = 0
         all_metas: list = []
         for batch_start in range(0, len(chunks), DRAWER_UPSERT_BATCH_SIZE):
@@ -1498,6 +1520,7 @@ def process_file(
                         line_start=chunk.get("line_start"),
                         line_end=chunk.get("line_end"),
                         content_date=file_content_date,
+                        novelty_tag=file_novelty_tag,
                     )
                 )
             collection.upsert(
