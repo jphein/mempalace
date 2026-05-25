@@ -18,6 +18,7 @@ uv sync --extra dev
 
 # Activate pre-commit hooks (one-time, per clone)
 pre-commit install
+pre-commit install --hook-type commit-msg
 ```
 
 The `pre-commit install` step is important: the repo has a
@@ -26,6 +27,37 @@ but the actual git hook is per-machine and **must be installed
 locally**. Without this step, you can commit code that passes your
 local lint (using whatever ruff version you happen to have installed)
 but fails CI on push.
+
+The second `--hook-type commit-msg` install activates the
+`conventional-pre-commit` hook, which validates commit-message format
+(`feat:`, `fix:`, `refactor:`, etc.) at commit time. Pre-commit's
+default `install` only wires the `pre-commit` stage, so commit-msg
+hooks need explicit opt-in.
+
+### Conventional commit format
+
+Commits must follow [Conventional Commits](https://www.conventionalcommits.org/):
+
+```
+<type>[optional scope]: <description>
+
+[optional body]
+
+[optional footer]
+```
+
+Allowed types (defaults from `conventional-pre-commit`):
+`feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`, `build`,
+`ci`, `style`, `revert`. Scope is optional — `feat(cli): ...` and
+`feat: ...` both pass.
+
+`git revert` produces a `Revert "<original subject>"` message that
+won't match the regex. Either reword the revert with `git revert
+--edit` to a conventional form (e.g. `revert: feat: bad commit`), or
+skip the hook for a single commit with `SKIP=conventional-pre-commit
+git revert <sha>`. Likewise, conflicted merges generate a `Merge
+branch ...` message — fast-forward and squash merges aren't affected;
+PR merges via GitHub UI bypass local hooks entirely.
 
 ## Running Tests
 
