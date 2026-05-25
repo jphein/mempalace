@@ -27,7 +27,7 @@ entries:
   - id: verbatim-derivative-essay-promotion
     date: 2026-05-24
     bucket: Changed
-    commit: TBD
+    commit: 6a264d9
     area: Docs
     summary: "Promote verbatim-vs-derivative essay from research/ to README (#170)"
     files:

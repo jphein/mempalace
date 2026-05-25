@@ -44,7 +44,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **Promote verbatim-vs-derivative essay from research/ to README (#170)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Promote verbatim-vs-derivative essay from research/ to README (#170)** ([`6a264d9`](https://github.com/techempower-org/mempalace/commit/6a264d9))
   The verbatim-vs-derivative axis essay
   (``docs/research/verbatim-vs-derivative-axis.md``) is the
   standalone treatment of Principle 1. Linked inline from the
