@@ -1,12 +1,12 @@
 -- KG triple extraction queue
 --
--- Created 2026-05-25 for the async LLM-based RELATION-edge populator
--- (see docs/specs/kg-triple-extraction.md, Phase 1).
+-- Created 2026-05-25 for the async LLM-based RELATION-edge populator.
+-- Architecture overview: docs/kg-extraction.md.
 --
 -- The writethrough hook in mempalace/kg_writethrough.py inserts a row
 -- here on every drawer write when MEMPALACE_KG_EXTRACTION_QUEUE=1.
--- An out-of-process worker (mempalace/kg_triple_worker.py, Phase 3)
--- claims pending rows, calls a local LLM, and writes resulting
+-- An out-of-process worker (mempalace/kg_triple_worker.py) claims
+-- pending rows, calls a local LLM, and writes resulting
 -- (subject, predicate, object) triples into AGE.
 --
 -- The hook also calls _ensure_extraction_queue_table() lazily, so this
