@@ -65,9 +65,7 @@ class _FakeDB:
                 )
 
     def add_drawer(self, drawer_id: str, document: str, wing: str = "", room: str = ""):
-        self.drawers[drawer_id] = _DrawerRow(
-            id=drawer_id, wing=wing, room=room, document=document
-        )
+        self.drawers[drawer_id] = _DrawerRow(id=drawer_id, wing=wing, room=room, document=document)
 
 
 class _FakeConn:
@@ -159,9 +157,7 @@ class _FakeCursor:
                 completed_ids = {
                     r.drawer_id for r in db.queue.values() if r.completed_at is not None
                 }
-                candidates = [
-                    d for d in db.drawers.values() if d.id not in completed_ids
-                ]
+                candidates = [d for d in db.drawers.values() if d.id not in completed_ids]
                 if limit is not None:
                     candidates = candidates[:limit]
                 for d in candidates:
@@ -180,29 +176,21 @@ class _FakeCursor:
         if "queue_depth" in s and "completed_today" in s:
             with db.lock:
                 queue_depth = sum(
-                    1
-                    for r in db.queue.values()
-                    if r.completed_at is None and r.started_at is None
+                    1 for r in db.queue.values() if r.completed_at is None and r.started_at is None
                 )
                 in_progress = sum(
                     1
                     for r in db.queue.values()
                     if r.started_at is not None and r.completed_at is None
                 )
-                completed_today = sum(
-                    1 for r in db.queue.values() if r.completed_at is not None
-                )
-                errors_total = sum(
-                    1 for r in db.queue.values() if r.error is not None
-                )
+                completed_today = sum(1 for r in db.queue.values() if r.completed_at is not None)
+                errors_total = sum(1 for r in db.queue.values() if r.error is not None)
                 triples_5m = sum(
                     (r.triples_extracted or 0)
                     for r in db.queue.values()
                     if r.completed_at is not None
                 )
-                drawers_5m = sum(
-                    1 for r in db.queue.values() if r.completed_at is not None
-                )
+                drawers_5m = sum(1 for r in db.queue.values() if r.completed_at is not None)
             self._results = [
                 (queue_depth, in_progress, completed_today, errors_total, triples_5m, drawers_5m)
             ]
@@ -295,11 +283,7 @@ class _FakeHTTPClient:
             triples = list(self.triples_per_drawer.get(drawer_id, []))
         return _Resp(
             200,
-            {
-                "choices": [
-                    {"message": {"content": json_dumps(triples)}}
-                ]
-            },
+            {"choices": [{"message": {"content": json_dumps(triples)}}]},
         )
 
     async def aclose(self):
@@ -364,9 +348,7 @@ def test_claim_returns_no_overlap_under_contention():
 
         async def claim_into(idx, worker_id):
             async with pool.conn() as conn:
-                rows = await asyncio.to_thread(
-                    kw._claim_batch, conn, worker_id, 5
-                )
+                rows = await asyncio.to_thread(kw._claim_batch, conn, worker_id, 5)
                 results[idx] = [r.drawer_id for r in rows]
 
         await asyncio.gather(
@@ -395,7 +377,9 @@ def test_seed_backfill_skips_completed_drawers():
     db = _FakeDB()
     db.add_drawer("d-old", document="...")
     db.queue["d-old"] = _QueueRow(
-        drawer_id="d-old", completed_at=db.now(), queued_at=db.now(),
+        drawer_id="d-old",
+        completed_at=db.now(),
+        queued_at=db.now(),
         triples_extracted=3,
     )
     db.add_drawer("d-new", document="...")
@@ -425,9 +409,7 @@ def test_status_snapshot_shape():
         queued_at=db.now(),
         triples_extracted=4,
     )
-    db.queue["err"] = _QueueRow(
-        drawer_id="err", error="boom", queued_at=db.now()
-    )
+    db.queue["err"] = _QueueRow(drawer_id="err", error="boom", queued_at=db.now())
 
     conn = _FakeConn(db)
     snap = kw._status_snapshot(conn)
@@ -583,10 +565,7 @@ def test_run_worker_backfill_seeds_queue_first():
     kg = _FakeKG()
     http = _FakeHTTPClient(
         triples_per_drawer={
-            f"d{i}": [
-                {"subject": f"E{i}", "predicate": "rel", "object": f"F{i}"}
-            ]
-            for i in range(5)
+            f"d{i}": [{"subject": f"E{i}", "predicate": "rel", "object": f"F{i}"}] for i in range(5)
         }
     )
 
@@ -667,7 +646,13 @@ def test_worker_stats_snapshot_shape():
     s.triples_written = 12
     s.errors = 1
     snap = s.snapshot()
-    assert {"uptime_seconds", "drawers_processed", "triples_written", "errors", "drawers_per_min_inprocess"} <= snap.keys()
+    assert {
+        "uptime_seconds",
+        "drawers_processed",
+        "triples_written",
+        "errors",
+        "drawers_per_min_inprocess",
+    } <= snap.keys()
     assert snap["drawers_processed"] == 5
     assert snap["triples_written"] == 12
 
@@ -677,7 +662,9 @@ def test_cli_status_prints_json(capsys, monkeypatch):
     db.enqueue("d1")
     db.enqueue("d2")
     db.queue["done"] = _QueueRow(
-        drawer_id="done", completed_at=db.now(), queued_at=db.now(),
+        drawer_id="done",
+        completed_at=db.now(),
+        queued_at=db.now(),
         triples_extracted=2,
     )
 

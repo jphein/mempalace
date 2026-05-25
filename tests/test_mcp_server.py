@@ -1588,7 +1588,6 @@ class TestWriteTools:
         assert deleted_logical["success"] is False
         assert "not found" in deleted_logical["error"].lower()
 
-
     def test_tool_rename_wing(self, monkeypatch, config, palace_path, kg):
         _patch_mcp_server(monkeypatch, config, kg)
         _client, _col = _get_collection(palace_path, create=True)

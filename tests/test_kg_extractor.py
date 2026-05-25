@@ -124,9 +124,7 @@ def test_parse_json_blob_prose_leakage():
         "Let me know if you need more!"
     )
     out = _parse_json_blob(raw)
-    assert out == [
-        {"subject": "mempalace", "predicate": "depends_on", "object": "pgvector"}
-    ]
+    assert out == [{"subject": "mempalace", "predicate": "depends_on", "object": "pgvector"}]
 
 
 def test_parse_json_blob_malformed_returns_empty():
@@ -232,9 +230,7 @@ def test_extract_triples_malformed_response_returns_empty():
 
 
 def test_extract_triples_caps_at_max():
-    items = [
-        {"subject": f"S{i}", "predicate": "rel", "object": f"O{i}"} for i in range(15)
-    ]
+    items = [{"subject": f"S{i}", "predicate": "rel", "object": f"O{i}"} for i in range(15)]
     client = _FakeClient([_llm_response(json.dumps(items))])
     triples = _run(
         extract_triples(
@@ -278,9 +274,7 @@ def test_extract_triples_retries_without_response_format_on_4xx():
     client = _FakeClient(
         [
             _FakeResponse(status_code=400, payload=None, text_body="unsupported response_format"),
-            _llm_response(
-                json.dumps([{"subject": "Alice", "predicate": "rel", "object": "Bob"}])
-            ),
+            _llm_response(json.dumps([{"subject": "Alice", "predicate": "rel", "object": "Bob"}])),
         ]
     )
     triples = _run(
@@ -317,9 +311,7 @@ def test_extract_triples_http_500_returns_empty():
 
 def test_extract_triples_empty_input_returns_empty():
     client = _FakeClient([])
-    triples = _run(
-        extract_triples(client, "http://localhost:11436", "phi-4-mini", "")
-    )
+    triples = _run(extract_triples(client, "http://localhost:11436", "phi-4-mini", ""))
     assert triples == []
     assert client.calls == []
 
@@ -332,9 +324,7 @@ def test_extract_triples_validation_filters_bad_items():
         {"subject": "OK", "predicate": "good_rel", "object": "Valid"},  # keep
     ]
     client = _FakeClient([_llm_response(json.dumps(items))])
-    triples = _run(
-        extract_triples(client, "http://localhost:11436", "phi-4-mini", "x")
-    )
+    triples = _run(extract_triples(client, "http://localhost:11436", "phi-4-mini", "x"))
     assert len(triples) == 1
     assert triples[0].subject == "OK"
 
@@ -344,9 +334,7 @@ def test_extract_triples_network_exception_returns_empty():
         async def post(self, *a, **k):
             raise RuntimeError("connection refused")
 
-    triples = _run(
-        extract_triples(_BadClient(), "http://localhost:11436", "phi-4-mini", "x")
-    )
+    triples = _run(extract_triples(_BadClient(), "http://localhost:11436", "phi-4-mini", "x"))
     assert triples == []
 
 
@@ -360,11 +348,7 @@ def test_extract_triples_endpoint_normalization():
     ]
     for endpoint, expected_suffix in cases:
         client = _FakeClient([_llm_response("[]")])
-        _run(
-            extract_triples(
-                client, endpoint, "phi-4-mini", "some text"
-            )
-        )
+        _run(extract_triples(client, endpoint, "phi-4-mini", "some text"))
         assert client.calls, f"no call made for endpoint={endpoint}"
         assert client.calls[0]["url"].endswith(expected_suffix), (
             f"endpoint={endpoint} -> {client.calls[0]['url']}"

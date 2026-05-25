@@ -287,9 +287,7 @@ async def extract_triples(
     if status >= 400:
         body_snippet = ""
         try:
-            body_snippet = (
-                resp.text[:200] if isinstance(getattr(resp, "text", None), str) else ""
-            )
+            body_snippet = resp.text[:200] if isinstance(getattr(resp, "text", None), str) else ""
         except Exception:  # noqa: BLE001
             pass
         logger.warning("LLM returned HTTP %s: %s", status, body_snippet)

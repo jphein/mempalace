@@ -109,6 +109,7 @@ def get_collection(
 
 _writethrough_attached: set = set()
 
+
 def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
     """Auto-attach the AGE KG write-through hook when MEMPALACE_KG_WRITETHROUGH=1.
 
@@ -132,12 +133,15 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
         kg = None
         if mentions_on:
             from .knowledge_graph_age import KnowledgeGraphAGE
+
             kg = KnowledgeGraphAGE(dsn=dsn)
         hook = make_writethrough_from_env(kg=kg, dsn=dsn)
         if hook is not None:
             collection.set_kg_writethrough(hook)
             _writethrough_attached.add(cid)
-            logger.info("KG write-through attached to collection (AGE entities will be extracted inline)")
+            logger.info(
+                "KG write-through attached to collection (AGE entities will be extracted inline)"
+            )
     except Exception as e:
         logger.debug("KG write-through not attached: %s", e)
 

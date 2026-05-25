@@ -133,12 +133,10 @@ class TestConversationAdapter:
         mtime = os.path.getmtime(str(f))
         item = SourceItemMetadata(source_file=str(f), version="v1")
 
-        assert adapter.is_current(
-            item=item, existing_metadata={"source_mtime": mtime}
-        ) is True
-        assert adapter.is_current(
-            item=item, existing_metadata={"source_mtime": mtime + 100}
-        ) is False
+        assert adapter.is_current(item=item, existing_metadata={"source_mtime": mtime}) is True
+        assert (
+            adapter.is_current(item=item, existing_metadata={"source_mtime": mtime + 100}) is False
+        )
 
     def test_source_summary(self, adapter, convo_dir):
         source = SourceRef(local_path=str(convo_dir))

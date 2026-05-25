@@ -28,9 +28,7 @@ def project_dir(tmp_path):
     )
     subdir = tmp_path / "src"
     subdir.mkdir()
-    (subdir / "main.py").write_text(
-        "import os\nimport sys\n\n" + "def main():\n    pass\n" * 10
-    )
+    (subdir / "main.py").write_text("import os\nimport sys\n\n" + "def main():\n    pass\n" * 10)
     return tmp_path
 
 
@@ -136,12 +134,10 @@ class TestFilesystemAdapter:
         mtime = os.path.getmtime(str(f))
         item = SourceItemMetadata(source_file=str(f), version="v1")
 
-        assert adapter.is_current(
-            item=item, existing_metadata={"source_mtime": mtime}
-        ) is True
-        assert adapter.is_current(
-            item=item, existing_metadata={"source_mtime": mtime + 100}
-        ) is False
+        assert adapter.is_current(item=item, existing_metadata={"source_mtime": mtime}) is True
+        assert (
+            adapter.is_current(item=item, existing_metadata={"source_mtime": mtime + 100}) is False
+        )
 
     def test_source_summary(self, adapter, project_dir):
         source = SourceRef(local_path=str(project_dir))

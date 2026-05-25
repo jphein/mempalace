@@ -54,8 +54,7 @@ def _load_psycopg2():
         import psycopg2
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
-            "kg_triple_worker requires psycopg2. "
-            'Install with: pip install "mempalace[postgres]"'
+            'kg_triple_worker requires psycopg2. Install with: pip install "mempalace[postgres]"'
         ) from exc
     return psycopg2
 
@@ -320,9 +319,7 @@ class WorkerStats:
             "drawers_processed": self.drawers_processed,
             "triples_written": self.triples_written,
             "errors": self.errors,
-            "drawers_per_min_inprocess": round(
-                (self.drawers_processed / elapsed) * 60.0, 2
-            ),
+            "drawers_per_min_inprocess": round((self.drawers_processed / elapsed) * 60.0, 2),
         }
 
 
@@ -342,9 +339,7 @@ async def _process_one(
                 text = await asyncio.to_thread(_fetch_drawer_text, conn, drawer.drawer_id)
             if not text:
                 async with pool.conn() as conn:
-                    await asyncio.to_thread(
-                        _mark_completed, conn, drawer.drawer_id, 0
-                    )
+                    await asyncio.to_thread(_mark_completed, conn, drawer.drawer_id, 0)
                 stats.drawers_processed += 1
                 return
 
@@ -370,9 +365,7 @@ async def _process_one(
                     )
 
             async with pool.conn() as conn:
-                await asyncio.to_thread(
-                    _mark_completed, conn, drawer.drawer_id, len(triples)
-                )
+                await asyncio.to_thread(_mark_completed, conn, drawer.drawer_id, len(triples))
             stats.drawers_processed += 1
             stats.triples_written += len(triples)
         except Exception as e:  # noqa: BLE001
@@ -442,9 +435,7 @@ async def run_worker(
     if stop_event is None:
         stop_event = asyncio.Event()
 
-    pool_factory = pool_factory or (
-        lambda d, mn, mx: _SyncConnPool(d, min_size=mn, max_size=mx)
-    )
+    pool_factory = pool_factory or (lambda d, mn, mx: _SyncConnPool(d, min_size=mn, max_size=mx))
     kg_factory = kg_factory or _open_age_kg
     http_client_factory = http_client_factory or _open_http_client
 
@@ -464,9 +455,7 @@ async def run_worker(
 
         while not stop_event.is_set():
             async with pool.conn() as conn:
-                claimed = await asyncio.to_thread(
-                    _claim_batch, conn, worker_id, batch_size
-                )
+                claimed = await asyncio.to_thread(_claim_batch, conn, worker_id, batch_size)
 
             if not claimed:
                 if once:

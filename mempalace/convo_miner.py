@@ -524,7 +524,10 @@ def _file_chunks_locked(collection, source_file, chunks, wing, room, agent, extr
                         collection, wing, chunk_room, DEFAULT_WINDOW_SIZE
                     )
                 novelty_tag = compute_novelty_tag(
-                    collection, wing, chunk_room, chunk["content"],
+                    collection,
+                    wing,
+                    chunk_room,
+                    chunk["content"],
                     recent=window_cache[chunk_room],
                 )
                 if novelty_tag is not None:

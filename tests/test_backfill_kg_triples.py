@@ -23,9 +23,7 @@ DRIVER_PATH = REPO_ROOT / "scripts" / "backfill_kg_triples.py"
 
 def _load_driver():
     """Load the script as a module without requiring it on sys.path."""
-    spec = importlib.util.spec_from_file_location(
-        "backfill_kg_triples", DRIVER_PATH
-    )
+    spec = importlib.util.spec_from_file_location("backfill_kg_triples", DRIVER_PATH)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     sys.modules["backfill_kg_triples"] = module
@@ -139,15 +137,23 @@ def test_progress_logging_eta_scales_to_hours_and_days():
 
     # 100 pending @ 1/min = 100m = 1.7h
     line = driver._format_progress(
-        completed=0, pending=100, in_flight=0, errors=0,
-        rate_per_min=1.0, elapsed_sec=0.0,
+        completed=0,
+        pending=100,
+        in_flight=0,
+        errors=0,
+        rate_per_min=1.0,
+        elapsed_sec=0.0,
     )
     assert "eta=1.7h" in line
 
     # 100000 pending @ 1/min = ~69d
     line = driver._format_progress(
-        completed=0, pending=100000, in_flight=0, errors=0,
-        rate_per_min=1.0, elapsed_sec=0.0,
+        completed=0,
+        pending=100000,
+        in_flight=0,
+        errors=0,
+        rate_per_min=1.0,
+        elapsed_sec=0.0,
     )
     assert "eta=69.4d" in line
 
@@ -172,9 +178,11 @@ def test_release_in_flight_runs_expected_sql():
     with patch.object(driver, "_release_in_flight", wraps=driver._release_in_flight):
         with patch.dict(
             sys.modules,
-            {"mempalace.backends.postgres": MagicMock(
-                _load_psycopg2=lambda: (fake_psycopg2, None)
-            )},
+            {
+                "mempalace.backends.postgres": MagicMock(
+                    _load_psycopg2=lambda: (fake_psycopg2, None)
+                )
+            },
         ):
             released = driver._release_in_flight("postgresql://test")
 
@@ -201,9 +209,7 @@ def test_release_in_flight_swallows_db_errors():
 
     with patch.dict(
         sys.modules,
-        {"mempalace.backends.postgres": MagicMock(
-            _load_psycopg2=lambda: (fake_psycopg2, None)
-        )},
+        {"mempalace.backends.postgres": MagicMock(_load_psycopg2=lambda: (fake_psycopg2, None))},
     ):
         # No exception escapes, returns 0.
         assert driver._release_in_flight("postgresql://test") == 0
@@ -228,9 +234,7 @@ def test_read_counters_queries_all_four_states():
 
     with patch.dict(
         sys.modules,
-        {"mempalace.backends.postgres": MagicMock(
-            _load_psycopg2=lambda: (fake_psycopg2, None)
-        )},
+        {"mempalace.backends.postgres": MagicMock(_load_psycopg2=lambda: (fake_psycopg2, None))},
     ):
         counters = driver._read_counters("postgresql://test")
 
@@ -259,9 +263,7 @@ def test_read_counters_returns_none_on_db_failure():
 
     with patch.dict(
         sys.modules,
-        {"mempalace.backends.postgres": MagicMock(
-            _load_psycopg2=lambda: (fake_psycopg2, None)
-        )},
+        {"mempalace.backends.postgres": MagicMock(_load_psycopg2=lambda: (fake_psycopg2, None))},
     ):
         assert driver._read_counters("postgresql://test") is None
 

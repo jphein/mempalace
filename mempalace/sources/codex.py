@@ -151,7 +151,9 @@ class CodexSourceAdapter(BaseSourceAdapter):
             chunks = chunk_exchanges(transcript)
 
             for i, chunk in enumerate(chunks):
-                chunk_content = chunk if isinstance(chunk, str) else chunk.get("content", str(chunk))
+                chunk_content = (
+                    chunk if isinstance(chunk, str) else chunk.get("content", str(chunk))
+                )
                 yield DrawerRecord(
                     content=chunk_content,
                     source_file=source_file,
@@ -184,11 +186,14 @@ class CodexSourceAdapter(BaseSourceAdapter):
         return AdapterSchema(
             fields={
                 "source_file": FieldSpec(
-                    type="string", required=True,
-                    description="codex:// URI for the session file", indexed=True,
+                    type="string",
+                    required=True,
+                    description="codex:// URI for the session file",
+                    indexed=True,
                 ),
                 "session_file": FieldSpec(
-                    type="string", required=True,
+                    type="string",
+                    required=True,
                     description="Absolute path to the JSONL session file",
                 ),
             },

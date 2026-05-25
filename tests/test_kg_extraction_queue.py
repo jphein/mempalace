@@ -167,9 +167,7 @@ def test_re_enqueue_clears_completion(fake_psycopg):
     conn = make_conn()
     hook(drawer_id="drw-X", document="anything", metadata={"wing": "w", "room": "r"})
 
-    insert_sql = next(
-        sql for sql, _ in conn._cursor.executes if sql.lstrip().startswith("INSERT")
-    )
+    insert_sql = next(sql for sql, _ in conn._cursor.executes if sql.lstrip().startswith("INSERT"))
     # queued_at must be reset on conflict — guarantees the worker treats
     # the row as freshly pending.
     assert "queued_at    = NOW()" in insert_sql
@@ -209,7 +207,9 @@ def test_env_flag_on_adds_to_existing_chain(monkeypatch, fake_psycopg):
     # MENTIONS stage ran (regex extractor → kg.add_mention).
     assert kg.add_mention.called
     # Queue stage ran on the patched fake connection.
-    insert_sqls = [sql for sql, _ in queue_conn._cursor.executes if sql.lstrip().startswith("INSERT")]
+    insert_sqls = [
+        sql for sql, _ in queue_conn._cursor.executes if sql.lstrip().startswith("INSERT")
+    ]
     assert any("INSERT INTO mempalace_kg_extraction_queue" in s for s in insert_sqls)
 
 

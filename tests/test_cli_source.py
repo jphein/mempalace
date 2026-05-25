@@ -70,11 +70,22 @@ def stub_adapter():
     return _StubAdapter()
 
 
-def _make_mine_args(*, source=None, directory="/tmp/testdir", wing=None,
-                    palace=None, dry_run=False, agent="mempalace",
-                    limit=0, mode="projects", no_gitignore=False,
-                    include_ignored=None, redetect_origin=False,
-                    extract="exchange", max_chunks_per_file=None):
+def _make_mine_args(
+    *,
+    source=None,
+    directory="/tmp/testdir",
+    wing=None,
+    palace=None,
+    dry_run=False,
+    agent="mempalace",
+    limit=0,
+    mode="projects",
+    no_gitignore=False,
+    include_ignored=None,
+    redetect_origin=False,
+    extract="exchange",
+    max_chunks_per_file=None,
+):
     """Build an argparse.Namespace mimicking ``mempalace mine`` args."""
     return argparse.Namespace(
         command="mine",
@@ -229,6 +240,7 @@ def _register_yielding_adapter(items):
     adapter.set_items(items)
     register("_test_adapter", _YieldingAdapter)
     from mempalace.sources import registry as _reg
+
     _reg._instances["_test_adapter"] = adapter
     return adapter
 
@@ -240,21 +252,25 @@ def test_source_adapter_upserts_drawers_with_metadata(capsys):
     fake_col = _FakeCollection()
     fake_kg = _FakeKG()
 
-    _register_yielding_adapter([
-        SourceItemMetadata(source_file="/tmp/file.py", version="v1"),
-        DrawerRecord(
-            content="hello world",
-            source_file="/tmp/file.py",
-            chunk_index=0,
-            route_hint=RouteHint(wing="myproject", room="code"),
-        ),
-    ])
+    _register_yielding_adapter(
+        [
+            SourceItemMetadata(source_file="/tmp/file.py", version="v1"),
+            DrawerRecord(
+                content="hello world",
+                source_file="/tmp/file.py",
+                chunk_index=0,
+                route_hint=RouteHint(wing="myproject", room="code"),
+            ),
+        ]
+    )
 
     args = _make_mine_args(source="_test_adapter", directory="/tmp/myproject", wing="mywing")
 
-    with patch("mempalace.palace.get_collection", return_value=fake_col), \
-         patch("mempalace.knowledge_graph.KnowledgeGraph", return_value=fake_kg), \
-         patch("mempalace.cli.MempalaceConfig") as mock_cfg:
+    with (
+        patch("mempalace.palace.get_collection", return_value=fake_col),
+        patch("mempalace.knowledge_graph.KnowledgeGraph", return_value=fake_kg),
+        patch("mempalace.cli.MempalaceConfig") as mock_cfg,
+    ):
         mock_cfg.return_value.palace_path = "/tmp/fake_palace"
         _mine_via_adapter(args)
 
@@ -276,20 +292,24 @@ def test_source_adapter_falls_back_to_cli_wing_when_no_hint(capsys):
     fake_col = _FakeCollection()
     fake_kg = _FakeKG()
 
-    _register_yielding_adapter([
-        SourceItemMetadata(source_file="/tmp/f.txt", version="v1"),
-        DrawerRecord(
-            content="no hint",
-            source_file="/tmp/f.txt",
-            chunk_index=0,
-        ),
-    ])
+    _register_yielding_adapter(
+        [
+            SourceItemMetadata(source_file="/tmp/f.txt", version="v1"),
+            DrawerRecord(
+                content="no hint",
+                source_file="/tmp/f.txt",
+                chunk_index=0,
+            ),
+        ]
+    )
 
     args = _make_mine_args(source="_test_adapter", directory="/tmp/proj", wing="explicit_wing")
 
-    with patch("mempalace.palace.get_collection", return_value=fake_col), \
-         patch("mempalace.knowledge_graph.KnowledgeGraph", return_value=fake_kg), \
-         patch("mempalace.cli.MempalaceConfig") as mock_cfg:
+    with (
+        patch("mempalace.palace.get_collection", return_value=fake_col),
+        patch("mempalace.knowledge_graph.KnowledgeGraph", return_value=fake_kg),
+        patch("mempalace.cli.MempalaceConfig") as mock_cfg,
+    ):
         mock_cfg.return_value.palace_path = "/tmp/fake_palace"
         _mine_via_adapter(args)
 
@@ -305,21 +325,37 @@ def test_source_adapter_multiple_drawers(capsys):
     fake_col = _FakeCollection()
     fake_kg = _FakeKG()
 
-    _register_yielding_adapter([
-        SourceItemMetadata(source_file="/tmp/big.py", version="v1"),
-        DrawerRecord(content="chunk 0", source_file="/tmp/big.py", chunk_index=0,
-                     route_hint=RouteHint(wing="w")),
-        DrawerRecord(content="chunk 1", source_file="/tmp/big.py", chunk_index=1,
-                     route_hint=RouteHint(wing="w")),
-        DrawerRecord(content="chunk 2", source_file="/tmp/big.py", chunk_index=2,
-                     route_hint=RouteHint(wing="w")),
-    ])
+    _register_yielding_adapter(
+        [
+            SourceItemMetadata(source_file="/tmp/big.py", version="v1"),
+            DrawerRecord(
+                content="chunk 0",
+                source_file="/tmp/big.py",
+                chunk_index=0,
+                route_hint=RouteHint(wing="w"),
+            ),
+            DrawerRecord(
+                content="chunk 1",
+                source_file="/tmp/big.py",
+                chunk_index=1,
+                route_hint=RouteHint(wing="w"),
+            ),
+            DrawerRecord(
+                content="chunk 2",
+                source_file="/tmp/big.py",
+                chunk_index=2,
+                route_hint=RouteHint(wing="w"),
+            ),
+        ]
+    )
 
     args = _make_mine_args(source="_test_adapter", directory="/tmp/proj")
 
-    with patch("mempalace.palace.get_collection", return_value=fake_col), \
-         patch("mempalace.knowledge_graph.KnowledgeGraph", return_value=fake_kg), \
-         patch("mempalace.cli.MempalaceConfig") as mock_cfg:
+    with (
+        patch("mempalace.palace.get_collection", return_value=fake_col),
+        patch("mempalace.knowledge_graph.KnowledgeGraph", return_value=fake_kg),
+        patch("mempalace.cli.MempalaceConfig") as mock_cfg,
+    ):
         mock_cfg.return_value.palace_path = "/tmp/fake_palace"
         _mine_via_adapter(args)
 
@@ -350,10 +386,12 @@ def test_cmd_mine_skips_adapter_when_source_is_none():
 
     args = _make_mine_args(source=None, directory="/tmp/proj", palace="/tmp/palace")
 
-    with patch("mempalace.cli._mine_via_adapter") as mock_via, \
-         patch("mempalace.cli._daemon_strict", return_value=False), \
-         patch("mempalace.cli.MempalaceConfig") as mock_cfg, \
-         patch("mempalace.miner.mine"):
+    with (
+        patch("mempalace.cli._mine_via_adapter") as mock_via,
+        patch("mempalace.cli._daemon_strict", return_value=False),
+        patch("mempalace.cli.MempalaceConfig") as mock_cfg,
+        patch("mempalace.miner.mine"),
+    ):
         mock_cfg.return_value.palace_path = "/tmp/palace"
         cmd_mine(args)
 
@@ -370,8 +408,10 @@ def test_argparse_accepts_source_flag():
     from mempalace.cli import main
 
     with patch("sys.argv", ["mempalace", "mine", "/tmp/dir", "--source", "myadapter"]):
-        with patch("mempalace.cli.cmd_mine") as mock_cmd, \
-             patch("mempalace.cli.MempalaceConfig") as mock_cfg:
+        with (
+            patch("mempalace.cli.cmd_mine") as mock_cmd,
+            patch("mempalace.cli.MempalaceConfig") as mock_cfg,
+        ):
             mock_cfg.return_value.daemon_url = ""
             mock_cfg.return_value.daemon_strict = False
             main()
@@ -385,8 +425,10 @@ def test_argparse_source_defaults_to_none():
     from mempalace.cli import main
 
     with patch("sys.argv", ["mempalace", "mine", "/tmp/dir"]):
-        with patch("mempalace.cli.cmd_mine") as mock_cmd, \
-             patch("mempalace.cli.MempalaceConfig") as mock_cfg:
+        with (
+            patch("mempalace.cli.cmd_mine") as mock_cmd,
+            patch("mempalace.cli.MempalaceConfig") as mock_cfg,
+        ):
             mock_cfg.return_value.daemon_url = ""
             mock_cfg.return_value.daemon_strict = False
             main()
@@ -406,17 +448,21 @@ def test_source_adapter_wing_derived_from_directory_name(capsys):
     fake_col = _FakeCollection()
     fake_kg = _FakeKG()
 
-    _register_yielding_adapter([
-        SourceItemMetadata(source_file="/tmp/my-proj/f.txt", version="v1"),
-        DrawerRecord(content="data", source_file="/tmp/my-proj/f.txt", chunk_index=0),
-    ])
+    _register_yielding_adapter(
+        [
+            SourceItemMetadata(source_file="/tmp/my-proj/f.txt", version="v1"),
+            DrawerRecord(content="data", source_file="/tmp/my-proj/f.txt", chunk_index=0),
+        ]
+    )
 
     # No --wing set; directory is /tmp/my-proj
     args = _make_mine_args(source="_test_adapter", directory="/tmp/my-proj", wing=None)
 
-    with patch("mempalace.palace.get_collection", return_value=fake_col), \
-         patch("mempalace.knowledge_graph.KnowledgeGraph", return_value=fake_kg), \
-         patch("mempalace.cli.MempalaceConfig") as mock_cfg:
+    with (
+        patch("mempalace.palace.get_collection", return_value=fake_col),
+        patch("mempalace.knowledge_graph.KnowledgeGraph", return_value=fake_kg),
+        patch("mempalace.cli.MempalaceConfig") as mock_cfg,
+    ):
         mock_cfg.return_value.palace_path = "/tmp/fake_palace"
         _mine_via_adapter(args)
 
@@ -433,8 +479,10 @@ def test_source_adapter_palace_open_failure_exits():
 
     args = _make_mine_args(source="_test_adapter", directory="/tmp/proj")
 
-    with patch("mempalace.palace.get_collection", side_effect=RuntimeError("no palace")), \
-         patch("mempalace.cli.MempalaceConfig") as mock_cfg:
+    with (
+        patch("mempalace.palace.get_collection", side_effect=RuntimeError("no palace")),
+        patch("mempalace.cli.MempalaceConfig") as mock_cfg,
+    ):
         mock_cfg.return_value.palace_path = "/tmp/fake_palace"
         with pytest.raises(SystemExit) as exc_info:
             _mine_via_adapter(args)

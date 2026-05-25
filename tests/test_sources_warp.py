@@ -46,19 +46,43 @@ def _create_warp_db(db_path: Path, *, include_ai: bool = True) -> None:
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         [
             (
-                1, "nmap -p 22 10.0.10.0/24", 0,
-                "2024-09-20 18:37:05.123", "2024-09-20 18:37:17.456",
-                "/home/jp", "bash", "jp", "katana", 172676966812879, None,
+                1,
+                "nmap -p 22 10.0.10.0/24",
+                0,
+                "2024-09-20 18:37:05.123",
+                "2024-09-20 18:37:17.456",
+                "/home/jp",
+                "bash",
+                "jp",
+                "katana",
+                172676966812879,
+                None,
             ),
             (
-                2, "ssh ubox0", 0,
-                "2024-09-20 18:38:00.123", "2024-09-20 18:40:00.456",
-                "/home/jp", "bash", "jp", "katana", 172676966812879, None,
+                2,
+                "ssh ubox0",
+                0,
+                "2024-09-20 18:38:00.123",
+                "2024-09-20 18:40:00.456",
+                "/home/jp",
+                "bash",
+                "jp",
+                "katana",
+                172676966812879,
+                None,
             ),
             (
-                3, "virsh list --all", 0,
-                "2024-09-20 18:40:10.123", "2024-09-20 18:40:10.456",
-                "/home/jp", "bash", "jp", "ubox0", 172676966812879, None,
+                3,
+                "virsh list --all",
+                0,
+                "2024-09-20 18:40:10.123",
+                "2024-09-20 18:40:10.456",
+                "/home/jp",
+                "bash",
+                "jp",
+                "ubox0",
+                172676966812879,
+                None,
             ),
         ],
     )
@@ -71,28 +95,56 @@ def _create_warp_db(db_path: Path, *, include_ai: bool = True) -> None:
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         [
             (
-                4, "git status", 0,
-                "2024-09-22 16:00:20.123", "2024-09-22 16:00:20.456",
-                "/home/jp/Projects/myapp", "bash", "jp", "katana",
-                172701908517955, "main",
+                4,
+                "git status",
+                0,
+                "2024-09-22 16:00:20.123",
+                "2024-09-22 16:00:20.456",
+                "/home/jp/Projects/myapp",
+                "bash",
+                "jp",
+                "katana",
+                172701908517955,
+                "main",
             ),
             (
-                5, "git checkout -b feat/new-feature", 0,
-                "2024-09-22 16:00:30.123", "2024-09-22 16:00:30.456",
-                "/home/jp/Projects/myapp", "bash", "jp", "katana",
-                172701908517955, "main",
+                5,
+                "git checkout -b feat/new-feature",
+                0,
+                "2024-09-22 16:00:30.123",
+                "2024-09-22 16:00:30.456",
+                "/home/jp/Projects/myapp",
+                "bash",
+                "jp",
+                "katana",
+                172701908517955,
+                "main",
             ),
             (
-                6, "python -m pytest tests/", 1,
-                "2024-09-22 16:01:00.123", "2024-09-22 16:01:15.456",
-                "/home/jp/Projects/myapp", "bash", "jp", "katana",
-                172701908517955, "feat/new-feature",
+                6,
+                "python -m pytest tests/",
+                1,
+                "2024-09-22 16:01:00.123",
+                "2024-09-22 16:01:15.456",
+                "/home/jp/Projects/myapp",
+                "bash",
+                "jp",
+                "katana",
+                172701908517955,
+                "feat/new-feature",
             ),
             (
-                7, "git commit -am 'fix: test failures'", 0,
-                "2024-09-22 16:02:00.123", "2024-09-22 16:02:01.456",
-                "/home/jp/Projects/myapp", "bash", "jp", "katana",
-                172701908517955, "feat/new-feature",
+                7,
+                "git commit -am 'fix: test failures'",
+                0,
+                "2024-09-22 16:02:00.123",
+                "2024-09-22 16:02:01.456",
+                "/home/jp/Projects/myapp",
+                "bash",
+                "jp",
+                "katana",
+                172701908517955,
+                "feat/new-feature",
             ),
         ],
     )
@@ -104,9 +156,17 @@ def _create_warp_db(db_path: Path, *, include_ai: bool = True) -> None:
             username, hostname, session_id, git_branch)
            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (
-            8, "ls", 0,
-            "2024-09-23 10:00:00.123", "2024-09-23 10:00:00.456",
-            "/home/jp", "bash", "jp", "katana", 999999999, None,
+            8,
+            "ls",
+            0,
+            "2024-09-23 10:00:00.123",
+            "2024-09-23 10:00:00.456",
+            "/home/jp",
+            "bash",
+            "jp",
+            "katana",
+            999999999,
+            None,
         ),
     )
 
@@ -135,22 +195,34 @@ def _create_warp_db(db_path: Path, *, include_ai: bool = True) -> None:
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             [
                 (
-                    1, "ex-001", "conv-abc",
+                    1,
+                    "ex-001",
+                    "conv-abc",
                     "2024-12-30 00:02:13.776",
                     json.dumps([{"Query": {"text": "scan port 22 on the subnet"}}]),
-                    "/home/jp", '"Completed"', "gpt-4o",
+                    "/home/jp",
+                    '"Completed"',
+                    "gpt-4o",
                 ),
                 (
-                    2, "ex-002", "conv-abc",
+                    2,
+                    "ex-002",
+                    "conv-abc",
                     "2024-12-30 00:05:00.000",
                     json.dumps([{"Query": {"text": "now try port 2000"}}]),
-                    "/home/jp", '"Completed"', "gpt-4o",
+                    "/home/jp",
+                    '"Completed"',
+                    "gpt-4o",
                 ),
                 (
-                    3, "ex-003", "conv-xyz",
+                    3,
+                    "ex-003",
+                    "conv-xyz",
                     "2025-03-01 20:36:39.422",
                     json.dumps([{"Query": {"text": "explain docker networking"}}]),
-                    "/home/jp/Projects/myapp", '"Completed"', "claude-3.5-sonnet",
+                    "/home/jp/Projects/myapp",
+                    '"Completed"',
+                    "claude-3.5-sonnet",
                 ),
             ],
         )
@@ -203,9 +275,7 @@ def palace_ctx():
         def add_triple(self, *a, **kw):
             pass
 
-    return PalaceContext(
-        drawer_collection=_FC(), knowledge_graph=_FK(), palace_path="/tmp/fake"
-    )
+    return PalaceContext(drawer_collection=_FC(), knowledge_graph=_FK(), palace_path="/tmp/fake")
 
 
 # ------------------------------------------------------------------
@@ -244,10 +314,12 @@ class TestExtractAiQueryText:
     def test_extracts_with_context(self):
         import json
 
-        inp = json.dumps([
-            {"Query": {"text": "hello world"}},
-            {"Directory": {"pwd": "/home/jp"}},
-        ])
+        inp = json.dumps(
+            [
+                {"Query": {"text": "hello world"}},
+                {"Directory": {"pwd": "/home/jp"}},
+            ]
+        )
         assert _extract_ai_query_text(inp) == "hello world"
 
     def test_returns_none_for_invalid_json(self):
@@ -347,7 +419,7 @@ class TestWarpAdapter:
         ai_drawers = [d for d in drawers if d.metadata.get("record_type") == "ai_query"]
 
         assert len(cmd_drawers) >= 2  # at least one drawer per multi-cmd session
-        assert len(ai_drawers) >= 1   # at least one AI conversation drawer
+        assert len(ai_drawers) >= 1  # at least one AI conversation drawer
 
         for d in drawers:
             assert d.route_hint.wing == "warp"
@@ -392,21 +464,15 @@ class TestWarpAdapter:
 
     def test_is_current_version_match(self, adapter):
         item = SourceItemMetadata(source_file="warp://x#session=1", version="100")
-        assert adapter.is_current(
-            item=item, existing_metadata={"warp_version": "100"}
-        ) is True
+        assert adapter.is_current(item=item, existing_metadata={"warp_version": "100"}) is True
 
     def test_is_current_version_mismatch(self, adapter):
         item = SourceItemMetadata(source_file="warp://x#session=1", version="200")
-        assert adapter.is_current(
-            item=item, existing_metadata={"warp_version": "100"}
-        ) is False
+        assert adapter.is_current(item=item, existing_metadata={"warp_version": "100"}) is False
 
     def test_is_current_fallback_no_version_key(self, adapter):
         item = SourceItemMetadata(source_file="warp://x#session=1", version="100")
-        assert adapter.is_current(
-            item=item, existing_metadata={"some_other_key": "val"}
-        ) is True
+        assert adapter.is_current(item=item, existing_metadata={"some_other_key": "val"}) is True
 
     def test_close_prevents_ingest(self, adapter, warp_db, palace_ctx):
         from mempalace.sources.base import AdapterClosedError
@@ -430,7 +496,8 @@ class TestWarpAdapter:
         source = SourceRef(local_path=str(warp_db))
         results = list(adapter.ingest(source=source, palace=palace_ctx))
         cmd_drawers = [
-            r for r in results
+            r
+            for r in results
             if isinstance(r, DrawerRecord) and r.metadata.get("record_type") == "command_session"
         ]
         assert len(cmd_drawers) > 0
@@ -446,7 +513,8 @@ class TestWarpAdapter:
         source = SourceRef(local_path=str(warp_db))
         results = list(adapter.ingest(source=source, palace=palace_ctx))
         ai_drawers = [
-            r for r in results
+            r
+            for r in results
             if isinstance(r, DrawerRecord) and r.metadata.get("record_type") == "ai_query"
         ]
         assert len(ai_drawers) > 0

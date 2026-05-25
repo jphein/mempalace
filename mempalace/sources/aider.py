@@ -181,7 +181,9 @@ class AiderSourceAdapter(BaseSourceAdapter):
                 chunks = chunk_exchanges(transcript)
 
                 for i, chunk in enumerate(chunks):
-                    chunk_content = chunk if isinstance(chunk, str) else chunk.get("content", str(chunk))
+                    chunk_content = (
+                        chunk if isinstance(chunk, str) else chunk.get("content", str(chunk))
+                    )
                     yield DrawerRecord(
                         content=chunk_content,
                         source_file=source_file,
@@ -219,15 +221,19 @@ class AiderSourceAdapter(BaseSourceAdapter):
         return AdapterSchema(
             fields={
                 "source_file": FieldSpec(
-                    type="string", required=True,
-                    description="aider:// URI with session timestamp", indexed=True,
+                    type="string",
+                    required=True,
+                    description="aider:// URI with session timestamp",
+                    indexed=True,
                 ),
                 "session_file": FieldSpec(
-                    type="string", required=True,
+                    type="string",
+                    required=True,
                     description="Absolute path to the .aider.chat.history.md file",
                 ),
                 "session_timestamp": FieldSpec(
-                    type="string", required=True,
+                    type="string",
+                    required=True,
                     description="Session start timestamp (YYYY-MM-DD HH:MM:SS)",
                 ),
             },

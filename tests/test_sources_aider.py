@@ -64,19 +64,29 @@ def aider_dir(tmp_path):
 @pytest.fixture
 def palace_ctx():
     class _FC:
-        def add(self, **kw): pass
-        def upsert(self, **kw): pass
-        def query(self, **kw): return {"ids": [], "documents": []}
-        def get(self, **kw): return {"ids": [], "documents": [], "metadatas": []}
-        def delete(self, **kw): pass
-        def count(self): return 0
+        def add(self, **kw):
+            pass
+
+        def upsert(self, **kw):
+            pass
+
+        def query(self, **kw):
+            return {"ids": [], "documents": []}
+
+        def get(self, **kw):
+            return {"ids": [], "documents": [], "metadatas": []}
+
+        def delete(self, **kw):
+            pass
+
+        def count(self):
+            return 0
 
     class _FK:
-        def add_triple(self, *a, **kw): pass
+        def add_triple(self, *a, **kw):
+            pass
 
-    return PalaceContext(
-        drawer_collection=_FC(), knowledge_graph=_FK(), palace_path="/tmp/fake"
-    )
+    return PalaceContext(drawer_collection=_FC(), knowledge_graph=_FK(), palace_path="/tmp/fake")
 
 
 class TestAiderParser:
@@ -127,9 +137,7 @@ class TestAiderAdapter:
             assert "aider://" in d.source_file
 
     def test_ingest_single_file(self, adapter, aider_dir, palace_ctx):
-        source = SourceRef(
-            local_path=str(aider_dir / ".aider.chat.history.md")
-        )
+        source = SourceRef(local_path=str(aider_dir / ".aider.chat.history.md"))
         results = list(adapter.ingest(source=source, palace=palace_ctx))
         items = [r for r in results if isinstance(r, SourceItemMetadata)]
         assert len(items) >= 1
@@ -151,9 +159,7 @@ class TestAiderAdapter:
         )
         results = list(adapter.ingest(source=source, palace=palace_ctx))
         # Should stop after 1 session
-        drawers_per_session = [
-            r for r in results if isinstance(r, DrawerRecord)
-        ]
+        drawers_per_session = [r for r in results if isinstance(r, DrawerRecord)]
         session_sources = set(d.source_file for d in drawers_per_session)
         assert len(session_sources) <= 1
 
@@ -170,4 +176,5 @@ class TestAiderAdapter:
 
     def test_registered_entry_point(self):
         from mempalace.sources.registry import available_adapters
+
         assert "aider" in available_adapters()

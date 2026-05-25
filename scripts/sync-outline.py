@@ -69,7 +69,9 @@ def load_config() -> Config:
     base_url = os.environ.get("OUTLINE_BASE_URL", "https://outline.jphe.in").rstrip("/")
     collection_name = os.environ.get("OUTLINE_COLLECTION", "MemPalace")
     dry_run = bool(os.environ.get("DRY_RUN"))
-    return Config(api_key=api_key, base_url=base_url, collection_name=collection_name, dry_run=dry_run)
+    return Config(
+        api_key=api_key, base_url=base_url, collection_name=collection_name, dry_run=dry_run
+    )
 
 
 def outline_post(cfg: Config, endpoint: str, body: dict) -> dict:
@@ -92,14 +94,14 @@ def outline_post(cfg: Config, endpoint: str, body: dict) -> dict:
             status = e.code
             body_text = e.read().decode("utf-8", errors="replace")
             if status == 429 or status >= 500:
-                wait = 2 ** attempt
+                wait = 2**attempt
                 print(f"  HTTP {status} on {endpoint}; retrying in {wait}s", file=sys.stderr)
                 time.sleep(wait)
                 last_err = e
                 continue
             raise RuntimeError(f"HTTP {status} on {endpoint}: {body_text}") from e
         except urllib.error.URLError as e:
-            wait = 2 ** attempt
+            wait = 2**attempt
             print(f"  network error on {endpoint}: {e}; retrying in {wait}s", file=sys.stderr)
             time.sleep(wait)
             last_err = e

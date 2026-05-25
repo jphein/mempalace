@@ -561,7 +561,10 @@ class PostgresCollection(BaseCollection):
             raise ValueError("update requires at least one of documents, metadatas, embeddings")
         if documents is not None or embeddings is not None:
             super().update(
-                ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings,
+                ids=ids,
+                documents=documents,
+                metadatas=metadatas,
+                embeddings=embeddings,
             )
             return
 
@@ -594,9 +597,7 @@ class PostgresCollection(BaseCollection):
                 params,
             )
 
-    def rename_wing(
-        self, *, from_wing: str, to_wing: str, batch_size: int = 500
-    ) -> dict:
+    def rename_wing(self, *, from_wing: str, to_wing: str, batch_size: int = 500) -> dict:
         self._ensure_setup(create=True)
         cur = self._get_conn().cursor()
         cur.execute(
