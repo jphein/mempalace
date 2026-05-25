@@ -51,6 +51,22 @@ exclude = [
 
     # Example.com and reserved demo domains used in code samples.
     '^https?://(www\.)?example\.(com|org|net)(/|$)',
+
+    # Placeholder commit hashes in FORK_CHANGELOG.md for future-dated
+    # entries — replaced with real SHAs when the entry lands.
+    '^https://github\.com/techempower-org/mempalace/commit/TBD$',
+
+    # External sites that 404 from CI but are intentionally referenced
+    # in research/comparison docs. Archival pointers, not active links.
+    '^https://github\.com/kostadis/CampaignGenerator(/|$)',
+    '^https://github\.com/milla-jovovich/mempalace(/|$)',
+    '^https://github\.com/jphein/notebook(/|$)',
+    '^https://github\.com/google/gemini-cli(/|$)',
+    '^https://github\.com/techempower-org/mempalace-viz(/|$)',
+    '^https://github\.com/techempower-org/multipass-structural-memory-eval(/|$)',
+    '^https://www\.usenotra\.com(/|$)',
+    '^https://celiums\.ai(/|$)',
+    '^https://mempalaceofficial\.com(/|$)',
 ]
 
 # Exclude path patterns from the *scan* (not just from URL checking).

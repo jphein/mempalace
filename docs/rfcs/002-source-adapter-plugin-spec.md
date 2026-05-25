@@ -3,7 +3,7 @@
 - **Status:** Draft
 - **Tracking issue:** [#989](https://github.com/MemPalace/mempalace/issues/989)
 - **Related:** [#274](https://github.com/MemPalace/mempalace/issues/274), [#23](https://github.com/MemPalace/mempalace/pull/23), [#169](https://github.com/MemPalace/mempalace/pull/169), [#232](https://github.com/MemPalace/mempalace/pull/232), [#567](https://github.com/MemPalace/mempalace/pull/567), [#98](https://github.com/MemPalace/mempalace/pull/98), [#591](https://github.com/MemPalace/mempalace/pull/591), [#592](https://github.com/MemPalace/mempalace/pull/592), [#702](https://github.com/MemPalace/mempalace/pull/702), [#981](https://github.com/MemPalace/mempalace/issues/981), [#244](https://github.com/MemPalace/mempalace/pull/244), [#419](https://github.com/MemPalace/mempalace/pull/419), [#300](https://github.com/MemPalace/mempalace/pull/300), [#952](https://github.com/MemPalace/mempalace/pull/952), [#389](https://github.com/MemPalace/mempalace/pull/389), [#434](https://github.com/MemPalace/mempalace/pull/434)
-- **Sibling spec:** [RFC 001 — Storage Backend Plugin Specification](001-storage-backend-plugin-spec.md)
+- **Sibling spec:** RFC 001 — Storage Backend Plugin Specification (in-flight; see upstream tracking issue [#989](https://github.com/MemPalace/mempalace/issues/989))
 - **Spec version:** `1.0`
 
 ## Summary

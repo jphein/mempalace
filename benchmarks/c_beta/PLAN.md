@@ -21,6 +21,7 @@ olabilir ama yön aynı.
 - **Metrics**: SESSION-LEVEL Recall@{1,5,10,30}, NDCG@{10,30}
 
 ## Eksenler (8 koşu)
+
 | mode       | granularity | hybrid_weight |
 |------------|-------------|----------------|
 | raw        | session     | NA             |

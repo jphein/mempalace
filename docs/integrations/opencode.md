@@ -137,7 +137,7 @@ stop-hook — but only works against a *local* palace because of the
 | [option-K#4](https://github.com/option-K/opencode-plugin-mempalace/issues/4) | Plugin subscribes to `chat.message`, which OpenCode never publishes — counter never increments, plugin never mines | `examples/opencode/option-k-plugin-message-updated.patch` |
 | [option-K#5](https://github.com/option-K/opencode-plugin-mempalace/issues/5) | Calls `mempalace mine <dir>`; remote daemon evaluates `<dir>` against its own filesystem, returns 400 (architectural) | No patch — Option A bypasses this entirely |
 
-#4 is the load-bearing bug for any setup: without it the plugin appears to
+Issue #4 is the load-bearing bug for any setup: without it the plugin appears to
 work (MCP connects, LLM responds) but **writes zero drawers**. #5 means
 even with #4 patched, remote daemon setups still can't mine via the option-K
 plugin — which is why this fork ships its own plugin (Option A).

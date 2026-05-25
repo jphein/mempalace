@@ -18,17 +18,17 @@ historical record of the migration shape.
 
 ## Phase B: Write routing (write path change, read path unchanged)
 
-3. **Route `tool_diary_write` by topic.** Modify `mempalace/mcp_server.py::tool_diary_write` so that `topic in _CHECKPOINT_TOPICS` writes to the recovery collection; everything else writes to the main collection (current behavior).
+1. **Route `tool_diary_write` by topic.** Modify `mempalace/mcp_server.py::tool_diary_write` so that `topic in _CHECKPOINT_TOPICS` writes to the recovery collection; everything else writes to the main collection (current behavior).
 
    Test: `tests/test_mcp_server.py::test_diary_write_routes_checkpoint_to_recovery` — write with `topic="checkpoint"`, assert main collection drawer count unchanged, recovery collection has the new drawer.
 
    Test: `tests/test_mcp_server.py::test_diary_write_routes_general_to_main` — write with `topic="musings"`, assert main collection has it, recovery collection unchanged.
 
-4. **Verify `mempalace_search` no longer sees newly-written checkpoints.** This is the inverse of step 3 — a regression test that locks in the read-side benefit. Write a checkpoint via tool_diary_write, then call search_memories — assert it doesn't surface.
+2. **Verify `mempalace_search` no longer sees newly-written checkpoints.** This is the inverse of step 3 — a regression test that locks in the read-side benefit. Write a checkpoint via tool_diary_write, then call search_memories — assert it doesn't surface.
 
 ## Phase C: New read path (recovery tool)
 
-5. **Add `tool_session_recovery_read` handler** in `mempalace/mcp_server.py`. Signature per spec: filters by session_id, agent, since/until, wing, limit. Reads from recovery collection only.
+1. **Add `tool_session_recovery_read` handler** in `mempalace/mcp_server.py`. Signature per spec: filters by session_id, agent, since/until, wing, limit. Reads from recovery collection only.
 
    Test: `tests/test_mcp_server.py::test_session_recovery_read_filters_by_session_id` — write 3 checkpoints under different session_ids, query for one, assert only that one returns.
 
@@ -36,11 +36,11 @@ historical record of the migration shape.
 
    Test: `test_session_recovery_read_handles_none_metadata` — defensive, mirrors the #999 / #1094 / #1201 family.
 
-6. **Register the new tool in the TOOLS dict** with input_schema, description. Verify via MCP `tools/list` that `mempalace_session_recovery_read` shows up.
+2. **Register the new tool in the TOOLS dict** with input_schema, description. Verify via MCP `tools/list` that `mempalace_session_recovery_read` shows up.
 
 ## Phase D: Migration (existing-palace data move)
 
-7. **Add `migrate_checkpoints_to_recovery(palace_path)`** in `mempalace/migrate.py`. Walks main collection paginated (10K-drawer batches per the existing `miner.status` paginated pattern), finds drawers with `topic in _CHECKPOINT_TOPICS`, copies them to recovery, deletes from main. Idempotent — running twice is a no-op on the second run.
+1. **Add `migrate_checkpoints_to_recovery(palace_path)`** in `mempalace/migrate.py`. Walks main collection paginated (10K-drawer batches per the existing `miner.status` paginated pattern), finds drawers with `topic in _CHECKPOINT_TOPICS`, copies them to recovery, deletes from main. Idempotent — running twice is a no-op on the second run.
 
    Test: `tests/test_migrate.py::test_migrate_moves_checkpoints` — seed main collection with 3 checkpoints + 2 non-checkpoints. Run migration. Assert main has 2 drawers (the non-checkpoints), recovery has 3.
 
@@ -52,9 +52,9 @@ historical record of the migration shape.
 
 ## Phase E: CLI + daemon integration
 
-8. **Wire migration into `mempalace repair --mode reorganize`** in `mempalace/repair.py` and the CLI dispatcher. Test the CLI invocation end-to-end against a real palace fixture.
+1. **Wire migration into `mempalace repair --mode reorganize`** in `mempalace/repair.py` and the CLI dispatcher. Test the CLI invocation end-to-end against a real palace fixture.
 
-9. **Wire migration into palace-daemon startup** (palace-daemon repo). In the daemon's `lifespan` async context, after the mempalace client is warmed, fire `migrate_checkpoints_to_recovery()` under the exclusive semaphore once. Gated behind `PALACE_AUTO_MIGRATE_CHECKPOINTS=1` env var (default on).
+2. **Wire migration into palace-daemon startup** (palace-daemon repo). In the daemon's `lifespan` async context, after the mempalace client is warmed, fire `migrate_checkpoints_to_recovery()` under the exclusive semaphore once. Gated behind `PALACE_AUTO_MIGRATE_CHECKPOINTS=1` env var (default on).
 
    Test: integration test on the daemon side — start daemon against a palace with seeded checkpoints, verify they're moved by the time `/health` returns.
 
@@ -62,11 +62,11 @@ historical record of the migration shape.
 
 These don't ship in the same PR — they ship in the *next* release, after we've verified migration is stable and the recovery-tool consumer pattern is in use.
 
-10. **Mark kind= parameter on search_memories as deprecated** with a `DeprecationWarning`. Document in CHANGELOG.
+1. **Mark kind= parameter on search_memories as deprecated** with a `DeprecationWarning`. Document in CHANGELOG.
 
-11. **Cat 9 A/B re-run** after migration lands on the canonical palace. Acceptance criterion: kind=all and kind=content tokens-per-question converge (both ~600). If they don't, something's wrong and we shouldn't promote to step 12.
+2. **Cat 9 A/B re-run** after migration lands on the canonical palace. Acceptance criterion: kind=all and kind=content tokens-per-question converge (both ~600). If they don't, something's wrong and we shouldn't promote to step 12.
 
-12. **Delete `_apply_kind_text_filter`, the over-fetch hack, the kind= parameter** from search_memories and the MCP tool. Update all tests that reference kind=. CHANGELOG: "kind= filter deprecated and removed; checkpoints moved to recovery collection in [version]; default search now returns content automatically."
+3. **Delete `_apply_kind_text_filter`, the over-fetch hack, the kind= parameter** from search_memories and the MCP tool. Update all tests that reference kind=. CHANGELOG: "kind= filter deprecated and removed; checkpoints moved to recovery collection in [version]; default search now returns content automatically."
 
 ## Test running
 

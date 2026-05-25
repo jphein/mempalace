@@ -203,7 +203,7 @@ git commit -m "docs(internal): record #665 composition stance for pgvector backe
 
 Make `MEMPALACE_BACKEND=postgres` a working alternative to ChromaDB for the storage layer.
 
-> **Branch on Task 0.2's decision.** Tasks 1.A.* run if "wait" (verify #665 works on our base, no new backend code). Tasks 1.B.* run if "fork-port" (we implement `mempalace.backends.postgres` ourselves). The remaining 1.* tasks (indexes, conformance, CI) are common to both branches.
+> **Branch on Task 0.2's decision.** Tasks `1.A.*` run if "wait" (verify #665 works on our base, no new backend code). Tasks `1.B.*` run if "fork-port" (we implement `mempalace.backends.postgres` ourselves). The remaining `1.*` tasks (indexes, conformance, CI) are common to both branches.
 
 ### Task 1.A.1 — "Wait" path: verify #665 against our v3.3.5 main
 
@@ -1872,7 +1872,7 @@ Append a section to the spec's "Performance budget" table with measured timings.
 **1. Spec coverage:**
 - Substrate (Postgres + pgvector + AGE) → Phases 1-2 implement
 - Schema (drawers + closets + backend_meta + AGE graph) → Phase 1 tasks 1.B.1, 1.2; Phase 2 tasks 2.1
-- Upstream alignment (#413, #665, #574) → Phase 0 Task 0.2 decides path; Task 1.A.* composes with #665, Task 1.B.* fork-ports
+- Upstream alignment (#413, #665, #574) → Phase 0 Task 0.2 decides path; Task `1.A.*` composes with #665, Task `1.B.*` fork-ports
 - Migration tool 7 phases → Phase 3 tasks 3.1 through 3.6
 - Cutover instructions → Phase 3 Task 3.6 prints them; Phase 4 Task 4.2 executes
 - Rollback → not a code task; documented in spec, agent surfaces in 3.6 output
