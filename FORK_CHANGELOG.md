@@ -18,6 +18,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-05-25]
+
+
+### Added
+
+
+- **LLM-based KG triple extraction: queue table, async worker, llama.cpp on familiar** ([`59ac0bc`](https://github.com/techempower-org/mempalace/commit/59ac0bc))
+  Two-layer KG architecture: the existing regex extractor produces
+  ``MENTIONS`` edges inline on every write; a new LLM-based pipeline
+  produces typed ``(Entity)-[:RELATION]->(Entity)`` triples
+  asynchronously. The async path decouples extraction latency from
+  write latency — session mines no longer block on the LLM.
+  Components: a ``mempalace_kg_extraction_queue`` table populated by
+  the writethrough hook, an async worker (``mempalace-kg-extract``)
+  that claims batches with ``UPDATE ... SKIP LOCKED`` and posts to
+  a llama-server endpoint, and a backfill driver
+  (``scripts/backfill_kg_triples.py``) for the existing 364K
+  drawers. Operator surface: systemd unit at
+  ``deploy/systemd/mempalace-kg-extract.service``, environment
+  template at ``kg-extract.env.example``, full operator guide at
+  ``docs/kg-extraction.md``, and a palace-daemon ``GET
+  /kg-extract/status`` endpoint (landed separately in the daemon
+  repo). Backfill driver supports 24 in-flight workers per process
+  and trivial side-by-side parallelism via the SKIP LOCKED claim.
+
+  *Tests:* test_kg_extractor.py + test_kg_extraction_queue.py + test_kg_triple_worker.py + test_backfill_kg_triples.py
+  *Files:* `docs/specs/kg-triple-extraction.md`, `mempalace/kg_llm_extractor.py`, `mempalace/kg_triple_worker.py`, `mempalace/kg_writethrough.py`, `scripts/backfill_kg_triples.py`, `deploy/systemd/mempalace-kg-extract.service`, `deploy/systemd/kg-extract.env.example`, `docs/kg-extraction.md`, `tests/test_kg_extractor.py`, `tests/test_kg_extraction_queue.py`, `tests/test_kg_triple_worker.py`, `tests/test_backfill_kg_triples.py`
+
+
 ## [2026-05-24]
 
 
