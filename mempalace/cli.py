@@ -501,7 +501,7 @@ def _print_daemon_search(
         print(f"\n  {data['error']}")
         if "hint" in data:
             print(f"  {data['hint']}")
-        raise DaemonError(data["error"])
+        return
 
     hits = data.get("results") or []
     warnings = data.get("warnings") or []
@@ -1391,7 +1391,7 @@ def _resolve_search_format(args) -> str:
 def _resolve_search_limit(args) -> int:
     """Pick the result limit. ``--limit`` overrides legacy ``--results``."""
     limit = getattr(args, "limit", None)
-    if limit:
+    if limit is not None:
         return limit
     return getattr(args, "results", 5)
 
@@ -1430,13 +1430,11 @@ def cmd_search(args):
             # Exit 1 when no results so shell scripts can branch on it
             # (per issue #44's exit-code contract).
             sys.exit(0 if (data.get("results") or []) else 1)
-        try:
-            _print_daemon_search(
-                args.query, data, wing=args.wing, room=args.room, fmt=fmt, quiet=quiet
-            )
-        except DaemonError as e:
-            print(f"\n  ERROR: {e}", file=sys.stderr)
-            sys.exit(1)
+        _print_daemon_search(
+            args.query, data, wing=args.wing, room=args.room, fmt=fmt, quiet=quiet
+        )
+        if "error" in data and not data.get("results"):
+            sys.exit(2)
         return
 
     from .searcher import SearchError, search, search_memories
@@ -1468,12 +1466,9 @@ def cmd_search(args):
             tags=tags,
             n_results=n_results,
         )
-        try:
-            _print_daemon_search(
-                args.query, result, wing=args.wing, room=args.room, fmt=fmt, quiet=quiet
-            )
-        except DaemonError:
-            sys.exit(1)
+        _print_daemon_search(
+            args.query, result, wing=args.wing, room=args.room, fmt=fmt, quiet=quiet
+        )
         if "error" in result and not result.get("results"):
             sys.exit(2)
         sys.exit(0 if (result.get("results") or []) else 1)
