@@ -231,8 +231,8 @@ def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
         with urllib.request.urlopen(req, timeout=10) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
-        if e.code == 404:
-            return None  # endpoint not available, caller falls back
+        if e.code in (404, 401, 403):
+            return None  # endpoint missing or auth mismatch — caller falls back to MCP
         raise DaemonError(f"daemon REST {path} failed ({e.code}): {e.reason}") from e
     except (urllib.error.URLError, ConnectionError, OSError) as e:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
