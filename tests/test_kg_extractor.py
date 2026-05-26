@@ -136,6 +136,30 @@ def test_parse_json_blob_empty_string():
     assert _parse_json_blob("") == []
 
 
+def test_parse_json_blob_no_redos_on_pathological_input():
+    """Regression: the previous regex (\\[\\s*\\{.*?\\}...\\]) backtracked
+    catastrophically on long open-bracket-only inputs, freezing the event
+    loop. The bracket-counting scanner is O(n) and must finish promptly.
+    """
+    import time
+
+    raw = "[" + "{" * 5000 + " no closing"
+    t0 = time.monotonic()
+    out = _parse_json_blob(raw)
+    elapsed = time.monotonic() - t0
+    assert out == []
+    assert elapsed < 0.1, f"parser took {elapsed:.3f}s on pathological input"
+
+
+def test_parse_json_blob_brackets_inside_strings():
+    """Bracket-counting scanner must respect string literals so a ``[``
+    inside a string doesn't unbalance the count.
+    """
+    raw = 'Here you go: [{"subject": "a", "predicate": "uses_tag", "object": "[draft]"}]'
+    out = _parse_json_blob(raw)
+    assert out == [{"subject": "a", "predicate": "uses_tag", "object": "[draft]"}]
+
+
 # ── Validation paths ──────────────────────────────────────────────────
 
 
