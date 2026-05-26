@@ -30,13 +30,16 @@ class TestDaemonStrictGate:
     def test_returns_false_when_url_unset(self):
         from mempalace.mcp_server import _daemon_strict
 
-        with patch.dict("os.environ", {}, clear=True):
+        # HOME=/nonexistent prevents the developer's ~/.mempalace/config.json
+        # from bleeding in via pwd.getpwuid() fallback in os.path.expanduser.
+        with patch.dict("os.environ", {"HOME": "/nonexistent"}, clear=True):
             assert _daemon_strict() is False
 
     def test_returns_false_when_url_blank(self):
         from mempalace.mcp_server import _daemon_strict
 
-        with patch.dict("os.environ", {"PALACE_DAEMON_URL": "   "}, clear=True):
+        env = {"PALACE_DAEMON_URL": "   ", "HOME": "/nonexistent"}
+        with patch.dict("os.environ", env, clear=True):
             assert _daemon_strict() is False
 
     def test_strict_zero_disables_routing(self):
@@ -219,7 +222,7 @@ class TestHandleRequestForwarding:
         responds to initialize locally without any HTTP."""
         from mempalace import mcp_server
 
-        with patch.dict("os.environ", {}, clear=True):
+        with patch.dict("os.environ", {"HOME": "/nonexistent"}, clear=True):
             with patch("urllib.request.urlopen") as mock_open:
                 resp = mcp_server.handle_request(
                     {"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}
