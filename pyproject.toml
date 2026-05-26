@@ -3,7 +3,7 @@ name = "mempalace"
 version = "3.3.6"
 description = "Give your AI a memory — mine projects and conversations into a searchable palace. No API key required."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 authors = [
     {name = "milla-jovovich"},
@@ -17,7 +17,6 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -37,16 +36,16 @@ dependencies = [
     # Users who pick minilm during onboarding still get these installed
     # but unused — small wheel-size cost in exchange for one fewer pip
     # command in the multilingual setup path.
-    "huggingface_hub>=0.20",
-    "tokenizers>=0.15",
-    "numpy>=1.24",
+    "huggingface_hub>=1.0",
+    "tokenizers>=0.23",
+    "numpy>=2.0",
     # Tier 6a content-date extraction uses dateutil for natural-language
     # date parsing (filename + content body branches). It happens to install
     # transitively today via chromadb→kubernetes→python-dateutil, but that
     # chain is not a contract — declared explicitly here to ensure
     # _extract_content_date keeps working if upstream kubernetes drops the
     # dependency. Per PR #1584 review (Igor, 2026-05-22).
-    "python-dateutil>=2.8",
+    "python-dateutil>=2.9",
 ]
 
 [project.urls]
@@ -94,7 +93,7 @@ spellcheck = ["autocorrect>=2.0"]
 # run real concurrent writes (~24-wide) instead of serializing through
 # one psycopg2 connection under an asyncio.Lock.
 kg-extract = [
-    "httpx>=0.27",
+    "httpx>=0.28",
     "psycopg[binary]>=3.2,<4",
     "psycopg-pool>=3.2,<4",
 ]
@@ -111,8 +110,8 @@ coreml = ["onnxruntime>=1.16"]
 multilingual = []
 # Binary-format extraction for `mempalace mine --mode extract`. Per-format
 # transformer routing: striprtf for .rtf, MarkItDown for .pdf/.docx/.pptx/
-# .xlsx/.epub. MarkItDown requires Python ≥ 3.10 (env marker ensures it
-# only installs where supported; Python 3.9 users still get RTF coverage).
+# .xlsx/.epub. MarkItDown requires Python ≥ 3.10; the env marker stays as a
+# safety belt for downstream consumers who may still resolve on older Pythons.
 extract = [
     "striprtf>=0.0.27",
     # Per PR #1555 review (Igor): bare ``markitdown`` is enough to import
@@ -145,7 +144,7 @@ packages = ["mempalace"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 extend-exclude = ["benchmarks"]
 
 [tool.ruff.lint]
