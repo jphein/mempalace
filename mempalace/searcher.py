@@ -1667,9 +1667,7 @@ _FUSION_RANKERS = {
 def _validate_fusion_mode(mode: str) -> None:
     """Raise ``ValueError`` for unknown fusion modes."""
     if mode not in _FUSION_RANKERS:
-        raise ValueError(
-            f"fusion_mode must be one of {tuple(_FUSION_RANKERS)}, got {mode!r}"
-        )
+        raise ValueError(f"fusion_mode must be one of {tuple(_FUSION_RANKERS)}, got {mode!r}")
 
 
 def _validate_candidate_strategy(strategy: str) -> None:

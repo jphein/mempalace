@@ -136,12 +136,8 @@ class ABComparison:
             "metrics_b": self.metrics_b.as_dict(),
             "delta": {
                 "mrr": round(self.metrics_b.mrr - self.metrics_a.mrr, 4),
-                "recall_at_5": round(
-                    self.metrics_b.recall_at_5 - self.metrics_a.recall_at_5, 4
-                ),
-                "recall_at_10": round(
-                    self.metrics_b.recall_at_10 - self.metrics_a.recall_at_10, 4
-                ),
+                "recall_at_5": round(self.metrics_b.recall_at_5 - self.metrics_a.recall_at_5, 4),
+                "recall_at_10": round(self.metrics_b.recall_at_10 - self.metrics_a.recall_at_10, 4),
             },
             "improved": self.improved,
             "regressed": self.regressed,
@@ -169,8 +165,7 @@ def compare_runs(
     """
     if not (len(queries) == len(ranks_a) == len(ranks_b)):
         raise ValueError(
-            f"length mismatch: queries={len(queries)} "
-            f"ranks_a={len(ranks_a)} ranks_b={len(ranks_b)}"
+            f"length mismatch: queries={len(queries)} ranks_a={len(ranks_a)} ranks_b={len(ranks_b)}"
         )
     improved: list[dict[str, Any]] = []
     regressed: list[dict[str, Any]] = []
