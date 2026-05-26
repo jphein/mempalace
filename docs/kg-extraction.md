@@ -119,7 +119,7 @@ throughput in plain text.
 
 ```bash
 curl -H "X-API-Key: $PALACE_API_KEY" \
-  http://familiar.jphe.in:8085/kg-extract/status | jq
+  http://familiar:8085/kg-extract/status | jq
 ```
 
 Returns JSON with queue depth, in-flight workers, and throughput.
