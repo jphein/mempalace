@@ -1734,7 +1734,9 @@ def cmd_rooms(args):
     try:
         import psycopg as psycopg2  # noqa: F401
     except ImportError:
-        print("error: rooms CLI requires the psycopg driver. Install with: pip install mempalace[postgres]")
+        print(
+            "error: rooms CLI requires the psycopg driver. Install with: pip install mempalace[postgres]"
+        )
         sys.exit(1)
 
     import psycopg as psycopg2

@@ -77,7 +77,7 @@ def _load_psycopg2():
         import psycopg
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
-            'kg_triple_worker requires the psycopg driver. '
+            "kg_triple_worker requires the psycopg driver. "
             'Install with: pip install "mempalace[kg-extract]"'
         ) from exc
     return psycopg

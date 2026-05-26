@@ -125,7 +125,9 @@ def _check_postgres_extensions(postgres_dsn: str) -> None:
     try:
         import psycopg as psycopg2
     except ImportError:
-        sys.exit("FATAL: psycopg driver not installed. Install with: `pip install -e '.[postgres]'`")
+        sys.exit(
+            "FATAL: psycopg driver not installed. Install with: `pip install -e '.[postgres]'`"
+        )
 
     try:
         with psycopg2.connect(postgres_dsn) as conn, conn.cursor() as cur:
