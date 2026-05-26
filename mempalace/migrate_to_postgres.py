@@ -123,9 +123,11 @@ def _check_daemon_not_running() -> None:
 def _check_postgres_extensions(postgres_dsn: str) -> None:
     """Verify pgvector + AGE are available (not necessarily installed)."""
     try:
-        import psycopg2
+        import psycopg as psycopg2
     except ImportError:
-        sys.exit("FATAL: psycopg2 not installed. Install with: `pip install -e '.[postgres]'`")
+        sys.exit(
+            "FATAL: psycopg driver not installed. Install with: `pip install -e '.[postgres]'`"
+        )
 
     try:
         with psycopg2.connect(postgres_dsn) as conn, conn.cursor() as cur:
@@ -172,7 +174,7 @@ def phase_1_schema(postgres_dsn: str) -> None:
     inside a transaction" — psycopg2 forbids the switch once a query
     has run.
     """
-    import psycopg2
+    import psycopg as psycopg2
 
     # Connection 1: autocommit for extension + DDL
     schema_conn = psycopg2.connect(postgres_dsn)
@@ -239,7 +241,7 @@ def phase_2_drawers(
     and pages within an in-flight collection (the upsert handles that
     case naturally without a finer-grained checkpoint).
     """
-    import psycopg2
+    import psycopg as psycopg2
     from .backends.base import PalaceRef
     from .backends.postgres import PostgresBackend
 
@@ -509,7 +511,7 @@ def phase_5_kg(chroma_path: str, postgres_dsn: str) -> None:
     end. A high skip count is operator-actionable but not a phase
     failure.
     """
-    import psycopg2
+    import psycopg as psycopg2
 
     # Resume gate: if already done, no-op
     with psycopg2.connect(postgres_dsn) as conn:
@@ -638,7 +640,7 @@ def phase_6_verify(
     optional metadata fields).
     """
     import chromadb
-    import psycopg2
+    import psycopg as psycopg2
     import random
 
     print(f"[phase 6] verifying parity (sample={sample_n})")
@@ -782,7 +784,7 @@ def phase_7_done(chroma_path: str, postgres_dsn: str) -> None:
     ``migration_kg_*`` keys are deleted — they're scaffolding from the
     migration, not part of the production palace's metadata.
     """
-    import psycopg2
+    import psycopg as psycopg2
     from datetime import datetime, timezone
 
     redacted_dsn = _redact_dsn(postgres_dsn)

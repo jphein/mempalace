@@ -68,7 +68,58 @@ class _FakeDB:
         self.drawers[drawer_id] = _DrawerRow(id=drawer_id, wing=wing, room=room, document=document)
 
 
+class _NoopAwaitable:
+    """Awaitable that does nothing. Lets the fake cursor work in both sync
+    and async call sites without forcing every caller to await."""
+
+    def __await__(self):
+        if False:  # pragma: no cover - generator stub
+            yield
+        return None
+
+
+class _SyncResult:
+    """Wraps a fetchone/fetchall value so the same return is usable as
+    ``rows = cur.fetchall()`` *and* ``rows = await cur.fetchall()``.
+
+    Acts as the value itself for sync callers (proxies indexing, iter,
+    len, equality) while exposing ``__await__`` for the async path."""
+
+    __slots__ = ("_value",)
+
+    def __init__(self, value):
+        self._value = value
+
+    def __await__(self):
+        if False:  # pragma: no cover
+            yield
+        return self._value
+
+    # Proxy enough of the underlying object that sync callers don't notice.
+    def __getitem__(self, idx):
+        return self._value[idx]
+
+    def __iter__(self):
+        return iter(self._value)
+
+    def __len__(self):
+        return len(self._value)
+
+    def __eq__(self, other):
+        return self._value == other
+
+    def __bool__(self):
+        return bool(self._value)
+
+    def __repr__(self):
+        return f"_SyncResult({self._value!r})"
+
+
 class _FakeConn:
+    """Dual-mode fake conn — usable in both sync (`with conn.cursor()`) and
+    async (`async with conn.cursor()`) call paths so the same DB stand-in
+    can back legacy sync helpers and the new AsyncConnectionPool worker."""
+
     def __init__(self, db: _FakeDB):
         self.db = db
         self.closed = False
@@ -78,10 +129,11 @@ class _FakeConn:
         return _FakeCursor(self)
 
     def commit(self):
-        pass
+        # Dual-mode: sync callers ignore the return; async callers await it.
+        return _NoopAwaitable()
 
     def rollback(self):
-        pass
+        return _NoopAwaitable()
 
     def close(self):
         self.closed = True
@@ -93,13 +145,27 @@ class _FakeCursor:
         self.rowcount = 0
         self._results: list = []
 
+    # Sync context manager — used by _seed_backfill / _status_snapshot / etc.
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
         return None
 
+    # Async context manager — used by the AsyncConnectionPool hot path.
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc):
+        return None
+
     def execute(self, sql: str, params: tuple = ()):
+        """Dual-mode execute: does the work immediately (sync-friendly) and
+        returns an awaitable so ``await cur.execute(...)`` also works."""
+        self._do_execute(sql, params)
+        return _NoopAwaitable()
+
+    def _do_execute(self, sql: str, params: tuple = ()):
         s = " ".join(sql.split())
         db = self.conn.db
         # Claim batch
@@ -199,10 +265,12 @@ class _FakeCursor:
         raise NotImplementedError(f"FakeCursor doesn't know: {s[:120]}")
 
     def fetchone(self):
-        return self._results[0] if self._results else None
+        # Dual-mode: real call sites are either ``cur.fetchone()`` (sync) or
+        # ``await cur.fetchone()`` (async). _SyncResult is both.
+        return _SyncResult(self._results[0] if self._results else None)
 
     def fetchall(self):
-        return list(self._results)
+        return _SyncResult(list(self._results))
 
 
 class _FakePool:
@@ -237,20 +305,23 @@ class _FakeKG:
         self.triples: list[dict] = []
         self.closed = False
 
-    def add_triple(
+    async def add_triple(
         self,
         subject,
-        relation_type,
+        predicate,
         object_,
+        *,
         source=None,
         valid_from=None,
         valid_to=None,
-        confidence=1.0,
+        confidence=kw.DEFAULT_TRIPLE_CONFIDENCE,
     ):
+        # ``relation_type`` key preserved for the test assertions; the
+        # worker's call shape uses ``predicate`` positionally.
         self.triples.append(
             {
                 "subject": subject,
-                "relation_type": relation_type,
+                "relation_type": predicate,
                 "object": object_,
                 "source": source,
                 "valid_from": valid_from,
@@ -314,7 +385,9 @@ def _make_factories(db: _FakeDB, kg: _FakeKG, http: _FakeHTTPClient):
     pool = _FakePool(db)
     return {
         "pool_factory": lambda dsn, mn, mx: pool,
-        "kg_factory": lambda dsn: kg,
+        # kg_factory now receives the pool (worker's psycopg3 shape) rather
+        # than the dsn — _FakeKG ignores it, the worker just wires it in.
+        "kg_factory": lambda pool: kg,
         "http_client_factory": lambda: _async_return(http),
     }
 
@@ -525,15 +598,17 @@ def test_run_worker_marks_error_when_db_write_fails():
         }
     )
 
-    # Sabotage _mark_completed to raise once.
-    original_mark = kw._mark_completed
+    # Sabotage _mark_completed_async to raise once. The worker now uses
+    # the async helper on the hot path; the sync version is kept only for
+    # the CLI --status surface.
+    original_mark = kw._mark_completed_async
     raised = {"count": 0}
 
-    def boom(*a, **k):
+    async def boom(*a, **k):
         raised["count"] += 1
         raise RuntimeError("disk full")
 
-    kw._mark_completed = boom
+    kw._mark_completed_async = boom
     try:
         asyncio.run(
             kw.run_worker(
@@ -548,7 +623,7 @@ def test_run_worker_marks_error_when_db_write_fails():
             )
         )
     finally:
-        kw._mark_completed = original_mark
+        kw._mark_completed_async = original_mark
 
     row = db.queue["d1"]
     assert row.error is not None

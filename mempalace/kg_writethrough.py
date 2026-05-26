@@ -185,7 +185,7 @@ def make_extraction_enqueue_writethrough(dsn: str):
     bumps queued_at to NOW().
 
     Connection strategy mirrors the rest of the codebase — uses
-    ``_load_psycopg2`` (psycopg2 v2) and opens a fresh connection per
+    ``_load_psycopg2`` (psycopg3 driver under that legacy name) and opens a fresh connection per
     drawer write. The drawer write path is already inside a transaction
     on its own connection, so doing the enqueue on a separate connection
     keeps the schemas independent and avoids dirty-read coupling.

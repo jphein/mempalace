@@ -126,7 +126,7 @@ def test_maybe_create_vector_index_recognizes_offname_hnsw():
     so every threshold crossing fell through to CREATE INDEX and stacked
     duplicate full HNSW builds holding ACCESS EXCLUSIVE.
     """
-    import psycopg2
+    import psycopg as psycopg2
 
     backend = get_backend("postgres")
     palace = _palace_ref("smoke_test_palace")

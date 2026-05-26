@@ -19,15 +19,19 @@ from .config import sanitize_iso_temporal, sanitize_kg_value
 def _load_psycopg2():
     """Lazy import so pure-Python helpers (e.g. _cypher_literal) don't
     require the optional [postgres] extra. KnowledgeGraphAGE itself
-    obviously needs it; the import fires at __init__ time."""
+    obviously needs it; the import fires at __init__ time.
+
+    Name preserved for monkeypatch compatibility; driver is now psycopg3
+    (``import psycopg``) — see ``mempalace.backends.postgres._load_psycopg2``.
+    """
     try:
-        import psycopg2
+        import psycopg
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
             "AGE knowledge-graph backend requires optional dependencies. "
             'Install with: pip install "mempalace[postgres]"'
         ) from exc
-    return psycopg2
+    return psycopg
 
 
 # Unique dollar-quote tag for the cypher() outer SQL boundary. Picked so

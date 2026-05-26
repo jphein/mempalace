@@ -6,18 +6,26 @@ Async worker that drains ``mempalace_kg_extraction_queue``.
 
 The worker pulls drawer_ids from the postgres queue, calls the LLM
 extractor on each drawer's text, and writes the resulting triples into
-the AGE knowledge graph via ``KnowledgeGraphAGE.add_triple``.
+the AGE knowledge graph via a per-coroutine connection from an
+``AsyncConnectionPool``.
 
 Concurrency model:
   - One ``httpx.AsyncClient`` shared across the loop.
   - ``asyncio.Semaphore(max_concurrency)`` caps in-flight LLM calls so
     we never overrun ``llama-server --parallel N``.
-  - Postgres I/O uses psycopg2 (the same driver everything else in the
-    package uses) wrapped in ``asyncio.to_thread`` so claim/update/AGE
-    writes don't block the event loop.
+  - Postgres I/O uses psycopg3 ``AsyncConnectionPool``. Each coroutine
+    acquires its own connection for queue ops and AGE triple writes, so
+    there is no global write lock. Pool size matches the LLM concurrency
+    cap so the worker can overlap N drawer extractions with N writes.
 
 Queue claim uses ``FOR UPDATE SKIP LOCKED`` so multiple worker
 processes (or threads) can drain the queue without colliding.
+
+Migration note: this module previously serialized triple writes through
+a single psycopg2 connection wrapped in an ``asyncio.Lock``. After
+``llm_refine`` ReDoS fix #206 raised the LLM throughput ~10×, that lock
+became the binding constraint. The pool-per-coroutine design replaces
+both the lock and the per-call ``asyncio.to_thread`` hop.
 
 The CLI entry point is exposed as ``mempalace-kg-extract`` via
 pyproject.toml; see ``cli_main`` at the bottom of this module.
@@ -39,7 +47,7 @@ def snapshot(self) -> dict
 ### `run_worker`
 
 ```python
-async def run_worker(dsn: str, llm_endpoint: str = DEFAULT_ENDPOINT, model: str = DEFAULT_MODEL, *, batch_size: int = DEFAULT_BATCH_SIZE, poll_interval: int = DEFAULT_POLL_INTERVAL, max_concurrency: int = DEFAULT_CONCURRENCY, worker_id: Optional[str] = None, backfill: bool = False, backfill_limit: Optional[int] = None, once: bool = False, pool_factory: Optional[Callable[[str, int, int], _SyncConnPool]] = None, kg_factory: Optional[Callable[[str], Any]] = None, http_client_factory: Optional[Callable[[], Any]] = None, stats: Optional[WorkerStats] = None, stop_event: Optional[asyncio.Event] = None) -> WorkerStats
+async def run_worker(dsn: str, llm_endpoint: str = DEFAULT_ENDPOINT, model: str = DEFAULT_MODEL, *, batch_size: int = DEFAULT_BATCH_SIZE, poll_interval: int = DEFAULT_POLL_INTERVAL, max_concurrency: int = DEFAULT_CONCURRENCY, worker_id: Optional[str] = None, backfill: bool = False, backfill_limit: Optional[int] = None, once: bool = False, pool_factory: Optional[Callable[[str, int, int], Any]] = None, kg_factory: Optional[Callable[[Any], _KGHandle]] = None, http_client_factory: Optional[Callable[[], Awaitable[Any]]] = None, stats: Optional[WorkerStats] = None, stop_event: Optional[asyncio.Event] = None) -> WorkerStats
 ```
 
 Drain the extraction queue until cancelled (or ``once=True``).
@@ -51,7 +59,10 @@ Args:
     batch_size: How many rows to claim per poll cycle.
     poll_interval: Seconds to sleep when the queue is empty.
     max_concurrency: Cap on in-flight LLM calls (matches
-        ``llama-server --parallel N``).
+        ``llama-server --parallel N``). The pool's max_size is set to
+        ``max_concurrency + 2`` so every in-flight LLM call also has
+        a write connection available, plus a small slack pool for the
+        queue/claim ops.
     worker_id: Identifier written to ``worker_id`` on each claim.
         Defaults to ``hostname:pid:short-uuid``.
     backfill: If true, bulk-enqueue every uncompleted drawer before
@@ -61,7 +72,10 @@ Args:
     once: If true, run a single claim batch and return; useful for
         tests and CLI ``--once``.
     pool_factory / kg_factory / http_client_factory: Test seams so
-        unit tests can inject in-memory stand-ins.
+        unit tests can inject in-memory stand-ins. ``kg_factory``
+        takes the pool object (not the DSN) so the fake KG can share
+        the fake pool's state if it wants to; production passes
+        ``_open_kg_handle`` which just wraps the pool.
     stats: Pre-existing WorkerStats to mutate; one is created if None.
     stop_event: Async event that causes the loop to exit cleanly
         when set. Useful for tests and signal handlers.
@@ -75,6 +89,10 @@ def get_status(dsn: str) -> dict
 ```
 
 One-shot status query used by the CLI's ``--status`` flag.
+
+Kept synchronous: callers run it from non-async contexts (CLI flag,
+monitoring scripts) where spinning up an async pool would be
+overkill. Uses a single short-lived psycopg3 connection.
 
 ### `cli_main`
 
