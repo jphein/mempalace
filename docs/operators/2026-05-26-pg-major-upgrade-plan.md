@@ -8,8 +8,8 @@ palace before review)
 **Scope:** `mempalace-db` container on `familiar.jphe.in` (bind-mount
 `/var/lib/mempalace-db` → `/var/lib/postgresql/data`, image
 `mempalace-db:0.1` built from
-[`disks/mempalace-db/Dockerfile`](../../../disks/mempalace-db/Dockerfile)
-on the host).
+`disks/mempalace-db/Dockerfile` on the host (in the `disks` repo,
+sibling to this one — not vendored here).
 
 ---
 
@@ -50,7 +50,7 @@ Read directly from the live `mempalace-db` container:
 | PostgreSQL | 16.10 (Debian 16.10-1.pgdg13+1) | `SELECT version()` |
 | Apache AGE | 1.6.0 | `pg_extension` |
 | pgvector | 0.8.2 | `pg_extension` |
-| Base image | `apache/age:release_PG16_1.6.0` | [`disks/mempalace-db/Dockerfile`](../../../disks/mempalace-db/Dockerfile) |
+| Base image | `apache/age:release_PG16_1.6.0` | `disks/mempalace-db/Dockerfile` (sibling repo) |
 | pgvector apt | `postgresql-16-pgvector` 0.8.2-1.pgdg13+1 | Dockerfile |
 | Database name | `mempalace_2026_05_13` | container `\l` |
 | Database size | 3.6 GB | `pg_database_size` |
@@ -554,9 +554,9 @@ follow-up. Surfacing them here so they don't surprise the operator:
 - [PR #229](https://github.com/techempower-org/mempalace/pull/229) — statement_timeout applied in same transaction as cypher()
 - Apache AGE Docker tags — `apache/age` on Docker Hub, confirmed
   `release_PG17_1.6.0` and `release_PG18_1.7.0` both published
-- PG17 release notes — https://www.postgresql.org/docs/release/17.0/
-- PG18 release notes — https://www.postgresql.org/docs/release/18.0/
-- pgvector CHANGELOG — https://github.com/pgvector/pgvector/blob/master/CHANGELOG.md (latest tag `v0.8.2`, 2026-02-25)
+- [PG17 release notes](https://www.postgresql.org/docs/release/17.0/)
+- [PG18 release notes](https://www.postgresql.org/docs/release/18.0/)
+- [pgvector CHANGELOG](https://github.com/pgvector/pgvector/blob/master/CHANGELOG.md) (latest tag `v0.8.2`, 2026-02-25)
 - PGDG apt — confirmed `postgresql-17-pgvector` 0.8.2-1.pgdg13+1 and `postgresql-18-pgvector` 0.8.2-1.pgdg13+1 both present in `trixie-pgdg`
 
 ---
