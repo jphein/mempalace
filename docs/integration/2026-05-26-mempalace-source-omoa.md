@@ -243,9 +243,9 @@ A `mempalace_search` over both yields verbatim hits ranked by semantic similarit
 
 ## References
 
-- omoa repo: https://github.com/code-yeongyu/oh-my-openagent (default branch `dev`)
-- omoa feature reference: https://github.com/code-yeongyu/oh-my-openagent/blob/dev/docs/reference/features.md
-- omoa learning capture proposal: https://github.com/code-yeongyu/oh-my-openagent/issues/1397
+- omoa repo: <https://github.com/code-yeongyu/oh-my-openagent> (default branch `dev`)
+- omoa feature reference: <https://github.com/code-yeongyu/oh-my-openagent/blob/dev/docs/reference/features.md>
+- omoa learning capture proposal: <https://github.com/code-yeongyu/oh-my-openagent/issues/1397>
 - The existing OpenCode adapter (which already covers omoa sessions): [`mempalace/sources/opencode.py`](../../mempalace/sources/opencode.py)
 - RFC 002 spec text: [`docs/rfcs/002-source-adapter-plugin-spec.md`](../rfcs/002-source-adapter-plugin-spec.md)
 - Companion note: [`2026-05-26-opencode-rlm-gap-analysis.md`](2026-05-26-opencode-rlm-gap-analysis.md)
