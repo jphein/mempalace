@@ -3,7 +3,7 @@ name = "mempalace"
 version = "3.3.6"
 description = "Give your AI a memory — mine projects and conversations into a searchable palace. No API key required."
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 authors = [
     {name = "milla-jovovich"},
@@ -17,7 +17,6 @@ classifiers = [
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
@@ -111,8 +110,8 @@ coreml = ["onnxruntime>=1.16"]
 multilingual = []
 # Binary-format extraction for `mempalace mine --mode extract`. Per-format
 # transformer routing: striprtf for .rtf, MarkItDown for .pdf/.docx/.pptx/
-# .xlsx/.epub. MarkItDown requires Python ≥ 3.10 (env marker ensures it
-# only installs where supported; Python 3.9 users still get RTF coverage).
+# .xlsx/.epub. MarkItDown requires Python ≥ 3.10; the env marker stays as a
+# safety belt for downstream consumers who may still resolve on older Pythons.
 extract = [
     "striprtf>=0.0.27",
     # Per PR #1555 review (Igor): bare ``markitdown`` is enough to import
@@ -145,7 +144,7 @@ packages = ["mempalace"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py39"
+target-version = "py310"
 extend-exclude = ["benchmarks"]
 
 [tool.ruff.lint]
