@@ -184,6 +184,88 @@ def _hybrid_rank(
     return results
 
 
+def _candidate_identity(r: dict):
+    """Stable per-candidate identity for cross-list RRF fusion.
+
+    Chunk-precise: ``(source_file_full, chunk_index)`` when present so two
+    files sharing a basename don't collide and distinct chunks of one file
+    stay distinct. Falls back to the drawer ``id`` then ``source_file`` for
+    legacy rows missing the richer metadata. Mirrors the dedup key used by
+    the candidate mergers so RRF fuses on the same identity the union/hybrid
+    strategies dedup on.
+    """
+    full = r.get("_source_file_full")
+    ci = r.get("_chunk_index")
+    if full and ci is not None:
+        return (full, ci)
+    return r.get("id") or r.get("source_file") or id(r)
+
+
+def _rrf_rank(
+    results: list,
+    query: str,
+    k: int = None,
+) -> list:
+    """Re-rank ``results`` by Reciprocal Rank Fusion of vector + BM25 lists.
+
+    The alternative to :func:`_hybrid_rank`'s convex combination. Instead of
+    blending normalized scores on a shared scale, RRF fuses two *rank
+    orderings*:
+
+    * **vector list** — candidates with a real ``distance``, ordered best
+      (smallest distance) first. ``distance=None`` candidates (BM25-only or
+      graph-surfaced) carry no vector signal and are absent from this list.
+    * **bm25 list** — all candidates ordered by descending BM25 score. The
+      same tokenizer-disagreement guard as ``_hybrid_rank`` applies:
+      candidates surfaced by a BM25 search backend (``matched_via`` in
+      ``bm25_postgres``/``bm25_sqlite``) are floored to a near-max BM25 score
+      so the weaker local tokenizer can't demote a genuine backend match.
+
+    RRF (Cormack et al. 2009) only requires the orderings, not commensurable
+    score scales — which is exactly the case here, since cosine similarity
+    and Okapi-BM25 live on incomparable scales. Items absent from a list
+    contribute 0; an item strong in both lists fuses above an item strong in
+    only one.
+
+    Mutates each result dict to add ``bm25_score`` (parity with
+    ``_hybrid_rank`` so downstream display is uniform) and reorders the list
+    in place. Returns the same list for convenience.
+    """
+    if not results:
+        return results
+
+    from .rrf import DEFAULT_K, rrf_fuse
+
+    fuse_k = DEFAULT_K if k is None else k
+
+    docs = [r.get("text", "") for r in results]
+    bm25_raw = _bm25_scores(query, docs)
+    for r, raw in zip(results, bm25_raw):
+        matched_via = r.get("matched_via", "")
+        if matched_via in ("bm25_postgres", "bm25_sqlite"):
+            r["bm25_score"] = round(max(raw, 0.9), 3)
+        else:
+            r["bm25_score"] = round(raw, 3)
+
+    # Vector list: real-distance candidates, best (smallest distance) first.
+    vector_list = sorted(
+        (r for r in results if r.get("distance") is not None),
+        key=lambda r: r["distance"],
+    )
+    # BM25 list: every candidate, highest BM25 first.
+    bm25_list = sorted(results, key=lambda r: r["bm25_score"], reverse=True)
+
+    fused = rrf_fuse(
+        [vector_list, bm25_list],
+        key=_candidate_identity,
+        k=fuse_k,
+    )
+    for ident, score, rep in fused:
+        rep["rrf_score"] = round(score, 6)
+    results[:] = [rep for _ident, _score, rep in fused]
+    return results
+
+
 # Closet-boost ranking constants. Hoisted to module level so they can be
 # tuned from the outside (env var, config flag, or in-process patch for
 # A/B benchmarking) without touching `search_memories`. The ordinal signal
@@ -1574,6 +1656,22 @@ _CANDIDATE_MERGERS = {
 }
 
 
+# Fusion-mode dispatch — how the merged candidate pool is finally ranked.
+# Both rankers share the (results, query) signature and rank in place.
+_FUSION_RANKERS = {
+    "convex": _hybrid_rank,
+    "rrf": _rrf_rank,
+}
+
+
+def _validate_fusion_mode(mode: str) -> None:
+    """Raise ``ValueError`` for unknown fusion modes."""
+    if mode not in _FUSION_RANKERS:
+        raise ValueError(
+            f"fusion_mode must be one of {tuple(_FUSION_RANKERS)}, got {mode!r}"
+        )
+
+
 def _validate_candidate_strategy(strategy: str) -> None:
     """Raise ``ValueError`` for unknown strategies.
 
@@ -1661,6 +1759,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     max_distance: float = 0.0,
     vector_disabled: bool = False,
     candidate_strategy: str = "vector",
+    fusion_mode: str = "convex",
     collection_name: str = None,
 ) -> dict:
     """Programmatic search — returns a dict instead of printing.
@@ -1703,11 +1802,19 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
               When ``max_distance > 0.0`` is also set, BM25-only candidates
               are skipped — they have no vector distance and would silently
               violate the requested distance threshold.
+        fusion_mode: How the final candidate pool is ranked.
+
+            * ``"convex"`` (default) — historical behavior: a weighted blend
+              of normalized vector similarity and BM25 (``_hybrid_rank``).
+            * ``"rrf"`` — Reciprocal Rank Fusion of the vector ordering and
+              the BM25 ordering (``_rrf_rank``). Score-scale agnostic; only
+              the rank orderings matter. Selectable for the #162 A/B study.
     """
     # Validate the strategy eagerly so invalid values fail the same way
     # regardless of whether the call routes through the vector path or
     # the BM25-only fallback below.
     _validate_candidate_strategy(candidate_strategy)
+    _validate_fusion_mode(fusion_mode)
 
     if vector_disabled:
         return _bm25_only_via_sqlite(
@@ -1953,7 +2060,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
     # would return up to 4× ``n_results`` (vector hits + BM25 union pool),
     # breaking the existing ``search_memories`` size contract that the MCP
     # ``limit`` parameter is built on.
-    hits = _hybrid_rank(hits, query)[:n_results]
+    hits = _FUSION_RANKERS[fusion_mode](hits, query)[:n_results]
     for h in hits:
         h.pop("_sort_key", None)
         h.pop("_source_file_full", None)

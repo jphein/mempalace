@@ -24,6 +24,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **RRF fusion mode + convex-vs-RRF A/B harness (#162)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  ``search_memories`` gains a ``fusion_mode`` parameter selecting how the
+  merged candidate pool is finally ranked: ``"convex"`` (default — the
+  existing weighted vector+BM25 blend in ``_hybrid_rank``) or ``"rrf"``
+  (Reciprocal Rank Fusion of the vector and BM25 rank orderings via the
+  pure ``mempalace.rrf`` primitives). RRF fuses rank positions rather than
+  blending incomparable cosine/Okapi score scales — the question #82 left
+  untested when it found raw-vector RRF lift didn't survive the hybrid
+  pipeline.
+
+  ``scripts/eval_fusion_ab.py`` is the A/B apparatus: runs both pipelines
+  over a probe set (same ``[query, expected, why]`` JSON format as the
+  multi-encoder harness) and reports MRR / Recall@5 / Recall@10 plus
+  per-probe rank deltas. The scoring math is pure and unit-tested; the
+  live run is gated behind an explicit acknowledgement flag and DEFERRED
+  until the KG backfill completes, since running it hits daemon ``/search``
+  and steals GPU/daemon capacity. Honors
+  ``feedback_test_retrieval_against_our_corpus`` — A/B on our corpus, not
+  trusted from literature.
+
+  *Tests:* tests/test_rrf_rank.py (13), tests/test_eval_fusion_ab.py (18)
+  *Files:* `mempalace/searcher.py`, `scripts/eval_fusion_ab.py`, `tests/test_rrf_rank.py`, `tests/test_eval_fusion_ab.py`
+
+
 - **mempalace stats: add ROOMS breakdown (drawer count by room) to the dashboard** ([`1673465`](https://github.com/techempower-org/mempalace/commit/1673465))
   ``mempalace stats`` (#191, PR #193) surfaced drawer counts by wing
   but not by room — even though the daemon's ``/status/fast`` payload
