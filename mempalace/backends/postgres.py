@@ -36,15 +36,24 @@ _embedder = None
 
 
 def _load_psycopg2():
+    """Return the psycopg driver module and its ``sql`` helper.
+
+    Name retained for monkeypatch compatibility with the existing test
+    surface; the driver underneath is psycopg3 (``import psycopg``) since
+    the psycopg3 migration. Public API on the returned object — ``connect``,
+    ``%s`` placeholders, ``errors.UndefinedTable``, ``sql.Identifier``,
+    ``sql.SQL`` — is API-compatible with the psycopg2 usage in this
+    package.
+    """
     try:
-        import psycopg2
-        from psycopg2 import sql
+        import psycopg
+        from psycopg import sql
     except ImportError as exc:  # pragma: no cover - exercised without the extra installed.
         raise RuntimeError(
             "PostgreSQL backend requires optional dependencies. "
             'Install with: pip install "mempalace[postgres]"'
         ) from exc
-    return psycopg2, sql
+    return psycopg, sql
 
 
 def _embed(texts: list[str]) -> list[list[float]]:
@@ -831,7 +840,7 @@ class PostgresCollection(BaseCollection):
         # Open a side connection for the index-management transaction.
         # pg_advisory_xact_lock auto-releases at commit and requires a
         # real transaction; the main backend connection is autocommit=
-        # True, and psycopg2 forbids toggling autocommit mid-flight (we
+        # True, and psycopg forbids toggling autocommit mid-flight (we
         # hit this earlier in phase_1_schema). A short-lived side
         # connection sidesteps both constraints.
         #

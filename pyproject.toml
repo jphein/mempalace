@@ -86,12 +86,18 @@ dev = [
     "pre-commit>=3.0",
     "mypy>=1.0",
 ]
-postgres = ["psycopg2-binary>=2.9"]
+postgres = ["psycopg[binary]>=3.2,<4", "psycopg-pool>=3.2,<4"]
 spellcheck = ["autocorrect>=2.0"]
 # Async LLM-based KG triple extraction worker (mempalace-kg-extract CLI).
-# httpx for the OpenAI-compatible chat-completions client; psycopg2 for
-# the queue + AGE writes (same driver the rest of the postgres backend uses).
-kg-extract = ["httpx>=0.27", "psycopg2-binary>=2.9"]
+# httpx for the OpenAI-compatible chat-completions client; psycopg3 +
+# psycopg-pool for the queue + AGE writes. Async pool lets the worker
+# run real concurrent writes (~24-wide) instead of serializing through
+# one psycopg2 connection under an asyncio.Lock.
+kg-extract = [
+    "httpx>=0.27",
+    "psycopg[binary]>=3.2,<4",
+    "psycopg-pool>=3.2,<4",
+]
 # Hardware acceleration for the ONNX embedding model. Install exactly one:
 #   pip install mempalace[gpu]       — NVIDIA CUDA
 #   pip install mempalace[dml]       — DirectML (Windows AMD/Intel/NVIDIA)

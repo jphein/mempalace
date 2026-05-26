@@ -1732,12 +1732,12 @@ def cmd_rooms(args):
     Requires postgres backend + MEMPALACE_POSTGRES_DSN env var.
     """
     try:
-        import psycopg2  # noqa: F401
+        import psycopg as psycopg2  # noqa: F401
     except ImportError:
-        print("error: rooms CLI requires psycopg2. Install with: pip install mempalace[postgres]")
+        print("error: rooms CLI requires the psycopg driver. Install with: pip install mempalace[postgres]")
         sys.exit(1)
 
-    import psycopg2
+    import psycopg as psycopg2
 
     dsn = os.environ.get("MEMPALACE_POSTGRES_DSN")
     if not dsn:

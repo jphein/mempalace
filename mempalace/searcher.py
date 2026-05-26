@@ -892,10 +892,10 @@ def _bm25_only_via_postgres(
     candidate-union dedup logic can match the upstream pattern.
     """
     try:
-        import psycopg2
+        import psycopg as psycopg2
     except ImportError as exc:  # pragma: no cover
         raise RuntimeError(
-            "BM25 postgres search requires psycopg2. "
+            "BM25 postgres search requires the psycopg driver. "
             'Install with: pip install "mempalace[postgres]"'
         ) from exc
 
@@ -1065,7 +1065,7 @@ def _graph_expand_from_seeds(
     if not seed_drawer_ids:
         return []
     try:
-        import psycopg2
+        import psycopg as psycopg2
     except ImportError:
         return []
 
@@ -1144,7 +1144,7 @@ def _graph_expand_from_entities(
     if not entity_names:
         return []
     try:
-        import psycopg2
+        import psycopg as psycopg2
     except ImportError:
         return []
 
@@ -1418,7 +1418,7 @@ def _merge_hybrid_candidates(
         return
 
     try:
-        import psycopg2
+        import psycopg as psycopg2
 
         with psycopg2.connect(dsn) as conn:
             with conn.cursor() as cur:
