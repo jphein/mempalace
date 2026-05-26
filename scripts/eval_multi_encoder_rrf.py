@@ -132,6 +132,21 @@ def _mine_corpus(corpus_dir: Path, palace_dir: Path) -> int:
 # ── eval ──────────────────────────────────────────────────────────────
 
 
+def _fmt_calibration(run: dict) -> str:
+    """One-line calibration summary for a run dict, or a note when absent.
+
+    Brier/ECE are only computed when the search path emits a ``confidence``
+    field (i.e. a calibrator is configured via ``calibration_path``); when
+    it isn't, say so rather than printing a misleading 0.
+    """
+    if run.get("brier") is None:
+        return "Calibration: (no confidence field — set calibration_path to enable)"
+    return (
+        f"Brier: {run['brier']:.4f}  ECE: {run['ece']:.4f}  "
+        f"(over {run['n_calibrated_hits']} calibrated hits; lower is better)"
+    )
+
+
 def _run_probes(palace_path: str, probes: list, n_results: int) -> dict:
     """Run all probes through search_memories at the given palace_path.
 
@@ -144,6 +159,13 @@ def _run_probes(palace_path: str, probes: list, n_results: int) -> dict:
     r5 = 0
     r10 = 0
     per_probe = []
+    # Calibration sample: (confidence, relevant) per returned hit that
+    # carries a confidence field. A hit is "relevant" iff its source_file
+    # basename matches the probe's expected target. Only populated when the
+    # search path is emitting confidence (a calibrator is configured); see
+    # techempower-org/mempalace#167.
+    calib_conf: list[float] = []
+    calib_outcome: list[float] = []
     t0 = time.time()
     for query, expected, _why in probes:
         result = search_memories(query, palace_path, n_results=n_results)
@@ -152,9 +174,13 @@ def _run_probes(palace_path: str, probes: list, n_results: int) -> dict:
         rank: int | None = None
         for i, hit in enumerate(hits, start=1):
             sf = (hit.get("source_file") or "").strip()
-            if Path(sf).name == target:
+            relevant = Path(sf).name == target
+            if relevant and rank is None:
                 rank = i
-                break
+            conf = hit.get("confidence")
+            if conf is not None:
+                calib_conf.append(float(conf))
+                calib_outcome.append(1.0 if relevant else 0.0)
         rr = (1.0 / rank) if rank else 0.0
         rrs.append(rr)
         if rank is not None and rank <= 5:
@@ -172,11 +198,23 @@ def _run_probes(palace_path: str, probes: list, n_results: int) -> dict:
         )
     elapsed = time.time() - t0
     n = len(probes)
+
+    brier: float | None = None
+    ece: float | None = None
+    if calib_conf:
+        from mempalace.calibration import brier_score, expected_calibration_error
+
+        brier = round(brier_score(calib_conf, calib_outcome), 4)
+        ece = round(expected_calibration_error(calib_conf, calib_outcome), 4)
+
     return {
         "n_probes": n,
         "mrr": sum(rrs) / n if n else 0.0,
         "recall_at_5_pct": 100 * r5 / n if n else 0.0,
         "recall_at_10_pct": 100 * r10 / n if n else 0.0,
+        "brier": brier,
+        "ece": ece,
+        "n_calibrated_hits": len(calib_conf),
         "elapsed_secs": round(elapsed, 2),
         "qps": round(n / elapsed, 2) if elapsed > 0 else None,
         "per_probe": per_probe,
@@ -346,6 +384,7 @@ def main(argv: list[str] | None = None) -> int:
         f"Recall@10: {baseline['recall_at_10_pct']:.1f}%  "
         f"({baseline['elapsed_secs']}s @ {baseline['qps']} qps)"
     )
+    print(f"  {_fmt_calibration(baseline)}")
     print()
 
     # ── Multi-encoder RRF ────────────────────────────────────────────
@@ -365,6 +404,7 @@ def main(argv: list[str] | None = None) -> int:
         f"Recall@10: {mer['recall_at_10_pct']:.1f}%  "
         f"({mer['elapsed_secs']}s @ {mer['qps']} qps)"
     )
+    print(f"  {_fmt_calibration(mer)}")
     print()
 
     # ── Headline ─────────────────────────────────────────────────────
@@ -390,6 +430,11 @@ def main(argv: list[str] | None = None) -> int:
                     "delta_mrr": delta_mrr,
                     "delta_recall_at_5_pp": delta_r5,
                     "delta_recall_at_10_pp": delta_r10,
+                    "delta_brier": (
+                        round(mer["brier"] - baseline["brier"], 4)
+                        if mer.get("brier") is not None and baseline.get("brier") is not None
+                        else None
+                    ),
                 },
                 indent=2,
             ),

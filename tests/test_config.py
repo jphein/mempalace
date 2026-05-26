@@ -51,6 +51,29 @@ def test_embedding_device_env_overrides_config(tmp_path, monkeypatch):
     assert cfg.embedding_device == "coreml"
 
 
+def test_calibration_path_defaults_none(monkeypatch):
+    monkeypatch.delenv("MEMPALACE_CALIBRATION_PATH", raising=False)
+    cfg = MempalaceConfig(config_dir=tempfile.mkdtemp())
+    assert cfg.calibration_path is None
+
+
+def test_calibration_path_from_config_is_abspath(tmp_path, monkeypatch):
+    monkeypatch.delenv("MEMPALACE_CALIBRATION_PATH", raising=False)
+    with open(tmp_path / "config.json", "w") as f:
+        json.dump({"calibration_path": "~/cal.json"}, f)
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    expected = os.path.abspath(os.path.expanduser("~/cal.json"))
+    assert cfg.calibration_path == expected
+
+
+def test_calibration_path_env_overrides_config(tmp_path, monkeypatch):
+    with open(tmp_path / "config.json", "w") as f:
+        json.dump({"calibration_path": "/from/config.json"}, f)
+    monkeypatch.setenv("MEMPALACE_CALIBRATION_PATH", "/from/env.json")
+    cfg = MempalaceConfig(config_dir=str(tmp_path))
+    assert cfg.calibration_path == "/from/env.json"
+
+
 def test_env_override():
     raw = "/env/palace"
     os.environ["MEMPALACE_PALACE_PATH"] = raw

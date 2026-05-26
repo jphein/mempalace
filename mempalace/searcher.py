@@ -1607,6 +1607,50 @@ def _apply_candidate_strategy(
         merger(hits, query, palace_path, wing, room, n_results, max_distance=max_distance)
 
 
+# ── confidence calibration (techempower-org/mempalace#167) ───────────────────
+#
+# A fitted calibrator maps the raw ``similarity`` field (a transformed cosine
+# distance) to a calibrated P(relevant). It is loaded lazily from the path in
+# config (``calibration_path``) and cached per-path so a config change in a
+# long-lived process is picked up without a restart. Missing/unconfigured →
+# no ``confidence`` field is emitted (never faked). See
+# docs/research/uncertainty-aware-retrieval.md.
+
+_CALIBRATOR_CACHE: dict = {}
+
+
+def _load_calibrator():
+    """Return the configured :class:`~mempalace.calibration.Calibrator`, or None.
+
+    Cached by resolved path and modification time. ``None`` (unconfigured) and a
+    missing/unreadable file both yield ``None`` so the search path omits
+    ``confidence`` rather than faking it. Keying on mtime lets a long-lived
+    process (the daemon) pick up an in-place re-fit without a restart.
+    """
+    from .config import MempalaceConfig
+
+    path = MempalaceConfig().calibration_path
+    if not path:
+        return None
+
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = None
+
+    cached = _CALIBRATOR_CACHE.get(path)
+    if cached is not None:
+        cached_cal, cached_mtime = cached
+        if cached_mtime == mtime:
+            return cached_cal
+
+    from .calibration import Calibrator
+
+    cal = Calibrator.load(path) if mtime is not None else None
+    _CALIBRATOR_CACHE[path] = (cal, mtime)
+    return cal
+
+
 def search_memories(  # noqa: C901 — fork-only fallback orchestration; complexity above ceiling is the cost of the BM25-top-up + warnings + closet-boost branches
     query: str,
     palace_path: str,
@@ -1914,6 +1958,19 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
         h.pop("_sort_key", None)
         h.pop("_source_file_full", None)
         h.pop("_chunk_index", None)
+
+    # Calibrated confidence (#167): map the raw ``similarity`` to a calibrated
+    # P(relevant) when a calibrator is configured. Absent calibrator → no
+    # ``confidence`` key (never faked). Hits with ``similarity=None`` (BM25-only
+    # or graph-source) carry no vector signal and so get no confidence.
+    _cal = _load_calibrator()
+    if _cal is not None:
+        from .calibration import apply_calibrator
+
+        for h in hits:
+            conf = apply_calibrator(_cal, h.get("similarity"))
+            if conf is not None:
+                h["confidence"] = conf
 
     # Track whether the VECTOR path was the degraded layer, separate from
     # the final hit count. This lets the "more in scope than we could rank"
