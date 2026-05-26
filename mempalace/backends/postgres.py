@@ -551,12 +551,54 @@ class PostgresCollection(BaseCollection):
         if not clauses:
             return
         cur = self._get_conn().cursor()
+        # Resolve the doomed ids BEFORE the DELETE so the delete-through
+        # hook can propagate them to AGE. For id-only deletes this is just
+        # ``ids``; for where-based deletes we have to query first because
+        # the predicate refers to rows that won't exist post-DELETE.
+        deleted_ids = list(ids) if ids else None
+        if deleted_ids is None:
+            cur.execute(
+                self._sql.SQL("SELECT id FROM {} WHERE {}").format(
+                    self._table_id, self._sql.SQL(" AND ").join(clauses)
+                ),
+                params,
+            )
+            deleted_ids = [row[0] for row in cur.fetchall()]
         cur.execute(
             self._sql.SQL("DELETE FROM {} WHERE {}").format(
                 self._table_id, self._sql.SQL(" AND ").join(clauses)
             ),
             params,
         )
+
+        # ── KG delete-through (AGE-integration drift prevention) ──
+        # Symmetric to the write-through path: if a delete hook is
+        # registered, notify it of the removed ids so AGE can drop the
+        # corresponding Drawer nodes. Hook failures are caught + logged.
+        hook = getattr(self, "_kg_deletethrough", None)
+        if hook is not None and deleted_ids:
+            try:
+                hook(drawer_ids=deleted_ids)
+            except Exception as e:  # noqa: BLE001 — opportunistic sync
+                logger.warning(
+                    "KG delete-through hook failed for %d ids: %s",
+                    len(deleted_ids),
+                    e,
+                )
+
+    def set_kg_deletethrough(self, hook) -> None:
+        """Register a callable invoked after each successful drawer delete.
+
+        Hook signature: ``hook(drawer_ids: list[str])``. Called once per
+        ``delete`` call with the list of ids actually removed (resolved
+        before the DELETE so ``where``-based deletes also propagate).
+        Exceptions inside the hook are caught + logged.
+
+        Set to ``None`` to disable. Pair with ``set_kg_writethrough`` —
+        running one without the other drifts the graph out of sync with
+        the relational table.
+        """
+        self._kg_deletethrough = hook
 
     def update(
         self,

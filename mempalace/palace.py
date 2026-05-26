@@ -111,10 +111,14 @@ _writethrough_attached: set = set()
 
 
 def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
-    """Auto-attach the AGE KG write-through hook when MEMPALACE_KG_WRITETHROUGH=1.
+    """Auto-attach the AGE KG write- and delete-through hooks when
+    MEMPALACE_KG_WRITETHROUGH=1.
 
     Called once per collection instance. Idempotent — tracks by collection id
-    so repeated get_collection() calls don't stack hooks.
+    so repeated get_collection() calls don't stack hooks. Attaches both
+    sides (write + delete) as a matched pair so the graph stays in sync
+    with the relational drawer table; without delete-through the graph
+    accumulates orphan Drawer nodes (one per drawer deletion).
     """
     import os as _os
 
@@ -122,7 +126,10 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
     if cid in _writethrough_attached:
         return
     try:
-        from .kg_writethrough import make_writethrough_from_env
+        from .kg_writethrough import (
+            make_deletethrough_from_env,
+            make_writethrough_from_env,
+        )
 
         if not dsn:
             return
@@ -142,6 +149,13 @@ def _maybe_attach_writethrough(collection, dsn: Optional[str]) -> None:
             logger.info(
                 "KG write-through attached to collection (AGE entities will be extracted inline)"
             )
+            if hasattr(collection, "set_kg_deletethrough"):
+                delete_hook = make_deletethrough_from_env(kg=kg)
+                if delete_hook is not None:
+                    collection.set_kg_deletethrough(delete_hook)
+                    logger.info(
+                        "KG delete-through attached to collection (drawer deletes propagate to AGE)"
+                    )
     except Exception as e:
         logger.debug("KG write-through not attached: %s", e)
 

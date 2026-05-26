@@ -274,9 +274,10 @@ def test_kg_age_context_manager_closes(monkeypatch):
 
 def test_kg_age_clear_drops_and_recreates_graph(monkeypatch):
     """clear() should drop_graph + create_graph when the graph exists."""
-    # init bootstrap: fetchone returns (1,) so create_graph is skipped on init.
-    # clear bootstrap: fetchone returns (1,) again so drop_graph runs.
-    kg, conn = _build_kg_with_fake_conn(monkeypatch, fetchone_seq=[(1,), (1,)])
+    # init bootstrap: fetchone returns (1,) so create_graph is skipped on init,
+    # then None for the unique-index table-check so it early-returns.
+    # clear bootstrap: (1,) again so drop_graph runs, then None for unique-index.
+    kg, conn = _build_kg_with_fake_conn(monkeypatch, fetchone_seq=[(1,), None, (1,), None])
     initial_commits = conn.commits
     kg.clear()
     statements = " ".join(sql for sql, _ in conn._cursor.executes)
@@ -828,3 +829,73 @@ def test_tunnels_from_wing_pairs_to_wing_and_via_room():
     result = tunnels_from_wing(kg, "wing_a")
     assert {"to_wing": "wing_b", "via_room": "shared_room"} in result
     assert {"to_wing": "wing_c", "via_room": "other_room"} in result
+
+
+# ───────────────────────────────────────────────────────────────────
+# kg_writethrough — delete-through hook
+# ───────────────────────────────────────────────────────────────────
+
+
+def test_make_null_deletethrough_returns_callable_that_does_nothing():
+    from mempalace.kg_writethrough import make_null_deletethrough
+
+    hook = make_null_deletethrough()
+    assert hook(drawer_ids=["a", "b"]) is None
+    assert hook(drawer_ids=[]) is None
+
+
+def test_make_age_deletethrough_calls_delete_drawers_once():
+    """The hook forwards the id list to kg.delete_drawers in one call."""
+    from mempalace.kg_writethrough import make_age_deletethrough
+
+    kg = MagicMock()
+    hook = make_age_deletethrough(kg)
+    hook(drawer_ids=["d1", "d2", "d3"])
+    kg.delete_drawers.assert_called_once_with(["d1", "d2", "d3"])
+
+
+def test_make_age_deletethrough_skips_empty_list():
+    from mempalace.kg_writethrough import make_age_deletethrough
+
+    kg = MagicMock()
+    hook = make_age_deletethrough(kg)
+    hook(drawer_ids=[])
+    kg.delete_drawers.assert_not_called()
+
+
+def test_make_age_deletethrough_swallows_kg_errors():
+    """KG-side failures during delete must not break the relational delete."""
+    from mempalace.kg_writethrough import make_age_deletethrough
+
+    kg = MagicMock()
+    kg.delete_drawers.side_effect = RuntimeError("kg blew up")
+    hook = make_age_deletethrough(kg)
+    # Must NOT raise — caller has already committed the relational DELETE.
+    hook(drawer_ids=["d1"])
+    kg.delete_drawers.assert_called_once()
+
+
+def test_make_deletethrough_from_env_returns_none_when_disabled(monkeypatch):
+    from mempalace.kg_writethrough import make_deletethrough_from_env
+
+    monkeypatch.delenv("MEMPALACE_KG_WRITETHROUGH", raising=False)
+    assert make_deletethrough_from_env(kg=MagicMock()) is None
+
+
+def test_make_deletethrough_from_env_requires_kg_when_enabled(monkeypatch):
+    from mempalace.kg_writethrough import make_deletethrough_from_env
+
+    monkeypatch.setenv("MEMPALACE_KG_WRITETHROUGH", "1")
+    with pytest.raises(ValueError, match="kg must be provided"):
+        make_deletethrough_from_env(kg=None)
+
+
+def test_make_deletethrough_from_env_enabled_returns_hook(monkeypatch):
+    from mempalace.kg_writethrough import make_deletethrough_from_env
+
+    monkeypatch.setenv("MEMPALACE_KG_WRITETHROUGH", "1")
+    kg = MagicMock()
+    hook = make_deletethrough_from_env(kg=kg)
+    assert hook is not None
+    hook(drawer_ids=["d1"])
+    kg.delete_drawers.assert_called_once_with(["d1"])

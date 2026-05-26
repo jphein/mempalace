@@ -138,6 +138,43 @@ def make_null_writethrough():
     return hook
 
 
+def make_age_deletethrough(kg: Any):
+    """Build a delete-through hook that removes Drawer nodes from AGE.
+
+    Symmetric to ``make_age_writethrough`` for the delete path: when a
+    drawer row is removed from ``mempalace_drawers``, this hook removes
+    the matching ``(:Drawer {id: ...})`` node and its incident edges
+    from the AGE graph. Without it, deleted drawers leave orphan Drawer
+    nodes that drift the graph out of sync with the relational table.
+
+    Hook signature: ``hook(drawer_ids: list[str]) -> None``. Called once
+    per ``PostgresCollection.delete`` invocation with the resolved id
+    list. Exceptions are caught upstream — KG sync is opportunistic,
+    not mandatory.
+    """
+
+    def hook(*, drawer_ids) -> None:
+        if not drawer_ids:
+            return
+        try:
+            kg.delete_drawers(list(drawer_ids))
+        except Exception as e:  # noqa: BLE001
+            logger.warning("delete_drawers failed for %d ids: %s", len(drawer_ids), e)
+
+    return hook
+
+
+def make_null_deletethrough():
+    """No-op delete hook. Mirror of ``make_null_writethrough`` for the
+    delete path; lets test setups disable AGE sync without removing the
+    ``set_kg_deletethrough`` call."""
+
+    def hook(*, drawer_ids) -> None:
+        return
+
+    return hook
+
+
 EXTRACTION_QUEUE_TABLE = "mempalace_kg_extraction_queue"
 
 
@@ -334,6 +371,23 @@ def make_writethrough_from_env(kg: Optional[Any] = None, dsn: Optional[str] = No
         stages.append(make_extraction_enqueue_writethrough(queue_dsn))
 
     return _chain_writethroughs(stages)
+
+
+def make_deletethrough_from_env(kg: Optional[Any] = None):
+    """Build a delete hook gated on the same env switch as writethrough.
+
+    ``MEMPALACE_KG_WRITETHROUGH=1`` enables both write and delete hooks
+    — they're a matched pair; running one without the other leaves the
+    graph drifting out of sync with the relational table. Returns
+    ``None`` when the master switch is off.
+    """
+    import os
+
+    if os.environ.get("MEMPALACE_KG_WRITETHROUGH") not in ("1", "true", "yes"):
+        return None
+    if kg is None:
+        raise ValueError("kg must be provided when MEMPALACE_KG_WRITETHROUGH is enabled")
+    return make_age_deletethrough(kg)
 
 
 def _builtin_regex_extractor(text: str) -> list:
