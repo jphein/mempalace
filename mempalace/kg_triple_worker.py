@@ -467,13 +467,21 @@ class _KGHandle:
             valid_from=valid_from,
             confidence=confidence,
         )
-        sql = (
-            f"SELECT * FROM cypher(%s, {_AGE_DQ_OPEN}{cypher_inlined}{_AGE_DQ_CLOSE}) "
-            f"AS (ok agtype)"
+        # AGE's cypher(name, ...) first arg must be a literal name constant.
+        # psycopg3 binds %s as a server-side $1 parameter which AGE rejects
+        # ("a name constant is expected"). Render the graph name into the
+        # SQL text via psycopg.sql.SQL + Literal; concatenate the body with
+        # SQL() so embedded { braces in Cypher aren't read as format slots.
+        from psycopg.sql import SQL, Literal
+
+        stmt = (
+            SQL("SELECT * FROM cypher(")
+            + Literal(AGE_GRAPH_NAME)
+            + SQL(", " + _AGE_DQ_OPEN + cypher_inlined + _AGE_DQ_CLOSE + ") AS (ok agtype)")
         )
         async with self.pool.conn() as conn:
             async with conn.cursor() as cur:
-                await cur.execute(sql, (AGE_GRAPH_NAME,))
+                await cur.execute(stmt)
             await conn.commit()
 
 

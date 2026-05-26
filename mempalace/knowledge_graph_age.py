@@ -47,6 +47,26 @@ _AGE_DQ_CLOSE = f"${_AGE_DQ_TAG}$"
 _CYPHER_PARAM_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
+def _compose_cypher_sql(graph_name: str, cypher_body: str, cols_decl: str):
+    """Compose ``SELECT * FROM cypher(<graph>, $$<body>$$) AS (<cols>)``.
+
+    AGE's ``cypher(name, ...)`` first arg must be a literal *name constant*
+    — psycopg3's ``%s`` binds it as a server-side ``$1`` parameter which AGE
+    rejects with "a name constant is expected". We compose the SQL with
+    ``psycopg.sql`` so the graph name is rendered into the text. Plain
+    string concatenation is used for the dollar-quoted body so embedded
+    ``{`` braces from the Cypher source are NOT interpreted as ``format()``
+    placeholders (we never call ``.format()``).
+    """
+    from psycopg.sql import SQL, Literal
+
+    return (
+        SQL("SELECT * FROM cypher(")
+        + Literal(graph_name)
+        + SQL(", " + _AGE_DQ_OPEN + cypher_body + _AGE_DQ_CLOSE + f") AS ({cols_decl})")
+    )
+
+
 def _cypher_literal(value: Any) -> str:
     """Render a Python value as a Cypher literal for inline substitution.
 
@@ -814,10 +834,7 @@ class KnowledgeGraphAGE:
                 cur.execute("LOAD 'age'")
                 cur.execute('SET search_path = ag_catalog, "$user", public')
                 self._age_loaded = True
-            cur.execute(
-                f"SELECT * FROM cypher(%s, {_AGE_DQ_OPEN}{cypher_inlined}{_AGE_DQ_CLOSE}) AS ({cols_decl})",
-                (self.GRAPH_NAME,),
-            )
+            cur.execute(_compose_cypher_sql(self.GRAPH_NAME, cypher_inlined, cols_decl))
             if fetch:
                 rows = cur.fetchall()
         if commit:
@@ -843,10 +860,7 @@ class KnowledgeGraphAGE:
         with self._conn.cursor() as cur:
             cur.execute("LOAD 'age'")
             cur.execute('SET search_path = ag_catalog, "$user", public')
-            cur.execute(
-                f"SELECT * FROM cypher(%s, {_AGE_DQ_OPEN}{cypher_inlined}{_AGE_DQ_CLOSE}) AS (v agtype)",
-                (self.GRAPH_NAME,),
-            )
+            cur.execute(_compose_cypher_sql(self.GRAPH_NAME, cypher_inlined, "v agtype"))
             row = cur.fetchone()
         if commit:
             self._conn.commit()

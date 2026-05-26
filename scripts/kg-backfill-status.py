@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Emit current KG backfill state as JSON for wave-block custom mode."""
+
 from __future__ import annotations
 
 import json
