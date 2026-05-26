@@ -2401,6 +2401,37 @@ def _print_stats_dashboard(bundle: dict, top: int) -> None:
         print("    (no wings)")
     print()
 
+    # Rooms ride along in the same /status/fast payload as wings, so the
+    # breakdown is free — no extra daemon call. The issue (#191) asks for
+    # "drawer count by wing/room"; wings answer "which domains", rooms
+    # answer "which kinds of memory" (the canonical 7-room taxonomy).
+    rooms = status.get("rooms") or {}
+    print("  ROOMS")
+    print(f"  {'-' * 56}")
+    if isinstance(rooms, dict) and rooms:
+        room_items = sorted(
+            (
+                (r, c if isinstance(c, int) else (c or {}).get("total", 0))
+                for r, c in rooms.items()
+            ),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )
+        room_max = room_items[0][1] if room_items else 0
+        room_shown = room_items[:top] if top else room_items
+        for room, count in room_shown:
+            bar = _stats_bar(count, room_max)
+            print(f"    {room:<28} {count:>7}  {bar}")
+        room_remaining = len(room_items) - len(room_shown)
+        if room_remaining > 0:
+            tail = sum(c for _, c in room_items[len(room_shown) :])
+            print(f"    ... {room_remaining} more rooms ({tail} drawers; --top 0 shows all)")
+    elif "error" in status:
+        print(f"    (status error: {status.get('error')})")
+    else:
+        print("    (no rooms)")
+    print()
+
     kg = bundle.get("kg") or {}
     print("  KNOWLEDGE GRAPH")
     print(f"  {'-' * 56}")
@@ -2510,6 +2541,7 @@ def cmd_stats(args):
         payload = {
             "total_drawers": (bundle.get("status") or {}).get("total_drawers", 0),
             "wings": (bundle.get("status") or {}).get("wings") or {},
+            "rooms": (bundle.get("status") or {}).get("rooms") or {},
             "kg": bundle.get("kg") or {},
             "graph": bundle.get("graph") or {},
         }
@@ -3556,7 +3588,7 @@ def main():
     # stats — palace analytics dashboard (#191)
     p_stats = sub.add_parser(
         "stats",
-        help="Palace analytics dashboard (wings, knowledge graph, tunnels, tags)",
+        help="Palace analytics dashboard (wings, rooms, knowledge graph, tunnels, tags)",
     )
     p_stats.add_argument(
         "--top",
