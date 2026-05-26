@@ -29,7 +29,7 @@ os.environ["HOMEPATH"] = os.path.splitdrive(_session_tmp)[1] or _session_tmp
 # ── Unset daemon-routing env vars for the test session ────────────────
 # Tests build local-palace fixtures and exercise mcp_server's local
 # handlers directly. With ``PALACE_DAEMON_URL`` set in the developer's
-# shell env (e.g. http://disks.jphe.in:8085 in JP's case), the new
+# shell env (e.g. http://familiar:8085 in JP's case), the new
 # routing gate in :func:`mempalace.mcp_server.handle_request` would
 # forward those test calls to the live daemon and fail. Tests that
 # specifically exercise the daemon path (test_mcp_server_daemon.py)
