@@ -22,6 +22,10 @@ Normalisation:
     Tags are lowercased and stripped of surrounding whitespace; spaces
     inside a tag become hyphens (``"Project X"`` → ``"project-x"``).
     Empty strings, duplicates, and non-string values are dropped.
+    A single tag is truncated to ``MAX_TAG_LENGTH`` (128) characters
+    after character-class cleaning, and a tag list is capped to the
+    first ``MAX_TAG_COUNT`` (64) distinct tags in order. Both bounds are
+    applied silently (no exceptions) — they guard write-path bloat/DoS.
 
 ## Functions
 
@@ -34,8 +38,8 @@ def normalise_tag(tag: Any) -> Optional[str]
 Return the canonical form of a single tag, or ``None`` if invalid.
 
 Rules: lower-case, strip whitespace, spaces → hyphens, drop characters
-outside ``[a-z0-9_\-.]``. Returns ``None`` for empty/whitespace-only
-or non-string input.
+outside ``[a-z0-9_\-.]``, then truncate to ``MAX_TAG_LENGTH`` chars.
+Returns ``None`` for empty/whitespace-only or non-string input.
 
 ### `normalise_tags`
 
