@@ -1,0 +1,16 @@
+[Unit]
+Description=familiar-disk-monitor — /var/lib/docker headroom alert (#233)
+Documentation=https://github.com/techempower-org/mempalace/issues/233
+Documentation=file:///usr/local/share/doc/familiar-disk-monitor.md
+
+[Service]
+Type=oneshot
+# Path is the deployed install location; scripts/ops/install-familiar-disk-monitor.sh
+# copies the script to /usr/local/sbin/familiar-disk-monitor.sh.
+ExecStart=/usr/local/sbin/familiar-disk-monitor.sh
+# StandardOutput=journal so log entries are queryable via
+# `journalctl -u familiar-disk-monitor -p warning`.
+StandardOutput=journal
+StandardError=journal
+# Tight stop timeout — we never block on shutdown.
+TimeoutStopSec=10
