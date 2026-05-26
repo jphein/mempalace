@@ -1158,21 +1158,26 @@ def _graph_expand_from_entities(
             with conn.cursor() as cur:
                 cur.execute("LOAD 'age'")
                 cur.execute('SET search_path = ag_catalog, "$user", public')
+                # Defensive: even with the regex branch removed below, a
+                # misfire on an exact-match query against an Entity table
+                # with no index on (name) would still seq-scan. Cap each
+                # Cypher statement at 3s so the daemon stays responsive
+                # even when KG hot paths degrade.
+                cur.execute("SET LOCAL statement_timeout = '3s'")
                 for ent in entity_names[:10]:
                     if not ent or len(ent) < 3:
                         continue
                     if ent.lower() in _QUERY_NER_STOPWORDS:
-                        # Skip wh-words and other stopwords — the regex
-                        # branch below would otherwise seq-scan every
-                        # Entity vertex for substrings like ".*What.*".
                         continue
                     ent_safe = _esc(ent)
-                    # Case-insensitive partial match — query NER produces
-                    # capitalized forms that may not exactly match the
-                    # canonical entity name in the KG.
+                    # Exact match only. The previous `a.name =~ '(?i).*X.*'`
+                    # fallback caused production-scale (100K+ vertex) seq
+                    # scans that wedged the daemon for tens of minutes per
+                    # query. The fuzzy/case-insensitive variant is tracked
+                    # for re-introduction via pg_trgm + functional index.
                     expand_cypher = f"""
                         MATCH (a:Entity)-[r:RELATION]-()
-                        WHERE a.name = '{ent_safe}' OR a.name =~ '(?i).*{ent_safe}.*'
+                        WHERE a.name = '{ent_safe}'
                         RETURN DISTINCT r.source AS source
                         LIMIT {max_drawers_per_entity}
                     """

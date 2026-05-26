@@ -72,3 +72,42 @@ class TestQueryNerStopwordFilter:
             known_entities={"palace_daemon"},
         )
         assert "palace_daemon" in out
+
+
+class TestGraphExpandCypherSafety:
+    """Static checks that the AGE expand template stays in the safe shape.
+
+    The original DoS wedge was caused by an `a.name =~ '(?i).*X.*'` regex
+    branch that seq-scanned every Entity vertex. The follow-up hotfix
+    removed that branch and added a 3s `statement_timeout` guard. These
+    tests fail loudly if either guard is regressed.
+    """
+
+    def test_expand_cypher_has_no_regex_branch(self):
+        """The `=~` operator must not appear in the AGE expand template."""
+        import inspect
+
+        from mempalace.searcher import _graph_expand_from_entities
+
+        src = inspect.getsource(_graph_expand_from_entities)
+        # Strip Python comment lines so explanatory text mentioning the
+        # forbidden operator doesn't trip the guard.
+        code_only = "\n".join(
+            line for line in src.splitlines() if not line.lstrip().startswith("#")
+        )
+        assert "=~" not in code_only, (
+            "AGE Cypher regex (`=~`) reintroduced in _graph_expand_from_entities — "
+            "this caused production-scale seq-scan wedges (see PR following #227)."
+        )
+
+    def test_expand_cypher_sets_statement_timeout(self):
+        """Per-statement timeout must be set before any Cypher executes."""
+        import inspect
+
+        from mempalace.searcher import _graph_expand_from_entities
+
+        src = inspect.getsource(_graph_expand_from_entities)
+        assert "statement_timeout" in src, (
+            "_graph_expand_from_entities must SET LOCAL statement_timeout "
+            "so misfires self-cancel rather than wedging the daemon."
+        )
