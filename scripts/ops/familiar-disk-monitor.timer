@@ -1,0 +1,18 @@
+[Unit]
+Description=familiar-disk-monitor timer — fire every 15 min
+Documentation=https://github.com/techempower-org/mempalace/issues/233
+
+[Timer]
+# Fire 90s after boot (after familiar-watchdog at 60s so we don't bunch),
+# then every 15 min. Disk usage moves slowly — no need to poll faster.
+# AccuracySec=1min tightens systemd-level jitter modestly without forcing
+# wake-ups. Persistent=true means a missed run (host rebooting) fires
+# once on next boot.
+OnBootSec=90
+OnUnitActiveSec=15min
+AccuracySec=1min
+Persistent=true
+Unit=familiar-disk-monitor.service
+
+[Install]
+WantedBy=timers.target
