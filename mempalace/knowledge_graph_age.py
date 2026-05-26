@@ -231,26 +231,39 @@ class KnowledgeGraphAGE:
         if valid_from and valid_to and valid_to < valid_from:
             raise ValueError(f"valid_to ({valid_to}) cannot precede valid_from ({valid_from})")
 
-        cypher = """
-            MERGE (s:Entity {name: $subj})
-            MERGE (o:Entity {name: $obj})
-            CREATE (s)-[r:RELATION {
-                relation_type: $rt,
-                source: $src,
-                valid_from: $vf,
-                valid_to: $vt,
-                confidence: $conf
-            }]->(o)
-        """
+        # Build the property map keys dynamically — a Cypher property map
+        # rejects bare ``NULL`` as a value (``SyntaxError: a name constant
+        # is expected``), so omit any key whose value is None. The omitted
+        # property reads back as NULL via ``r.source``/``r.valid_from`` etc.,
+        # which matches the open-interval semantics the rest of the API
+        # already assumes (see ``query_triples`` as_of filter).
+        prop_pairs = [
+            "relation_type: $rt",
+            "confidence: $conf",
+        ]
         params = {
             "subj": subject,
             "obj": object_,
             "rt": relation_type,
-            "src": source,
-            "vf": valid_from,
-            "vt": valid_to,
             "conf": confidence,
         }
+        if source is not None:
+            prop_pairs.append("source: $src")
+            params["src"] = source
+        if valid_from is not None:
+            prop_pairs.append("valid_from: $vf")
+            params["vf"] = valid_from
+        if valid_to is not None:
+            prop_pairs.append("valid_to: $vt")
+            params["vt"] = valid_to
+
+        cypher = f"""
+            MERGE (s:Entity {{name: $subj}})
+            MERGE (o:Entity {{name: $obj}})
+            CREATE (s)-[r:RELATION {{
+                {", ".join(prop_pairs)}
+            }}]->(o)
+        """
         self._run_cypher(cypher, params)
 
     def query_triples(

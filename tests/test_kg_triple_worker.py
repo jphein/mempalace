@@ -404,6 +404,47 @@ def _drawer_text(drawer_id: str) -> str:
 # ── Tests ────────────────────────────────────────────────────────────
 
 
+def test_add_triple_cypher_omits_null_keys():
+    """Regression for techempower-org/mempalace#221.
+
+    Cypher property maps reject bare ``NULL`` as a value
+    (``SyntaxError: a name constant is expected``). When source / valid_from
+    are None the generated property map must omit those keys entirely —
+    not emit ``key: NULL``. ``valid_to`` is always omitted here because
+    the worker writes facts open-ended on the right.
+    """
+    cypher = kw._add_triple_cypher(
+        "JP",
+        "uses",
+        "mempalace",
+        source=None,
+        valid_from=None,
+        confidence=0.9,
+    )
+    assert "NULL" not in cypher, f"property map should not contain NULL: {cypher!r}"
+    assert "source" not in cypher
+    assert "valid_from" not in cypher
+    assert "valid_to" not in cypher
+    assert "relation_type: 'uses'" in cypher
+    assert "confidence: 0.9" in cypher
+
+
+def test_add_triple_cypher_includes_set_keys():
+    """When source and valid_from are set, they appear in the property map."""
+    cypher = kw._add_triple_cypher(
+        "JP",
+        "started",
+        "run",
+        source="drawer_xyz",
+        valid_from="2026-05-01",
+        confidence=0.8,
+    )
+    assert "NULL" not in cypher
+    assert "source: 'drawer_xyz'" in cypher
+    assert "valid_from: '2026-05-01'" in cypher
+    assert "relation_type: 'started'" in cypher
+
+
 def test_claim_returns_no_overlap_under_contention():
     """Two coroutines claiming from the same queue must not share a row.
 

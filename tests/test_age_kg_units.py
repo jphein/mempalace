@@ -295,6 +295,76 @@ def test_kg_age_clear_skips_drop_when_graph_absent(monkeypatch):
     assert "drop_graph" not in statements
 
 
+def _last_cypher_property_map(conn) -> str:
+    """Return the property-map portion of the most recent CREATE statement.
+
+    Slices between the first ``RELATION {`` and the matching ``}]->`` so
+    assertions can target the property map specifically (and ignore NULLs
+    legitimately appearing inside WHERE clauses elsewhere in the query).
+    """
+    for sql, _ in reversed(conn._cursor.executes):
+        if "RELATION {" in sql:
+            start = sql.index("RELATION {") + len("RELATION {")
+            end = sql.index("}]->", start)
+            return sql[start:end]
+    raise AssertionError("no CREATE RELATION statement found in executes")
+
+
+def test_add_triple_omits_null_keys_from_property_map(monkeypatch):
+    """Regression for techempower-org/mempalace#221.
+
+    Cypher property maps reject bare ``NULL`` values
+    (``SyntaxError: a name constant is expected``). When valid_from /
+    valid_to / source are None, the corresponding keys must be omitted
+    from the property map entirely — not emitted as ``key: NULL``.
+    """
+    kg, conn = _build_kg_with_fake_conn(monkeypatch, fetchone_seq=[(1,)])
+    kg.add_triple(subject="JP", relation_type="uses", object_="mempalace")
+
+    prop_map = _last_cypher_property_map(conn)
+    assert "NULL" not in prop_map, f"property map should not contain NULL: {prop_map!r}"
+    assert "valid_from" not in prop_map
+    assert "valid_to" not in prop_map
+    assert "source" not in prop_map
+    assert "relation_type: 'uses'" in prop_map
+    assert "confidence: 1.0" in prop_map
+
+
+def test_add_triple_includes_only_set_temporal_keys(monkeypatch):
+    """When valid_from is set but valid_to is None, only valid_from appears."""
+    kg, conn = _build_kg_with_fake_conn(monkeypatch, fetchone_seq=[(1,)])
+    kg.add_triple(
+        subject="JP",
+        relation_type="started",
+        object_="run",
+        valid_from="2026-05-01",
+    )
+    prop_map = _last_cypher_property_map(conn)
+    assert "NULL" not in prop_map
+    assert "valid_from: '2026-05-01'" in prop_map
+    assert "valid_to" not in prop_map
+
+
+def test_add_triple_emits_all_keys_when_fully_specified(monkeypatch):
+    """All four optional fields set → all four appear in the property map."""
+    kg, conn = _build_kg_with_fake_conn(monkeypatch, fetchone_seq=[(1,)])
+    kg.add_triple(
+        subject="JP",
+        relation_type="worked_at",
+        object_="techempower",
+        source="drawer_xyz",
+        valid_from="2020-01-01",
+        valid_to="2026-01-01",
+        confidence=0.95,
+    )
+    prop_map = _last_cypher_property_map(conn)
+    assert "NULL" not in prop_map
+    assert "source: 'drawer_xyz'" in prop_map
+    assert "valid_from: '2020-01-01'" in prop_map
+    assert "valid_to: '2026-01-01'" in prop_map
+    assert "confidence: 0.95" in prop_map
+
+
 # =============================================================================
 # kg_writethrough — extractors and hook factories
 # =============================================================================
