@@ -72,6 +72,12 @@ exclude = [
     # 30-second timeouts from GitHub runners as of 2026-05-26). The page
     # is live in browsers; just unreachable from CI.
     '^https://martinfowler\.com/',
+
+    # csail.mit.edu sits behind a slow CDN that intermittently fails
+    # the 30s lychee timeout — three CI failures across PRs #232 and
+    # #226 on 2026-05-26, two of them on rerun. Page is live in
+    # browsers. Cited from docs/research/uncertainty-aware-retrieval.md.
+    '^https://www\.csail\.mit\.edu/',
 ]
 
 # Exclude path patterns from the *scan* (not just from URL checking).
