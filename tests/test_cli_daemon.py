@@ -14,6 +14,7 @@ session — these tests opt back in via ``patch.dict``.
 
 import argparse
 import json
+import urllib.error
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -31,6 +32,12 @@ class _FakeResp:
 
     def read(self):
         return self._body
+
+
+def _rest_fastpath_404(req):
+    """Raise HTTPError(404) for REST fast-path GETs so cmd_search/cmd_status
+    fall through to the MCP POST envelope these tests actually verify."""
+    raise urllib.error.HTTPError(req.full_url, 404, "Not Found", {}, None)
 
 
 # ── _daemon_strict ──────────────────────────────────────────────────────
@@ -229,6 +236,8 @@ class TestCmdSearchDaemon:
         ).encode()
 
         def fake_urlopen(req, timeout=None):
+            if getattr(req, "data", None) is None:
+                return _rest_fastpath_404(req)
             captured_body = json.loads(req.data.decode())
             assert captured_body["params"]["name"] == "mempalace_search"
             assert captured_body["params"]["arguments"]["query"] == "graphql"
@@ -264,6 +273,8 @@ class TestCmdSearchDaemon:
         captured = {}
 
         def fake_urlopen(req, timeout=None):
+            if getattr(req, "data", None) is None:
+                return _rest_fastpath_404(req)
             captured["body"] = json.loads(req.data.decode())
             return _FakeResp(body)
 
