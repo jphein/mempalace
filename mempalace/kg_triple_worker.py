@@ -47,11 +47,11 @@ from .knowledge_graph_age import _cypher_literal, _inline_cypher_params
 logger = logging.getLogger("mempalace.kg_triple_worker")
 
 
-DEFAULT_ENDPOINT = "http://familiar.jphe.in:11436"
+DEFAULT_ENDPOINT = "http://familiar:11436"
 DEFAULT_MODEL = "phi-4-mini"
 DEFAULT_BATCH_SIZE = 20
 DEFAULT_POLL_INTERVAL = 30
-DEFAULT_CONCURRENCY = 8
+DEFAULT_CONCURRENCY = 24
 DEFAULT_TRIPLE_CONFIDENCE = 0.7
 
 AGE_GRAPH_NAME = "mempalace_kg"
@@ -322,7 +322,7 @@ class _SyncConnPool:
     overhead is paid once per connection lifetime, not per write.
     """
 
-    def __init__(self, dsn: str, min_size: int = 2, max_size: int = 10):
+    def __init__(self, dsn: str, min_size: int = 2, max_size: int = 32):
         _load_psycopg2()
         from psycopg_pool import AsyncConnectionPool
 
@@ -502,6 +502,22 @@ class WorkerStats:
         }
 
 
+async def _extract_under_sem(
+    http_client: Any,
+    endpoint: str,
+    model: str,
+    text: str,
+    sem: asyncio.Semaphore,
+) -> list:
+    """LLM-only step. Holds an ``sem`` slot for the HTTP call duration.
+
+    Pulled out of ``_process_one`` so the sem release happens before any
+    triple writes start — DB writes shouldn't occupy an LLM slot.
+    """
+    async with sem:
+        return await extract_triples(http_client, endpoint, model, text)
+
+
 async def _process_one(
     pool: Any,
     http_client: Any,
@@ -512,49 +528,54 @@ async def _process_one(
     sem: asyncio.Semaphore,
     stats: WorkerStats,
 ) -> None:
-    async with sem:
+    """Drive one drawer through fetch → LLM → triple writes → mark-completed.
+
+    Sem narrowing: the semaphore is only held during the LLM call (see
+    ``_extract_under_sem``). Triple writes and the completed-mark run
+    outside the sem, so a slow DB write never starves a free LLM slot.
+    """
+    try:
+        async with pool.conn() as conn:
+            text = await _fetch_drawer_text_async(conn, drawer.drawer_id)
+        if not text:
+            async with pool.conn() as conn:
+                await _mark_completed_async(conn, drawer.drawer_id, 0)
+            stats.drawers_processed += 1
+            return
+
+        triples = await _extract_under_sem(http_client, endpoint, model, text, sem)
+
+        for t in triples:
+            try:
+                await kg.add_triple(
+                    t.subject,
+                    t.predicate,
+                    t.object,
+                    source=f"drawer:{drawer.drawer_id}",
+                    valid_from=t.valid_from,
+                )
+            except Exception as e:  # noqa: BLE001
+                logger.warning(
+                    "add_triple failed for drawer=%s triple=(%s,%s,%s): %s",
+                    drawer.drawer_id,
+                    t.subject,
+                    t.predicate,
+                    t.object,
+                    e,
+                )
+
+        async with pool.conn() as conn:
+            await _mark_completed_async(conn, drawer.drawer_id, len(triples))
+        stats.drawers_processed += 1
+        stats.triples_written += len(triples)
+    except Exception as e:  # noqa: BLE001
+        logger.exception("worker failed on drawer=%s", drawer.drawer_id)
+        stats.errors += 1
         try:
             async with pool.conn() as conn:
-                text = await _fetch_drawer_text_async(conn, drawer.drawer_id)
-            if not text:
-                async with pool.conn() as conn:
-                    await _mark_completed_async(conn, drawer.drawer_id, 0)
-                stats.drawers_processed += 1
-                return
-
-            triples = await extract_triples(http_client, endpoint, model, text)
-
-            for t in triples:
-                try:
-                    await kg.add_triple(
-                        t.subject,
-                        t.predicate,
-                        t.object,
-                        source=f"drawer:{drawer.drawer_id}",
-                        valid_from=t.valid_from,
-                    )
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(
-                        "add_triple failed for drawer=%s triple=(%s,%s,%s): %s",
-                        drawer.drawer_id,
-                        t.subject,
-                        t.predicate,
-                        t.object,
-                        e,
-                    )
-
-            async with pool.conn() as conn:
-                await _mark_completed_async(conn, drawer.drawer_id, len(triples))
-            stats.drawers_processed += 1
-            stats.triples_written += len(triples)
-        except Exception as e:  # noqa: BLE001
-            logger.exception("worker failed on drawer=%s", drawer.drawer_id)
-            stats.errors += 1
-            try:
-                async with pool.conn() as conn:
-                    await _mark_error_async(conn, drawer.drawer_id, str(e))
-            except Exception:  # noqa: BLE001
-                logger.exception("failed to mark error for drawer=%s", drawer.drawer_id)
+                await _mark_error_async(conn, drawer.drawer_id, str(e))
+        except Exception:  # noqa: BLE001
+            logger.exception("failed to mark error for drawer=%s", drawer.drawer_id)
 
 
 async def _open_http_client(timeout: float = 60.0):
@@ -563,7 +584,7 @@ async def _open_http_client(timeout: float = 60.0):
     return httpx.AsyncClient(timeout=timeout)
 
 
-async def run_worker(
+async def run_worker(  # noqa: C901 — producer/consumer orchestration + factories + lifecycle; complexity is the cost of streaming refill
     dsn: str,
     llm_endpoint: str = DEFAULT_ENDPOINT,
     model: str = DEFAULT_MODEL,
@@ -571,6 +592,7 @@ async def run_worker(
     batch_size: int = DEFAULT_BATCH_SIZE,
     poll_interval: int = DEFAULT_POLL_INTERVAL,
     max_concurrency: int = DEFAULT_CONCURRENCY,
+    db_pool_size: Optional[int] = None,
     worker_id: Optional[str] = None,
     backfill: bool = False,
     backfill_limit: Optional[int] = None,
@@ -583,33 +605,40 @@ async def run_worker(
 ) -> WorkerStats:
     """Drain the extraction queue until cancelled (or ``once=True``).
 
+    Concurrency model: a producer task tops up an ``asyncio.Queue`` of
+    claimed drawers from the postgres queue whenever it dips below a
+    low-water mark, while ``max_concurrency`` long-lived consumer tasks
+    pull from that internal queue and call ``_process_one``. Replaces
+    the old claim-batch → gather → claim-batch barrier so the slowest
+    drawer in a batch can no longer stall the next claim cycle.
+
     Args:
         dsn: Postgres DSN for both the queue and ``mempalace_drawers``.
         llm_endpoint: Base URL for the OpenAI-compatible inference server.
         model: Model alias.
-        batch_size: How many rows to claim per poll cycle.
+        batch_size: How many rows to claim per refill cycle. Also drives
+            the internal queue's high-water mark (= batch_size) and
+            low-water refill threshold (= batch_size // 2).
         poll_interval: Seconds to sleep when the queue is empty.
         max_concurrency: Cap on in-flight LLM calls (matches
-            ``llama-server --parallel N``). The pool's max_size is set to
-            ``max_concurrency + 2`` so every in-flight LLM call also has
-            a write connection available, plus a small slack pool for the
-            queue/claim ops.
+            ``llama-server --parallel N``). Equals the number of
+            persistent consumer tasks.
+        db_pool_size: psycopg pool ``max_size``. Defaults to
+            ``max_concurrency + 8`` so every in-flight LLM call has a
+            write conn plus slack for the producer's claim/refill ops.
+            Caller invariant: ``db_pool_size >= max_concurrency``.
         worker_id: Identifier written to ``worker_id`` on each claim.
             Defaults to ``hostname:pid:short-uuid``.
         backfill: If true, bulk-enqueue every uncompleted drawer before
-            entering the normal claim loop. Lets one execution path
-            cover both steady-state and one-shot backfill.
+            entering the normal claim loop.
         backfill_limit: Cap the number of rows seeded in backfill mode.
-        once: If true, run a single claim batch and return; useful for
-            tests and CLI ``--once``.
-        pool_factory / kg_factory / http_client_factory: Test seams so
-            unit tests can inject in-memory stand-ins. ``kg_factory``
-            takes the pool object (not the DSN) so the fake KG can share
-            the fake pool's state if it wants to; production passes
-            ``_open_kg_handle`` which just wraps the pool.
+        once: If true, drain the current claimable set then exit. The
+            producer claims once (no refill loop) and consumers exit
+            after the internal queue is empty.
+        pool_factory / kg_factory / http_client_factory: Test seams.
         stats: Pre-existing WorkerStats to mutate; one is created if None.
         stop_event: Async event that causes the loop to exit cleanly
-            when set. Useful for tests and signal handlers.
+            when set.
 
     Returns the final ``WorkerStats``.
     """
@@ -620,11 +649,21 @@ async def run_worker(
     if stop_event is None:
         stop_event = asyncio.Event()
 
+    if db_pool_size is None:
+        db_pool_size = max_concurrency + 8
+    if db_pool_size < max_concurrency:
+        raise ValueError(
+            f"db_pool_size ({db_pool_size}) must be >= max_concurrency "
+            f"({max_concurrency}) — every LLM call needs a write conn."
+        )
+
     pool_factory = pool_factory or (lambda d, mn, mx: _SyncConnPool(d, min_size=mn, max_size=mx))
     kg_factory = kg_factory or _open_kg_handle
     http_client_factory = http_client_factory or _open_http_client
 
-    pool = pool_factory(dsn, max(4, max_concurrency // 2), max_concurrency + 2)
+    pool_min = max(4, max_concurrency // 4)
+    pool_min = min(pool_min, db_pool_size)
+    pool = pool_factory(dsn, pool_min, db_pool_size)
     open_method = getattr(pool, "open", None)
     if callable(open_method):
         result = open_method()
@@ -635,6 +674,10 @@ async def run_worker(
     http_client = await http_client_factory()
 
     sem = asyncio.Semaphore(max_concurrency)
+    # Internal task queue — claimed but not-yet-processed drawers. Sized
+    # to the claim batch so a producer wakeup tops it back up to full.
+    work_queue: asyncio.Queue[Optional[_ClaimedDrawer]] = asyncio.Queue(maxsize=batch_size)
+    low_water = max(1, batch_size // 2)
 
     try:
         if backfill:
@@ -642,22 +685,58 @@ async def run_worker(
                 seeded = await _seed_backfill_async(conn, backfill_limit)
             logger.info("backfill seeded %d rows into the queue", seeded)
 
-        while not stop_event.is_set():
-            async with pool.conn() as conn:
-                claimed = await _claim_batch_async(conn, worker_id, batch_size)
+        producer_done = asyncio.Event()
 
-            if not claimed:
+        async def producer() -> None:
+            """Top up ``work_queue`` whenever it dips below the low-water mark.
+
+            On ``once=True``: claim a single batch (without refilling), let
+            consumers drain it, then signal done so consumers can exit.
+            """
+            try:
                 if once:
-                    break
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
-                except asyncio.TimeoutError:
-                    pass
-                continue
+                    async with pool.conn() as conn:
+                        claimed = await _claim_batch_async(conn, worker_id, batch_size)
+                    for drawer in claimed:
+                        await work_queue.put(drawer)
+                    return
 
-            tasks = [
-                asyncio.create_task(
-                    _process_one(
+                while not stop_event.is_set():
+                    if work_queue.qsize() >= low_water:
+                        # Queue still has work — short sleep, then re-check.
+                        try:
+                            await asyncio.wait_for(stop_event.wait(), timeout=0.05)
+                        except asyncio.TimeoutError:
+                            pass
+                        continue
+
+                    async with pool.conn() as conn:
+                        claimed = await _claim_batch_async(conn, worker_id, batch_size)
+
+                    if not claimed:
+                        try:
+                            await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
+                        except asyncio.TimeoutError:
+                            pass
+                        continue
+
+                    for drawer in claimed:
+                        await work_queue.put(drawer)
+            finally:
+                producer_done.set()
+
+        async def consumer() -> None:
+            """Drain ``work_queue`` until producer is done and queue empty."""
+            while True:
+                if producer_done.is_set() and work_queue.empty():
+                    return
+                try:
+                    drawer = await asyncio.wait_for(work_queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    # Re-check exit condition.
+                    continue
+                try:
+                    await _process_one(
                         pool,
                         http_client,
                         llm_endpoint,
@@ -667,13 +746,18 @@ async def run_worker(
                         sem,
                         stats,
                     )
-                )
-                for drawer in claimed
-            ]
-            await asyncio.gather(*tasks, return_exceptions=False)
+                finally:
+                    work_queue.task_done()
 
-            if once:
-                break
+        producer_task = asyncio.create_task(producer())
+        consumer_tasks = [asyncio.create_task(consumer()) for _ in range(max_concurrency)]
+        try:
+            await asyncio.gather(producer_task, *consumer_tasks)
+        except Exception:
+            stop_event.set()
+            for t in (producer_task, *consumer_tasks):
+                t.cancel()
+            raise
     finally:
         try:
             close_method = getattr(http_client, "aclose", None)
@@ -764,6 +848,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Max in-flight LLM calls — match llama-server --parallel N (default %(default)s).",
     )
     parser.add_argument(
+        "--db-pool-size",
+        type=int,
+        default=int(os.environ.get("MEMPALACE_KG_DB_POOL_SIZE", "0")) or None,
+        help=(
+            "psycopg pool max_size (env: MEMPALACE_KG_DB_POOL_SIZE). "
+            "Defaults to --workers + 8 so each LLM call also has a write conn."
+        ),
+    )
+    parser.add_argument(
         "--poll-interval",
         type=int,
         default=DEFAULT_POLL_INTERVAL,
@@ -834,6 +927,7 @@ def cli_main(argv: Optional[list[str]] = None) -> int:
                 batch_size=args.batch_size,
                 poll_interval=args.poll_interval,
                 max_concurrency=args.workers,
+                db_pool_size=args.db_pool_size,
                 worker_id=args.worker_id,
                 backfill=args.backfill,
                 backfill_limit=args.backfill_limit,

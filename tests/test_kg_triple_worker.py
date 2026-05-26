@@ -763,3 +763,301 @@ def test_cli_requires_dsn(capsys, monkeypatch):
     assert rc == 2
     err = capsys.readouterr().err
     assert "--dsn" in err
+
+
+# ── New concurrency-rework tests ─────────────────────────────────────
+
+
+def test_default_concurrency_matches_llama_parallel_24():
+    """Defaults track llama-server --parallel 24 on katana."""
+    assert kw.DEFAULT_CONCURRENCY == 24
+
+
+def test_default_pool_max_size_is_32():
+    """The pool's default max_size accommodates 24 LLM slots + slack."""
+    p = kw._SyncConnPool.__init__
+    # Inspect default via signature so future bumps still surface here.
+    import inspect
+
+    sig = inspect.signature(p)
+    assert sig.parameters["max_size"].default == 32
+
+
+def test_default_endpoint_uses_bare_tailscale_host():
+    """Inter-host calls must use 'familiar', not the stale FQDN."""
+    assert kw.DEFAULT_ENDPOINT == "http://familiar:11436"
+
+
+def test_db_pool_size_must_be_ge_max_concurrency():
+    """Pool too small to feed every LLM slot must raise ValueError."""
+    db = _FakeDB()
+    kg = _FakeKG()
+    http = _FakeHTTPClient()
+
+    import pytest
+
+    with pytest.raises(ValueError, match="db_pool_size"):
+        asyncio.run(
+            kw.run_worker(
+                dsn="dummy",
+                llm_endpoint="http://localhost:11436",
+                model="phi-4-mini",
+                batch_size=10,
+                poll_interval=1,
+                max_concurrency=24,
+                db_pool_size=8,  # < max_concurrency → invalid
+                once=True,
+                **_make_factories(db, kg, http),
+            )
+        )
+
+
+def test_db_pool_size_threaded_to_pool_factory():
+    """``--db-pool-size`` (CLI) and the kwarg both reach pool_factory."""
+    db = _FakeDB()
+    kg = _FakeKG()
+    http = _FakeHTTPClient()
+    pool = _FakePool(db)
+
+    captured: dict = {}
+
+    def capture_factory(dsn, mn, mx):
+        captured["dsn"] = dsn
+        captured["min_size"] = mn
+        captured["max_size"] = mx
+        return pool
+
+    asyncio.run(
+        kw.run_worker(
+            dsn="dummy",
+            llm_endpoint="http://localhost:11436",
+            model="phi-4-mini",
+            batch_size=10,
+            poll_interval=1,
+            max_concurrency=8,
+            db_pool_size=50,
+            once=True,
+            pool_factory=capture_factory,
+            kg_factory=lambda p: kg,
+            http_client_factory=lambda: _async_return(http),
+        )
+    )
+
+    assert captured["max_size"] == 50
+    assert captured["min_size"] <= captured["max_size"]
+
+
+def test_db_pool_size_default_is_concurrency_plus_eight():
+    """Omitting db_pool_size yields max_concurrency + 8 in the pool."""
+    db = _FakeDB()
+    kg = _FakeKG()
+    http = _FakeHTTPClient()
+    pool = _FakePool(db)
+
+    captured: dict = {}
+
+    def capture_factory(dsn, mn, mx):
+        captured["max_size"] = mx
+        return pool
+
+    asyncio.run(
+        kw.run_worker(
+            dsn="dummy",
+            llm_endpoint="http://localhost:11436",
+            model="phi-4-mini",
+            batch_size=5,
+            poll_interval=1,
+            max_concurrency=16,
+            db_pool_size=None,
+            once=True,
+            pool_factory=capture_factory,
+            kg_factory=lambda p: kg,
+            http_client_factory=lambda: _async_return(http),
+        )
+    )
+
+    assert captured["max_size"] == 16 + 8
+
+
+def test_streaming_pool_processes_more_than_one_batch_without_barrier():
+    """Producer must refill ``work_queue`` while consumers drain it.
+
+    Enqueue more drawers than fit in a single claim batch. The streaming
+    loop should process them all across multiple refill cycles — proves
+    there is no claim → gather → claim barrier.
+    """
+    db = _FakeDB()
+    N = 7
+    BATCH = 3
+    triples_per: dict[str, list[dict]] = {}
+    for i in range(N):
+        did = f"d{i}"
+        db.add_drawer(did, document=_drawer_text(did))
+        db.enqueue(did)
+        triples_per[did] = [{"subject": f"E{i}", "predicate": "rel", "object": f"F{i}"}]
+
+    kg = _FakeKG()
+    stop_event_box: dict = {}
+
+    class _DrainSignalingClient(_FakeHTTPClient):
+        async def post(self, url, *, json, timeout=60.0):
+            resp = await super().post(url, json=json, timeout=timeout)
+            with db.lock:
+                done = sum(1 for r in db.queue.values() if r.completed_at is not None)
+            if done >= N - 1 and "stop" in stop_event_box:
+                # Last call in flight — flip stop so the producer exits
+                # after this drawer's row gets marked completed.
+                stop_event_box["stop"].set()
+            return resp
+
+    http = _DrainSignalingClient(triples_per_drawer=triples_per)
+
+    async def go():
+        stop = asyncio.Event()
+        stop_event_box["stop"] = stop
+        return await asyncio.wait_for(
+            kw.run_worker(
+                dsn="dummy",
+                llm_endpoint="http://localhost:11436",
+                model="phi-4-mini",
+                batch_size=BATCH,
+                poll_interval=1,
+                max_concurrency=4,
+                once=False,  # streaming refill path
+                stop_event=stop,
+                **_make_factories(db, kg, http),
+            ),
+            timeout=5.0,
+        )
+
+    asyncio.run(go())
+
+    assert all(r.completed_at is not None for r in db.queue.values())
+    assert len(kg.triples) == N
+
+
+def test_streaming_consumer_count_equals_max_concurrency():
+    """``max_concurrency`` long-lived consumer tasks must run in parallel.
+
+    A barrier inside the LLM client gates N coroutines until they've all
+    arrived. If consumer_count < max_concurrency, the barrier never
+    releases and the test times out.
+    """
+    db = _FakeDB()
+    triples_per: dict[str, list[dict]] = {}
+    N = 5
+    for i in range(N):
+        did = f"d{i}"
+        db.add_drawer(did, document=_drawer_text(did))
+        db.enqueue(did)
+        triples_per[did] = [{"subject": f"E{i}", "predicate": "rel", "object": f"F{i}"}]
+
+    kg = _FakeKG()
+    barrier = asyncio.Barrier(N)
+
+    class _BarrierClient(_FakeHTTPClient):
+        async def post(self, url, *, json, timeout=60.0):
+            await barrier.wait()
+            return await super().post(url, json=json, timeout=timeout)
+
+    http = _BarrierClient(triples_per_drawer=triples_per)
+
+    async def go():
+        return await asyncio.wait_for(
+            kw.run_worker(
+                dsn="dummy",
+                llm_endpoint="http://localhost:11436",
+                model="phi-4-mini",
+                batch_size=N,
+                poll_interval=1,
+                max_concurrency=N,  # must spin up N consumers
+                once=True,
+                **_make_factories(db, kg, http),
+            ),
+            timeout=5.0,
+        )
+
+    asyncio.run(go())
+    assert len(kg.triples) == N
+
+
+def test_sem_narrowing_releases_llm_slot_before_db_write():
+    """Structural test: the semaphore wraps the LLM call only.
+
+    Probes the sem context boundary directly by counting active sem
+    holders at each phase of ``_process_one``. With sem narrowing,
+    the sem is released BEFORE the KG write starts — so when we
+    instrument ``add_triple`` and ``_mark_completed_async``, both
+    must observe zero held slots.
+
+    Under the old code (sem wrapped the entire body), the KG write
+    and mark-completed would see one slot still held.
+    """
+    db = _FakeDB()
+    db.add_drawer("d0", document=_drawer_text("d0"))
+    db.enqueue("d0")
+
+    triples_per = {
+        "d0": [{"subject": "Alice", "predicate": "knows", "object": "Bob"}],
+    }
+
+    observed_held: list[tuple[str, int]] = []
+    sem_box: dict = {}
+
+    class _ObservingKG:
+        triples: list[dict] = []
+
+        async def add_triple(self, subject, predicate, object_, **kwargs):
+            sem = sem_box.get("sem")
+            # Semaphore exposes _value (free count). Sem capacity is 1
+            # in this test, so held = capacity - free.
+            held = 1 - sem._value if sem else -1
+            observed_held.append(("kg_write", held))
+            self.triples.append({"subject": subject})
+
+        def close(self):
+            pass
+
+    orig_mark = kw._mark_completed_async
+
+    async def observing_mark(conn, drawer_id, triple_count):
+        sem = sem_box.get("sem")
+        held = 1 - sem._value if sem else -1
+        observed_held.append(("mark_completed", held))
+        await orig_mark(conn, drawer_id, triple_count)
+
+    orig_extract = kw._extract_under_sem
+
+    async def observing_extract(http_client, endpoint, model, text, sem):
+        sem_box["sem"] = sem
+        # Inside the sem context, one slot should be held.
+        result = await orig_extract(http_client, endpoint, model, text, sem)
+        observed_held.append(("inside_llm_after_call", 1 - sem._value))
+        return result
+
+    kw._mark_completed_async = observing_mark
+    kw._extract_under_sem = observing_extract
+    try:
+        kg = _ObservingKG()
+        http = _FakeHTTPClient(triples_per_drawer=triples_per)
+        asyncio.run(
+            kw.run_worker(
+                dsn="dummy",
+                llm_endpoint="http://localhost:11436",
+                model="phi-4-mini",
+                batch_size=1,
+                poll_interval=1,
+                max_concurrency=1,
+                once=True,
+                **_make_factories(db, kg, http),
+            )
+        )
+    finally:
+        kw._mark_completed_async = orig_mark
+        kw._extract_under_sem = orig_extract
+
+    # During the LLM call, one slot is held.
+    kg_writes = [h for tag, h in observed_held if tag == "kg_write"]
+    mark_writes = [h for tag, h in observed_held if tag == "mark_completed"]
+    assert kg_writes == [0], (observed_held,)  # sem released by KG-write phase
+    assert mark_writes == [0], (observed_held,)  # and by mark-completed phase
