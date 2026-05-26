@@ -47,23 +47,34 @@ _AGE_DQ_CLOSE = f"${_AGE_DQ_TAG}$"
 _CYPHER_PARAM_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
-def _compose_cypher_sql(graph_name: str, cypher_body: str, cols_decl: str):
-    """Compose ``SELECT * FROM cypher(<graph>, $$<body>$$) AS (<cols>)``.
+# AGE graph names are unquoted SQL identifiers. cypher(name, ...) requires
+# a *name constant* (literal) — psycopg3's %s binds it as a server-side
+# parameter that AGE rejects ("a name constant is expected"). We render
+# the graph name into the SQL text. Tight identifier regex prevents
+# anything but [A-Za-z_][A-Za-z0-9_]* even if a future caller passes
+# something exotic.
+_AGE_GRAPH_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-    AGE's ``cypher(name, ...)`` first arg must be a literal *name constant*
-    — psycopg3's ``%s`` binds it as a server-side ``$1`` parameter which AGE
-    rejects with "a name constant is expected". We compose the SQL with
-    ``psycopg.sql`` so the graph name is rendered into the text. Plain
-    string concatenation is used for the dollar-quoted body so embedded
-    ``{`` braces from the Cypher source are NOT interpreted as ``format()``
-    placeholders (we never call ``.format()``).
+
+def _compose_cypher_sql(graph_name: str, cypher_body: str, cols_decl: str) -> str:
+    """Build ``SELECT * FROM cypher('<graph>', $$<body>$$) AS (<cols>)``.
+
+    AGE expects the first argument of ``cypher()`` to be a single-quoted
+    string literal — what AGE calls a "name constant". psycopg3 binds
+    ``%s`` as a server-side ``$1`` parameter (extended query protocol)
+    which AGE rejects. We render the graph name inline as a quoted
+    literal so psycopg3 sends a simple-query without binds.
+
+    The Cypher body is already inside a dollar-quoted envelope
+    (``_AGE_DQ_OPEN``/``_AGE_DQ_CLOSE``) and contains only sanitized
+    literals — see ``_inline_cypher_params`` and ``_cypher_literal``.
     """
-    from psycopg.sql import SQL, Literal
-
+    if not _AGE_GRAPH_NAME_RE.match(graph_name):
+        raise ValueError(f"invalid AGE graph name: {graph_name!r}")
     return (
-        SQL("SELECT * FROM cypher(")
-        + Literal(graph_name)
-        + SQL(", " + _AGE_DQ_OPEN + cypher_body + _AGE_DQ_CLOSE + f") AS ({cols_decl})")
+        f"SELECT * FROM cypher('{graph_name}', "
+        f"{_AGE_DQ_OPEN}{cypher_body}{_AGE_DQ_CLOSE}) "
+        f"AS ({cols_decl})"
     )
 
 
