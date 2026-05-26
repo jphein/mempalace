@@ -70,6 +70,23 @@ def get(self, *, ids: Optional[list[str]] = None, where: Optional[dict] = None, 
 def delete(self, *, ids: Optional[list[str]] = None, where: Optional[dict] = None) -> None
 ```
 
+#### `set_kg_deletethrough`
+
+```python
+def set_kg_deletethrough(self, hook) -> None
+```
+
+Register a callable invoked after each successful drawer delete.
+
+Hook signature: ``hook(drawer_ids: list[str])``. Called once per
+``delete`` call with the list of ids actually removed (resolved
+before the DELETE so ``where``-based deletes also propagate).
+Exceptions inside the hook are caught + logged.
+
+Set to ``None`` to disable. Pair with ``set_kg_writethrough`` —
+running one without the other drifts the graph out of sync with
+the relational table.
+
 #### `update`
 
 ```python

@@ -215,6 +215,34 @@ Used by bulk-write callers (``backfill_age``) that pass
 statements into one transaction, then call ``kg.commit()`` once
 per batch. The single-statement default still commits per call.
 
+#### `delete_drawer`
+
+```python
+def delete_drawer(self, drawer_id: str, *, commit: bool = True) -> int
+```
+
+Remove a Drawer node and all its edges from the AGE graph.
+
+Returns the number of Drawer nodes removed (0 if the id wasn't
+present, ≥1 if dedup hasn't run and there are duplicates).
+Idempotent — calling on an already-deleted id is a no-op.
+
+Used by the delete-through hook so drawer deletes propagate to
+the graph; without it, orphan Drawer nodes accumulate over time
+(one per delete since 2026-05-22 AGE rollout).
+
+#### `delete_drawers`
+
+```python
+def delete_drawers(self, drawer_ids: list, *, commit: bool = True) -> int
+```
+
+Batched delete via UNWIND. Returns total Drawer nodes removed.
+
+Use when removing many drawers in one logical transaction — one
+Cypher round-trip instead of N — mirroring the UNWIND batching
+``backfill_age`` uses for adds (commit ``4fbd8c6``).
+
 #### `seed_from_entity_facts`
 
 ```python

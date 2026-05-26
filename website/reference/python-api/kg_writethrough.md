@@ -86,6 +86,35 @@ A no-op hook. Useful for disabling KG writes in tests or rollouts
 without removing the ``set_kg_writethrough`` call from the writer
 setup path.
 
+### `make_age_deletethrough`
+
+```python
+def make_age_deletethrough(kg: Any)
+```
+
+Build a delete-through hook that removes Drawer nodes from AGE.
+
+Symmetric to ``make_age_writethrough`` for the delete path: when a
+drawer row is removed from ``mempalace_drawers``, this hook removes
+the matching ``(:Drawer &#123;id: ...})`` node and its incident edges
+from the AGE graph. Without it, deleted drawers leave orphan Drawer
+nodes that drift the graph out of sync with the relational table.
+
+Hook signature: ``hook(drawer_ids: list[str]) -> None``. Called once
+per ``PostgresCollection.delete`` invocation with the resolved id
+list. Exceptions are caught upstream — KG sync is opportunistic,
+not mandatory.
+
+### `make_null_deletethrough`
+
+```python
+def make_null_deletethrough()
+```
+
+No-op delete hook. Mirror of ``make_null_writethrough`` for the
+delete path; lets test setups disable AGE sync without removing the
+``set_kg_deletethrough`` call.
+
 ### `make_extraction_enqueue_writethrough`
 
 ```python
@@ -142,3 +171,16 @@ Regex extractor needs an SME-repo import — kept optional so the
 mempalace package doesn't hard-require SME. If unavailable, falls
 back to a built-in tiny regex extractor (lower recall than the SME
 one but no cross-package dependency).
+
+### `make_deletethrough_from_env`
+
+```python
+def make_deletethrough_from_env(kg: Optional[Any] = None)
+```
+
+Build a delete hook gated on the same env switch as writethrough.
+
+``MEMPALACE_KG_WRITETHROUGH=1`` enables both write and delete hooks
+— they're a matched pair; running one without the other leaves the
+graph drifting out of sync with the relational table. Returns
+``None`` when the master switch is off.
