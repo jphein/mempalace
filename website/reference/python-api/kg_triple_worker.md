@@ -47,38 +47,45 @@ def snapshot(self) -> dict
 ### `run_worker`
 
 ```python
-async def run_worker(dsn: str, llm_endpoint: str = DEFAULT_ENDPOINT, model: str = DEFAULT_MODEL, *, batch_size: int = DEFAULT_BATCH_SIZE, poll_interval: int = DEFAULT_POLL_INTERVAL, max_concurrency: int = DEFAULT_CONCURRENCY, worker_id: Optional[str] = None, backfill: bool = False, backfill_limit: Optional[int] = None, once: bool = False, pool_factory: Optional[Callable[[str, int, int], Any]] = None, kg_factory: Optional[Callable[[Any], _KGHandle]] = None, http_client_factory: Optional[Callable[[], Awaitable[Any]]] = None, stats: Optional[WorkerStats] = None, stop_event: Optional[asyncio.Event] = None) -> WorkerStats
+async def run_worker(dsn: str, llm_endpoint: str = DEFAULT_ENDPOINT, model: str = DEFAULT_MODEL, *, batch_size: int = DEFAULT_BATCH_SIZE, poll_interval: int = DEFAULT_POLL_INTERVAL, max_concurrency: int = DEFAULT_CONCURRENCY, db_pool_size: Optional[int] = None, worker_id: Optional[str] = None, backfill: bool = False, backfill_limit: Optional[int] = None, once: bool = False, pool_factory: Optional[Callable[[str, int, int], Any]] = None, kg_factory: Optional[Callable[[Any], _KGHandle]] = None, http_client_factory: Optional[Callable[[], Awaitable[Any]]] = None, stats: Optional[WorkerStats] = None, stop_event: Optional[asyncio.Event] = None) -> WorkerStats
 ```
 
 Drain the extraction queue until cancelled (or ``once=True``).
+
+Concurrency model: a producer task tops up an ``asyncio.Queue`` of
+claimed drawers from the postgres queue whenever it dips below a
+low-water mark, while ``max_concurrency`` long-lived consumer tasks
+pull from that internal queue and call ``_process_one``. Replaces
+the old claim-batch → gather → claim-batch barrier so the slowest
+drawer in a batch can no longer stall the next claim cycle.
 
 Args:
     dsn: Postgres DSN for both the queue and ``mempalace_drawers``.
     llm_endpoint: Base URL for the OpenAI-compatible inference server.
     model: Model alias.
-    batch_size: How many rows to claim per poll cycle.
+    batch_size: How many rows to claim per refill cycle. Also drives
+        the internal queue's high-water mark (= batch_size) and
+        low-water refill threshold (= batch_size // 2).
     poll_interval: Seconds to sleep when the queue is empty.
     max_concurrency: Cap on in-flight LLM calls (matches
-        ``llama-server --parallel N``). The pool's max_size is set to
-        ``max_concurrency + 2`` so every in-flight LLM call also has
-        a write connection available, plus a small slack pool for the
-        queue/claim ops.
+        ``llama-server --parallel N``). Equals the number of
+        persistent consumer tasks.
+    db_pool_size: psycopg pool ``max_size``. Defaults to
+        ``max_concurrency + 8`` so every in-flight LLM call has a
+        write conn plus slack for the producer's claim/refill ops.
+        Caller invariant: ``db_pool_size >= max_concurrency``.
     worker_id: Identifier written to ``worker_id`` on each claim.
         Defaults to ``hostname:pid:short-uuid``.
     backfill: If true, bulk-enqueue every uncompleted drawer before
-        entering the normal claim loop. Lets one execution path
-        cover both steady-state and one-shot backfill.
+        entering the normal claim loop.
     backfill_limit: Cap the number of rows seeded in backfill mode.
-    once: If true, run a single claim batch and return; useful for
-        tests and CLI ``--once``.
-    pool_factory / kg_factory / http_client_factory: Test seams so
-        unit tests can inject in-memory stand-ins. ``kg_factory``
-        takes the pool object (not the DSN) so the fake KG can share
-        the fake pool's state if it wants to; production passes
-        ``_open_kg_handle`` which just wraps the pool.
+    once: If true, drain the current claimable set then exit. The
+        producer claims once (no refill loop) and consumers exit
+        after the internal queue is empty.
+    pool_factory / kg_factory / http_client_factory: Test seams.
     stats: Pre-existing WorkerStats to mutate; one is created if None.
     stop_event: Async event that causes the loop to exit cleanly
-        when set. Useful for tests and signal handlers.
+        when set.
 
 Returns the final ``WorkerStats``.
 

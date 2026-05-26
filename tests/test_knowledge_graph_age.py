@@ -152,6 +152,60 @@ def test_age_add_triple_basic():
 
 
 @pgmark
+def test_age_add_triple_with_null_temporal_and_source():
+    """add_triple must succeed when valid_from/valid_to/source are all None.
+
+    Regression for #221: the static Cypher template emitted
+    ``valid_from: NULL`` literals inside the property map, which AGE
+    rejects with ``SyntaxError: a name constant is expected``. The fix
+    omits the corresponding keys entirely when the value is None.
+    """
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple(
+            subject="JP",
+            relation_type="uses",
+            object_="mempalace",
+        )
+        triples = kg.query_triples(subject="JP")
+        assert len(triples) == 1
+        t = triples[0]
+        assert t["subject"] == "JP"
+        assert t["relation_type"] == "uses"
+        assert t["object"] == "mempalace"
+        assert t["source"] is None
+        assert t["valid_from"] is None
+        assert t["valid_to"] is None
+    finally:
+        kg.close()
+
+
+@pgmark
+def test_age_add_triple_with_only_valid_from():
+    """A triple with valid_from set but valid_to=None must write cleanly."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple(
+            subject="JP",
+            relation_type="started",
+            object_="run",
+            valid_from="2026-05-01",
+        )
+        triples = kg.query_triples(subject="JP")
+        assert len(triples) == 1
+        assert triples[0]["valid_from"] == "2026-05-01"
+        assert triples[0]["valid_to"] is None
+    finally:
+        kg.close()
+
+
+@pgmark
 def test_age_rejects_inverted_temporal_interval():
     """add_triple rejects valid_to < valid_from at write time."""
     from mempalace.knowledge_graph_age import KnowledgeGraphAGE

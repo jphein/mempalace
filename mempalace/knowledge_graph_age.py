@@ -47,6 +47,37 @@ _AGE_DQ_CLOSE = f"${_AGE_DQ_TAG}$"
 _CYPHER_PARAM_RE = re.compile(r"\$([A-Za-z_][A-Za-z0-9_]*)")
 
 
+# AGE graph names are unquoted SQL identifiers. cypher(name, ...) requires
+# a *name constant* (literal) — psycopg3's %s binds it as a server-side
+# parameter that AGE rejects ("a name constant is expected"). We render
+# the graph name into the SQL text. Tight identifier regex prevents
+# anything but [A-Za-z_][A-Za-z0-9_]* even if a future caller passes
+# something exotic.
+_AGE_GRAPH_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _compose_cypher_sql(graph_name: str, cypher_body: str, cols_decl: str) -> str:
+    """Build ``SELECT * FROM cypher('<graph>', $$<body>$$) AS (<cols>)``.
+
+    AGE expects the first argument of ``cypher()`` to be a single-quoted
+    string literal — what AGE calls a "name constant". psycopg3 binds
+    ``%s`` as a server-side ``$1`` parameter (extended query protocol)
+    which AGE rejects. We render the graph name inline as a quoted
+    literal so psycopg3 sends a simple-query without binds.
+
+    The Cypher body is already inside a dollar-quoted envelope
+    (``_AGE_DQ_OPEN``/``_AGE_DQ_CLOSE``) and contains only sanitized
+    literals — see ``_inline_cypher_params`` and ``_cypher_literal``.
+    """
+    if not _AGE_GRAPH_NAME_RE.match(graph_name):
+        raise ValueError(f"invalid AGE graph name: {graph_name!r}")
+    return (
+        f"SELECT * FROM cypher('{graph_name}', "
+        f"{_AGE_DQ_OPEN}{cypher_body}{_AGE_DQ_CLOSE}) "
+        f"AS ({cols_decl})"
+    )
+
+
 def _cypher_literal(value: Any) -> str:
     """Render a Python value as a Cypher literal for inline substitution.
 
@@ -231,26 +262,39 @@ class KnowledgeGraphAGE:
         if valid_from and valid_to and valid_to < valid_from:
             raise ValueError(f"valid_to ({valid_to}) cannot precede valid_from ({valid_from})")
 
-        cypher = """
-            MERGE (s:Entity {name: $subj})
-            MERGE (o:Entity {name: $obj})
-            CREATE (s)-[r:RELATION {
-                relation_type: $rt,
-                source: $src,
-                valid_from: $vf,
-                valid_to: $vt,
-                confidence: $conf
-            }]->(o)
-        """
+        # Build the property map keys dynamically — a Cypher property map
+        # rejects bare ``NULL`` as a value (``SyntaxError: a name constant
+        # is expected``), so omit any key whose value is None. The omitted
+        # property reads back as NULL via ``r.source``/``r.valid_from`` etc.,
+        # which matches the open-interval semantics the rest of the API
+        # already assumes (see ``query_triples`` as_of filter).
+        prop_pairs = [
+            "relation_type: $rt",
+            "confidence: $conf",
+        ]
         params = {
             "subj": subject,
             "obj": object_,
             "rt": relation_type,
-            "src": source,
-            "vf": valid_from,
-            "vt": valid_to,
             "conf": confidence,
         }
+        if source is not None:
+            prop_pairs.append("source: $src")
+            params["src"] = source
+        if valid_from is not None:
+            prop_pairs.append("valid_from: $vf")
+            params["vf"] = valid_from
+        if valid_to is not None:
+            prop_pairs.append("valid_to: $vt")
+            params["vt"] = valid_to
+
+        cypher = f"""
+            MERGE (s:Entity {{name: $subj}})
+            MERGE (o:Entity {{name: $obj}})
+            CREATE (s)-[r:RELATION {{
+                {", ".join(prop_pairs)}
+            }}]->(o)
+        """
         self._run_cypher(cypher, params)
 
     def query_triples(
@@ -801,10 +845,7 @@ class KnowledgeGraphAGE:
                 cur.execute("LOAD 'age'")
                 cur.execute('SET search_path = ag_catalog, "$user", public')
                 self._age_loaded = True
-            cur.execute(
-                f"SELECT * FROM cypher(%s, {_AGE_DQ_OPEN}{cypher_inlined}{_AGE_DQ_CLOSE}) AS ({cols_decl})",
-                (self.GRAPH_NAME,),
-            )
+            cur.execute(_compose_cypher_sql(self.GRAPH_NAME, cypher_inlined, cols_decl))
             if fetch:
                 rows = cur.fetchall()
         if commit:
@@ -830,10 +871,7 @@ class KnowledgeGraphAGE:
         with self._conn.cursor() as cur:
             cur.execute("LOAD 'age'")
             cur.execute('SET search_path = ag_catalog, "$user", public')
-            cur.execute(
-                f"SELECT * FROM cypher(%s, {_AGE_DQ_OPEN}{cypher_inlined}{_AGE_DQ_CLOSE}) AS (v agtype)",
-                (self.GRAPH_NAME,),
-            )
+            cur.execute(_compose_cypher_sql(self.GRAPH_NAME, cypher_inlined, "v agtype"))
             row = cur.fetchone()
         if commit:
             self._conn.commit()
