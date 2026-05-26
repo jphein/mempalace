@@ -397,6 +397,25 @@ class MempalaceConfig:
         return None
 
     @property
+    def calibration_path(self):
+        """Optional path to a fitted confidence calibrator JSON.
+
+        When set, ``search_memories`` loads the calibrator and surfaces a
+        ``confidence`` field (calibrated P(relevant)) on each vector hit.
+        When unset or the file is missing, no ``confidence`` field is
+        emitted — the system never fakes a calibrated score.
+
+        Resolution mirrors ``palace_path``: env (``MEMPALACE_CALIBRATION_PATH``)
+        wins, ``config.json`` key ``"calibration_path"`` as fallback,
+        ``None`` means no calibration (current default).
+        """
+        env_val = os.environ.get("MEMPALACE_CALIBRATION_PATH", "").strip()
+        if env_val:
+            return os.path.abspath(os.path.expanduser(env_val))
+        cfg_val = (self._file_config.get("calibration_path") or "").strip()
+        return os.path.abspath(os.path.expanduser(cfg_val)) if cfg_val else None
+
+    @property
     def postgres_dsn(self):
         """PostgreSQL DSN for the optional PostgreSQL backend."""
         env_val = os.environ.get("MEMPALACE_POSTGRES_DSN") or os.environ.get("MEMPALACE_PG_DSN")
