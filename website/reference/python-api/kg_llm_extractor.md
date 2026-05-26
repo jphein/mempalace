@@ -34,7 +34,7 @@ Args:
     client: An ``httpx.AsyncClient`` (or any object exposing a
         compatible async ``post`` method — useful for tests).
     endpoint: Base URL of the OpenAI-compatible server (e.g.
-        ``http://familiar.jphe.in:11436``). The function appends
+        ``http://familiar:11436``). The function appends
         ``/v1/chat/completions`` if the path isn't already present.
     model: Model alias (e.g. ``phi-4-mini``).
     drawer_text: Raw drawer document. Tail-truncated to the last
