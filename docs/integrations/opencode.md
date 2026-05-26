@@ -243,7 +243,7 @@ OpenCode launched from this repo root logs the following on session start. None 
 
 | Log line | What it is |
 |---|---|
-| `mcp stderr: palace-daemon: connected at http://disks.jphe.in:8085` | The bridge announcing it found the daemon. Good. |
+| `mcp stderr: palace-daemon: connected at http://familiar.jphe.in:8085` | The bridge announcing it found the daemon. Good. |
 | (Older sessions) `mcp stderr: routing → local palace @ ~/.mempalace/palace` | Pre-2026-05-21 behavior. Indicates the spawn was opening the legacy local palace. Fixed by clearing the repo `.opencode/opencode.json` `mcp` block. If you still see it, your repo checkout is on an older commit — `git pull`. |
 | (Older sessions) `mcp stderr: HNSW capacity divergence detected` | Same root cause as the line above — the bridge was opening the legacy local ChromaDB store whose HNSW index lagged its sqlite. Gone after the local palace was archived to `~/.mempalace/palace.retired-pre-pgcutover-2026-05-14/` and the `~/.mempalace/RETIRED` marker was added. |
 

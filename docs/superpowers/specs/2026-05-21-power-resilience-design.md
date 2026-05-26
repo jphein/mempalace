@@ -51,7 +51,7 @@ CLI: new `mempalace replay` subcommand, plus replay is best-effort invoked at th
 
 ### Pillar 3 — Visibility
 
-- `~/Projects/status.realm.watch/checks.json`: add `http://disks.jphe.in:8085/health` under the `version` array per CLAUDE.md's realm-sigil convention. HTTP 200 = healthy on the dashboard; HTTP 503 = red.
+- `~/Projects/status.realm.watch/checks.json`: add `http://familiar.jphe.in:8085/health` under the `version` array per CLAUDE.md's realm-sigil convention. HTTP 200 = healthy on the dashboard; HTTP 503 = red.
 - `hooks/session_start.py`: after the (best-effort) replay attempt, check daemon `/health` (200ms timeout) and pending-queue size. If either signals trouble, emit one `systemMessage` line: `"⚠ palace-daemon degraded (N pending writes)"`. Capped at one warning per session via a marker in `~/.mempalace/hook_state/`.
 
 ### Pillar 4 — Error surfacing

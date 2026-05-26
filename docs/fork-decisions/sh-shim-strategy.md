@@ -15,7 +15,7 @@ move all hook logic into the `mempalace` Python CLI.
 This fork went the **opposite direction**: the `.sh` shims delegate
 to **`palace-daemon/clients/hook.py`** (a stdlib-only Python script
 in a separate repo) which talks HTTP to a single FastAPI gateway
-(`disks.jphe.in:8085`). The `mempalace` Python package is no longer
+(`familiar.jphe.in:8085`). The `mempalace` Python package is no longer
 in the hook call path at all.
 
 We are not asking upstream to do this. We are documenting the
@@ -66,7 +66,7 @@ The single-writer-gateway property is the load-bearing one.
 With 300K+ drawers and multiple harnesses (Claude Code, codex,
 gemini-cli, opencode, the MCP server) all writing concurrently,
 serialization through a single FastAPI process running on
-`disks.jphe.in:8085` is the only thing that keeps ChromaDB's
+`familiar.jphe.in:8085` is the only thing that keeps ChromaDB's
 HNSW from corrupting under concurrent mine jobs (upstream #1161).
 
 ## The delegation pattern
@@ -84,7 +84,7 @@ mempal-stop-hook.sh   ◄── thin .sh shim, ~5 lines of logic
         ▼
 palace-daemon/clients/hook.py   ◄── stdlib Python, no mempalace import
         │
-        │   urllib.request → POST http://disks.jphe.in:8085/mine
+        │   urllib.request → POST http://familiar.jphe.in:8085/mine
         ▼
 palace-daemon (FastAPI)   ◄── single writer, _mine_sem=1
         │
@@ -92,7 +92,7 @@ palace-daemon (FastAPI)   ◄── single writer, _mine_sem=1
 mempalace.mcp_server (in-process)
         │
         ▼
-postgres + pgvector + AGE  (on disks.jphe.in)
+postgres + pgvector + AGE  (on familiar.jphe.in)
 ```
 
 Two properties matter:

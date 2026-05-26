@@ -117,7 +117,7 @@ This is a survey, not a decision document. The recommended architecture at the b
 | **`mcp-outline`** (Vortiago) | MIT | MCP server → Outline | Lets an AI read Outline docs. Backwards from what we need (we want the repo to publish to Outline, not the reverse). |
 | **`~/.claude/scripts/outline-api.sh`** | Local | Repo → Outline (bash) | Already exists. `outline_create_doc`, `outline_update_doc`, `outline_find_doc` ready to call. **Our actual best fit.** |
 
-**Recommendation**: Write a 50-line `scripts/sync-outline.sh` that walks `docs/*.md` + `README.md` and calls `outline_update_doc` (or create if not found) under a `mempalace` collection. Run as a nightly GitHub Action (or a `cron` on `disks.jphe.in` if we want to avoid putting the Outline API key in GitHub secrets — it's a self-hosted Outline behind the VPN). No frontmatter writeback; the slug is the filename, the collection is fixed, no ambiguity.
+**Recommendation**: Write a 50-line `scripts/sync-outline.sh` that walks `docs/*.md` + `README.md` and calls `outline_update_doc` (or create if not found) under a `mempalace` collection. Run as a nightly GitHub Action (or a `cron` on `familiar.jphe.in` if we want to avoid putting the Outline API key in GitHub secrets — it's a self-hosted Outline behind the VPN). No frontmatter writeback; the slug is the filename, the collection is fixed, no ambiguity.
 
 ### AI-powered doc generators
 
