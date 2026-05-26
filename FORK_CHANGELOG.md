@@ -21,6 +21,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [2026-05-26]
 
 
+### Added
+
+
+- **Evaluation doc: curated-authority vs auto-mined separation (#202)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  ``docs/research/2026-05-26-multi-palace-separation.md`` — a
+  principle-first evaluation companion to the engineering design at
+  ``docs/designs/multi-palace-separation.md``. Frames the
+  curated-authority-vs-auto-mined problem from upstream #1018
+  (@kostadis), weighs five separation options against the fork's
+  design principles (verbatim-always, entity-first, incremental-only,
+  local-first) plus the codified read-surface-parity lesson from P8,
+  and recommends collection-partitioning over multi-palace with
+  read-surface parity as a schema invariant. Cites #169, #46, #76.
+  Feeds the #169 Phase 1 input. Closes evaluation half of #202.
+
+  *Files:* `docs/research/2026-05-26-multi-palace-separation.md`
+
+
 ### Fixed
 
 
