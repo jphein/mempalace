@@ -111,3 +111,67 @@ class TestGraphExpandCypherSafety:
             "_graph_expand_from_entities must SET LOCAL statement_timeout "
             "so misfires self-cancel rather than wedging the daemon."
         )
+
+    def test_statement_timeout_shares_transaction_with_cypher(self):
+        """The 3s timeout must run in the SAME transaction as cypher().
+
+        Regression for an issue introduced by the original PR #228 hotfix:
+        the timeout SET was done as a standalone execute() outside any
+        explicit transaction. With ``conn.autocommit = True``, each
+        execute() runs in its own implicit txn — so ``SET LOCAL
+        statement_timeout = '3s'`` ended immediately, and the subsequent
+        ``cypher()`` execute() opened a fresh txn with the session default
+        of 0 (no timeout). On 2026-05-26 prod saw 16 AGE backends each
+        running 5+ minutes despite the guard.
+
+        Fix: wrap SET LOCAL + cypher() in ``with conn.transaction():`` so
+        both statements share one BEGIN/COMMIT and the LOCAL setting
+        actually applies to the cypher call. This test pins that shape:
+        the SET LOCAL line must appear inside a transaction block, and
+        the cypher execute() must be in the same block.
+        """
+        import inspect
+
+        from mempalace.searcher import _graph_expand_from_entities
+
+        src = inspect.getsource(_graph_expand_from_entities)
+        # Strip comment lines so explanatory text doesn't satisfy the check.
+        code_only = "\n".join(
+            line for line in src.splitlines() if not line.lstrip().startswith("#")
+        )
+
+        assert "conn.transaction()" in code_only, (
+            "SET LOCAL statement_timeout must run inside `with "
+            "conn.transaction():` — a bare execute() under "
+            "conn.autocommit=True ends its own implicit txn and the "
+            "timeout never applies to the next cypher() call."
+        )
+
+        # Verify the transaction block contains BOTH the SET LOCAL and
+        # the cypher() execute. Find the transaction block's start, then
+        # check both markers appear before the block dedents.
+        lines = code_only.splitlines()
+        txn_start = next(
+            (i for i, ln in enumerate(lines) if "conn.transaction()" in ln),
+            None,
+        )
+        assert txn_start is not None
+        txn_indent = len(lines[txn_start]) - len(lines[txn_start].lstrip())
+        block_lines = []
+        for ln in lines[txn_start + 1 :]:
+            if not ln.strip():
+                continue
+            ind = len(ln) - len(ln.lstrip())
+            if ind <= txn_indent:
+                break
+            block_lines.append(ln)
+        block = "\n".join(block_lines)
+        assert "statement_timeout" in block, (
+            "SET LOCAL statement_timeout must be inside the "
+            "conn.transaction() block, not outside it."
+        )
+        assert "cypher(" in block, (
+            "The cypher() execute() must be inside the same "
+            "conn.transaction() block as SET LOCAL statement_timeout, "
+            "otherwise the timeout doesn't scope to the cypher call."
+        )
