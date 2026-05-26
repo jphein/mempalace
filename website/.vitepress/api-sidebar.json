@@ -228,6 +228,10 @@
         "link": "/reference/python-api/sync"
       },
       {
+        "text": "mempalace.tag_extraction",
+        "link": "/reference/python-api/tag_extraction"
+      },
+      {
         "text": "mempalace.tags",
         "link": "/reference/python-api/tags"
       },

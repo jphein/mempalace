@@ -933,6 +933,44 @@ _metadata_cache_time = 0
 _METADATA_CACHE_TTL = 5.0  # seconds
 _MAX_RESULTS = 100  # upper bound for search/list limit params
 
+# IDF table cache for auto-tag extraction (#201). One entry per (wing, room).
+# Built lazily on first auto-tagged write; refreshed when the TTL expires so a
+# write-heavy session eventually picks up new vocabulary.
+_idf_cache = None  # mempalace.tag_extraction.IdfCache, lazy init
+_IDF_CORPUS_CAP = 2000  # snapshot at most this many docs when (re)building
+
+
+def _get_idf_table(col, wing: str, room: str) -> dict:
+    """Return the IDF weights for ``(wing, room)`` via the process-local cache.
+
+    The corpus builder caps the snapshot at ``_IDF_CORPUS_CAP`` to keep
+    rebuild latency bounded on large palaces — the IDF is a ranking aid,
+    not a corpus inventory, and the top tokens stabilise long before
+    the full corpus is read.
+    """
+    global _idf_cache
+    if _idf_cache is None:
+        from .tag_extraction import IdfCache
+
+        _idf_cache = IdfCache()
+
+    def _corpus():
+        try:
+            batch = col.get(
+                where={"$and": [{"wing": wing}, {"room": room}]},
+                limit=_IDF_CORPUS_CAP,
+                include=["documents"],
+            )
+        except Exception:
+            logger.debug("IDF corpus fetch failed", exc_info=True)
+            return []
+        docs = (
+            batch.get("documents") if isinstance(batch, dict) else getattr(batch, "documents", None)
+        )
+        return [d for d in (docs or []) if isinstance(d, str)]
+
+    return _idf_cache.get(wing, room, _corpus)
+
 
 def _get_cached_metadata(col, where=None):
     """Return cached metadata if fresh, else fetch and cache."""
@@ -1651,11 +1689,22 @@ def tool_add_drawer(
 
     from .tags import apply_tags_to_metadata, normalise_tags
 
+    auto_tagged = tags is None
     normalised_tags = normalise_tags(tags)
 
     col = _get_collection(create=True)
     if not col:
         return _no_palace()
+
+    if auto_tagged:
+        try:
+            from .tag_extraction import extract_tags as _extract_tags
+
+            idf = _get_idf_table(col, wing, room)
+            normalised_tags = _extract_tags(content, idf)
+        except Exception:
+            logger.debug("auto tag extraction failed", exc_info=True)
+            normalised_tags = []
 
     drawer_id = (
         f"drawer_{wing}_{room}_{hashlib.sha256((wing + room + content).encode()).hexdigest()[:24]}"
