@@ -2410,10 +2410,7 @@ def _print_stats_dashboard(bundle: dict, top: int) -> None:
     print(f"  {'-' * 56}")
     if isinstance(rooms, dict) and rooms:
         room_items = sorted(
-            (
-                (r, c if isinstance(c, int) else (c or {}).get("total", 0))
-                for r, c in rooms.items()
-            ),
+            ((r, c if isinstance(c, int) else (c or {}).get("total", 0)) for r, c in rooms.items()),
             key=lambda kv: kv[1],
             reverse=True,
         )
