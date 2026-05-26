@@ -194,9 +194,7 @@ def fit_calibrator(
     try:
         from sklearn.isotonic import IsotonicRegression  # type: ignore
 
-        iso = IsotonicRegression(
-            y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip"
-        )
+        iso = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
         fitted = iso.fit_transform(xs, ys)
         # Deduplicate to distinct x breakpoints (sklearn returns one y per
         # input row; collapse equal-x rows to a single step).
