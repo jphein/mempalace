@@ -267,17 +267,13 @@ class TestAddDrawerWithTags:
             assert tag == tag.lower()
             assert " " not in tag
 
-    def test_explicit_empty_tags_skips_auto_extraction(
-        self, monkeypatch, config, palace_path, kg
-    ):
+    def test_explicit_empty_tags_skips_auto_extraction(self, monkeypatch, config, palace_path, kg):
         # Explicit ``tags=[]`` is the caller saying "no tags" — auto-extract
         # must NOT fire even though the content has plenty of usable tokens.
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_add_drawer
 
-        result = tool_add_drawer(
-            wing="w", room="r", content="untagged drawer content", tags=[]
-        )
+        result = tool_add_drawer(wing="w", room="r", content="untagged drawer content", tags=[])
         assert result["success"] is True
         assert result["tags"] == []
 

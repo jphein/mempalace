@@ -964,7 +964,9 @@ def _get_idf_table(col, wing: str, room: str) -> dict:
         except Exception:
             logger.debug("IDF corpus fetch failed", exc_info=True)
             return []
-        docs = batch.get("documents") if isinstance(batch, dict) else getattr(batch, "documents", None)
+        docs = (
+            batch.get("documents") if isinstance(batch, dict) else getattr(batch, "documents", None)
+        )
         return [d for d in (docs or []) if isinstance(d, str)]
 
     return _idf_cache.get(wing, room, _corpus)

@@ -126,9 +126,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     parser.add_argument("--daemon-url", default=DEFAULT_DAEMON_URL)
     parser.add_argument("--api-key", default=DEFAULT_API_KEY)
     parser.add_argument("--wing", help="restrict backfill to one wing")
-    parser.add_argument(
-        "--batch-size", type=int, default=200, help="drawers per list_drawers call"
-    )
+    parser.add_argument("--batch-size", type=int, default=200, help="drawers per list_drawers call")
     parser.add_argument(
         "--k", type=int, default=5, help="tags per drawer (default 5, spec band 3-8)"
     )
@@ -137,9 +135,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         action="store_true",
         help="actually update drawers (default: dry-run preview)",
     )
-    parser.add_argument(
-        "--cursor", default=str(DEFAULT_CURSOR), help="resume offset file"
-    )
+    parser.add_argument("--cursor", default=str(DEFAULT_CURSOR), help="resume offset file")
     parser.add_argument(
         "--reset-cursor",
         action="store_true",
