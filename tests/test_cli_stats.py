@@ -45,9 +45,24 @@ def _make_dispatcher(responses: dict):
     Any tool not in ``responses`` returns an empty object. The dispatcher
     inspects the JSON-RPC request body to pick the right response so the
     same fixture can serve multiple tools fired by a single command.
+
+    ``GET`` requests (REST fast-path, e.g. ``/status/fast``) get the bare
+    payload mapped from the path's matching MCP tool — ``/status/fast``
+    mirrors ``mempalace_status``.
     """
 
+    _rest_to_tool = {
+        "/status/fast": "mempalace_status",
+        "/search/fast": "mempalace_search",
+    }
+
     def fake_urlopen(req, timeout=None):
+        if getattr(req, "data", None) is None:
+            url = req.full_url
+            for path, tool in _rest_to_tool.items():
+                if path in url:
+                    return _FakeResp(json.dumps(responses.get(tool, {})).encode())
+            return _FakeResp(b"{}")
         body = json.loads(req.data.decode())
         name = body["params"]["name"]
         return _FakeResp(_envelope(responses.get(name, {})))
@@ -302,6 +317,11 @@ class TestCmdStatsErrors:
         from mempalace import cli
 
         def fake_urlopen(req, timeout=None):
+            if getattr(req, "data", None) is None:
+                # REST fast-path GET — ``/status/fast`` mirrors mempalace_status.
+                return _FakeResp(
+                    json.dumps({"total_drawers": 5, "wings": {"projects": 5}}).encode()
+                )
             body = json.loads(req.data.decode())
             name = body["params"]["name"]
             if name == "mempalace_kg_stats":

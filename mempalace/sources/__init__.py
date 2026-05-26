@@ -41,6 +41,7 @@ from .registry import (
     get_adapter_class,
     register,
     reset_adapters,
+    reset_discovery,
     resolve_adapter_for_source,
     unregister,
 )
@@ -69,6 +70,7 @@ __all__ = [
     "get_adapter_class",
     "register",
     "reset_adapters",
+    "reset_discovery",
     "resolve_adapter_for_source",
     "unregister",
 ]

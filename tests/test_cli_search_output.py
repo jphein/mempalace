@@ -43,9 +43,16 @@ def _envelope(payload: dict) -> bytes:
 
 
 def _make_search_dispatcher(payload: dict):
-    """Return a fake ``urlopen`` that returns ``payload`` for every call."""
+    """Return a fake ``urlopen`` that returns ``payload`` for every call.
+
+    ``GET`` requests (REST fast-path) get the bare payload; ``POST``
+    requests (MCP tools/call) get the JSON-RPC envelope. Lets the same
+    fixture serve ``/search/fast`` and ``mempalace_search`` fallback.
+    """
 
     def fake_urlopen(req, timeout=None):
+        if getattr(req, "data", None) is None:
+            return _FakeResp(json.dumps(payload).encode())
         return _FakeResp(_envelope(payload))
 
     return fake_urlopen
@@ -429,6 +436,13 @@ class TestSearchLimit:
         captured = {}
 
         def fake_urlopen(req, timeout=None):
+            if getattr(req, "data", None) is None:
+                # REST fast-path GET — capture ``limit`` from query string.
+                from urllib.parse import urlparse, parse_qs
+
+                qs = parse_qs(urlparse(req.full_url).query)
+                captured["arguments"] = {"limit": int(qs["limit"][0])}
+                return _FakeResp(json.dumps({"results": [], "warnings": []}).encode())
             captured["arguments"] = json.loads(req.data.decode())["params"]["arguments"]
             return _FakeResp(_envelope({"results": [], "warnings": []}))
 
@@ -445,6 +459,12 @@ class TestSearchLimit:
         captured = {}
 
         def fake_urlopen(req, timeout=None):
+            if getattr(req, "data", None) is None:
+                from urllib.parse import urlparse, parse_qs
+
+                qs = parse_qs(urlparse(req.full_url).query)
+                captured["arguments"] = {"limit": int(qs["limit"][0])}
+                return _FakeResp(json.dumps({"results": [], "warnings": []}).encode())
             captured["arguments"] = json.loads(req.data.decode())["params"]["arguments"]
             return _FakeResp(_envelope({"results": [], "warnings": []}))
 
