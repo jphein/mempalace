@@ -66,9 +66,18 @@ def _local_mtime_max(host: str) -> float | None:
             return None
     try:
         r = subprocess.run(
-            ["ssh", "-o", "ConnectTimeout=2", "-o", "BatchMode=yes", host,
-             f"stat -c %Y {' '.join(paths)}"],
-            capture_output=True, text=True, timeout=4,
+            [
+                "ssh",
+                "-o",
+                "ConnectTimeout=2",
+                "-o",
+                "BatchMode=yes",
+                host,
+                f"stat -c %Y {' '.join(paths)}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=4,
         )
     except Exception:
         return None
@@ -92,9 +101,18 @@ def _proc_start_epoch(host: str, pid: int) -> float | None:
             r = subprocess.run(cmd_local, capture_output=True, text=True, timeout=2)
         else:
             r = subprocess.run(
-                ["ssh", "-o", "ConnectTimeout=2", "-o", "BatchMode=yes", host,
-                 f"ps -p {pid} -o lstart="],
-                capture_output=True, text=True, timeout=4,
+                [
+                    "ssh",
+                    "-o",
+                    "ConnectTimeout=2",
+                    "-o",
+                    "BatchMode=yes",
+                    host,
+                    f"ps -p {pid} -o lstart=",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=4,
             )
     except Exception:
         return None
@@ -168,14 +186,16 @@ for wid in sorted(active_workers):
         stale = start_epoch < mtime
     else:
         stale = None  # unknown — render as '?'
-    workers_out.append({
-        "id": wid,
-        "host": host,
-        "pid": pid,
-        "started": _iso(start_epoch),
-        "src_mtime": _iso(mtime),
-        "stale": stale,
-    })
+    workers_out.append(
+        {
+            "id": wid,
+            "host": host,
+            "pid": pid,
+            "started": _iso(start_epoch),
+            "src_mtime": _iso(mtime),
+            "stale": stale,
+        }
+    )
 
 # Ring-buffer of (t, completed) checkpoints; rate computed from the
 # oldest sample inside the WINDOW_S window. This smooths over postgres
