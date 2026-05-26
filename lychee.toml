@@ -67,6 +67,11 @@ exclude = [
     '^https://www\.usenotra\.com(/|$)',
     '^https://celiums\.ai(/|$)',
     '^https://mempalaceofficial\.com(/|$)',
+
+    # martinfowler.com appears to block datacenter IPs (3 consecutive
+    # 30-second timeouts from GitHub runners as of 2026-05-26). The page
+    # is live in browsers; just unreachable from CI.
+    '^https://martinfowler\.com/',
 ]
 
 # Exclude path patterns from the *scan* (not just from URL checking).
