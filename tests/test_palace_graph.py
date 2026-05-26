@@ -339,7 +339,7 @@ class TestPostgresFastPath:
     def test_postgres_collection_routes_to_aggregate_path(self, monkeypatch):
         """PostgresCollection skips the row walk; build_graph returns the
         expected aggregate without ever calling col.get."""
-        import psycopg2
+        import psycopg as psycopg2
         from mempalace.backends import get_backend
         from mempalace.backends.base import PalaceRef
 

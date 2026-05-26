@@ -88,9 +88,19 @@ jobs:
   # `tests/test_knowledge_graph_age.py` was previously silently skipping
   # on the `pgvector/pgvector:pg16` image (no AGE) because every test in
   # that file gates on `TEST_POSTGRES_DSN`; promoting the image to AGE
-  # lets the KG-AGE integration tests actually exercise. The unit suite
-  # `tests/test_age_kg_units.py` is DSN-free and already covered by
-  # `test-linux`, so we don't repeat it here.
+  # lets the KG-AGE integration tests actually exercise.
+  #
+  # `tests/test_palace_graph.py::TestPostgresFastPath` (#164) carries a
+  # `@pgmark`-gated test that exercises the postgres-direct aggregate
+  # path against a live AGE+pgvector instance. The rest of the file is
+  # mock-based and already runs in `test-linux`; invoking the whole
+  # file here is the simplest way to unlock the gated case, since
+  # pytest skips it silently in test-linux otherwise. The unit suite
+  # `tests/test_age_kg_units.py` and other mock-based KG/queue/worker
+  # suites (`test_backfill_kg_triples.py`, `test_kg_extraction_queue.py`,
+  # `test_kg_triple_worker.py`, `test_palace_graph_tunnels.py`,
+  # `test_searcher_stopwords.py`) are DSN-free and already covered by
+  # `test-linux`, so we don't repeat them here.
   test-postgres:
     runs-on: ubuntu-latest
     services:
@@ -145,6 +155,7 @@ jobs:
           python -m pytest \
             tests/test_backends_postgres.py \
             tests/test_knowledge_graph_age.py \
+            tests/test_palace_graph.py \
             -v --cov=mempalace --cov-report=xml --cov-report=term-missing --cov-fail-under=0
       - uses: actions/upload-artifact@v4
         with:
