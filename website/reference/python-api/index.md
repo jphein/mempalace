@@ -65,6 +65,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.split_mega_files`](./split_mega_files) — split_mega_files.py — Split concatenated transcript files into per-session files
 - [`mempalace.sweeper`](./sweeper) — sweeper.py — Message-granular miner that catches what the file-level
 - [`mempalace.sync`](./sync) — sync.py — Gitignore-aware drawer prune (#1252).
+- [`mempalace.tag_extraction`](./tag_extraction) — TF-IDF auto-tag extraction for drawer write time (#201).
 - [`mempalace.tags`](./tags) — Multi-label tags for drawers (techempower-org/mempalace#39).
 - [`mempalace.version`](./version) — Single source of truth for the MemPalace package version.
 - [`mempalace.write_sanitizer`](./write_sanitizer) — write_sanitizer.py — Observation-grade input hygiene for the write path (#40).
