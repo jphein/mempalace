@@ -27,8 +27,8 @@
 
 set -euo pipefail
 
-HOST="${PALACE_HOST:-disks}"
-URL="${PALACE_DAEMON_URL:-http://${HOST}.jphe.in:8085}"
+HOST="${PALACE_HOST:-familiar}"
+URL="${PALACE_DAEMON_URL:-http://${HOST}:8085}"
 SYNC_GRACE="${PALACE_SYNC_GRACE:-3}"
 HEALTH_TIMEOUT="${PALACE_HEALTH_TIMEOUT:-30}"
 

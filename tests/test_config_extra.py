@@ -157,10 +157,10 @@ def test_daemon_url_from_config_file_fallback(tmp_path):
     os.environ.pop("PALACE_DAEMON_URL", None)
     os.environ.pop("PALACE_DAEMON_STRICT", None)
     (tmp_path / "config.json").write_text(
-        json.dumps({"daemon_url": "http://disks.jphe.in:8085"}), encoding="utf-8"
+        json.dumps({"daemon_url": "http://familiar:8085"}), encoding="utf-8"
     )
     cfg = MempalaceConfig(config_dir=str(tmp_path))
-    assert cfg.daemon_url == "http://disks.jphe.in:8085"
+    assert cfg.daemon_url == "http://familiar:8085"
     assert cfg.daemon_strict is True
 
 

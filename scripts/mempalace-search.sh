@@ -15,7 +15,7 @@
 #   mempalace-search.sh "Claude Code hook timeout" 20
 #
 # Env:
-#   PALACE_DAEMON_URL   default http://disks.jphe.in:8085
+#   PALACE_DAEMON_URL   default http://familiar:8085
 #   PALACE_API_KEY      optional Bearer token; omitted from header if empty
 #
 # Exit codes:
@@ -34,7 +34,7 @@ fi
 
 query="$1"
 limit="${2:-5}"
-daemon_url="${PALACE_DAEMON_URL:-http://disks.jphe.in:8085}"
+daemon_url="${PALACE_DAEMON_URL:-http://familiar:8085}"
 api_key="${PALACE_API_KEY:-}"
 
 # Encode the query — daemon /search reads it from a query parameter.

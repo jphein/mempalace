@@ -2,7 +2,7 @@
 
 These tests require a live Postgres with the `vector` extension installed.
 Set `TEST_POSTGRES_DSN` to the connection string (e.g.
-`postgresql://palace@disks.jphe.in:5432/mempalace_test` or a local DSN);
+`postgresql://palace@familiar:5433/mempalace_test` or a local DSN);
 without it, the tests are skipped so the default suite stays green on
 machines that don't have a Postgres at hand.
 
