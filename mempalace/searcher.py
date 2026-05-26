@@ -1159,6 +1159,13 @@ def _graph_expand_from_entities(
                 cur.execute("LOAD 'age'")
                 cur.execute('SET search_path = ag_catalog, "$user", public')
                 for ent in entity_names[:10]:
+                    if not ent or len(ent) < 3:
+                        continue
+                    if ent.lower() in _QUERY_NER_STOPWORDS:
+                        # Skip wh-words and other stopwords — the regex
+                        # branch below would otherwise seq-scan every
+                        # Entity vertex for substrings like ".*What.*".
+                        continue
                     ent_safe = _esc(ent)
                     # Case-insensitive partial match — query NER produces
                     # capitalized forms that may not exactly match the
@@ -1190,6 +1197,65 @@ def _graph_expand_from_entities(
 
 _ENTITY_REGEX = re.compile(r"\b([A-Z][a-zA-Z0-9_]+(?:\s+[A-Z][a-zA-Z0-9_]+)*)\b")
 
+# Common capitalized sentence-starters and interrogatives that match the
+# NER regex but aren't real entities. Filtering them here prevents
+# downstream AGE consumers (_graph_expand_from_entities) from issuing
+# fuzzy-regex Cypher against a multi-million-vertex Entity table —
+# scans like `a.name =~ '(?i).*What.*'` collapse to seq-scans and wedge
+# the daemon's Postgres pool for tens of minutes.
+_QUERY_NER_STOPWORDS = frozenset(
+    {
+        "what",
+        "which",
+        "where",
+        "when",
+        "why",
+        "who",
+        "whom",
+        "whose",
+        "how",
+        "the",
+        "this",
+        "that",
+        "these",
+        "those",
+        "there",
+        "their",
+        "they",
+        "them",
+        "and",
+        "but",
+        "for",
+        "from",
+        "are",
+        "you",
+        "your",
+        "yours",
+        "can",
+        "could",
+        "would",
+        "should",
+        "shall",
+        "will",
+        "may",
+        "might",
+        "must",
+        "have",
+        "has",
+        "had",
+        "does",
+        "did",
+        "any",
+        "all",
+        "some",
+        "one",
+        "two",
+        "yes",
+        "not",
+        "now",
+    }
+)
+
 
 def _ner_from_query(query, known_entities=None):
     # type: (str, Optional[set]) -> list
@@ -1211,6 +1277,14 @@ def _ner_from_query(query, known_entities=None):
     for m in _ENTITY_REGEX.finditer(query):
         token = m.group(1).strip()
         if token in seen or len(token) < 3:
+            continue
+        # Filter on the leading word — _ENTITY_REGEX greedily captures
+        # multi-word capitalized phrases, so "Which Drawer" arrives as a
+        # single token. Rejecting the whole phrase when it starts with a
+        # stopword is simpler than splitting it apart, and vector + BM25
+        # still cover "Drawer" via their own paths.
+        first_word = token.split(None, 1)[0].lower()
+        if first_word in _QUERY_NER_STOPWORDS:
             continue
         candidates.append(token)
         seen.add(token)
