@@ -18,6 +18,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-05-26]
+
+
+### Fixed
+
+
+- **Apply AGE statement_timeout in same transaction as cypher() (PR #228 follow-up)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  The PR #228 hotfix added ``SET LOCAL statement_timeout = '3s'`` to
+  ``_graph_expand_from_entities`` but ran it as a bare ``execute()``
+  under ``conn.autocommit = True``. With autocommit, each
+  ``execute()`` runs in its own implicit transaction — so the
+  ``SET LOCAL`` ended immediately and the next ``cypher()`` call
+  opened a fresh transaction at the session default of 0. Result:
+  2026-05-26 prod saw 16 AGE backends running 5+ minutes each. JP
+  mitigated with ``ALTER ROLE palace SET statement_timeout = '30s'``;
+  this PR makes the in-code guard actually fire.
+
+  Fix: wrap ``SET LOCAL`` + the ``cypher()`` execute in
+  ``with conn.transaction():`` so both share one BEGIN/COMMIT and
+  the LOCAL setting scopes the cypher call. Verified empirically
+  with psycopg 3.3.4: bare execute pattern takes 0.5s on
+  ``pg_sleep(0.5)`` (no timeout); transaction-wrapped pattern fires
+  after 0.10s as expected. Regression test pins the source shape so
+  future refactors can't quietly un-wrap the block.
+
+  Companion: ``docs/operators/2026-05-26-age-statement-timeout.sql``
+  adds a btree expression index on the AGE-native ``a.name``
+  access expression. Drops the Entity-side lookup from
+  ``Parallel Seq Scan`` (cost 7650 over 472K rows) to
+  ``Index Scan`` (cost 32). The existing ``idx_entity_name`` GIN
+  index doesn't accelerate the equality predicate AGE generates.
+
+  *Tests:* 1 — test_searcher_stopwords.py::TestGraphExpandCypherSafety::test_statement_timeout_shares_transaction_with_cypher
+  *Files:* `mempalace/searcher.py`, `tests/test_searcher_stopwords.py`, `docs/operators/2026-05-26-age-statement-timeout.sql`
+
+
 ## [2026-05-25]
 
 

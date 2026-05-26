@@ -1158,12 +1158,6 @@ def _graph_expand_from_entities(
             with conn.cursor() as cur:
                 cur.execute("LOAD 'age'")
                 cur.execute('SET search_path = ag_catalog, "$user", public')
-                # Defensive: even with the regex branch removed below, a
-                # misfire on an exact-match query against an Entity table
-                # with no index on (name) would still seq-scan. Cap each
-                # Cypher statement at 3s so the daemon stays responsive
-                # even when KG hot paths degrade.
-                cur.execute("SET LOCAL statement_timeout = '3s'")
                 for ent in entity_names[:10]:
                     if not ent or len(ent) < 3:
                         continue
@@ -1181,18 +1175,30 @@ def _graph_expand_from_entities(
                         RETURN DISTINCT r.source AS source
                         LIMIT {max_drawers_per_entity}
                     """
+                    # Defensive: 3s per-Cypher cap so a misfire can't wedge
+                    # the daemon. Wrap SET LOCAL + cypher() in an explicit
+                    # transaction — with conn.autocommit=True, each
+                    # standalone execute() runs in its own implicit txn,
+                    # so a bare `SET LOCAL statement_timeout` ends
+                    # immediately and never applies to the next execute().
+                    # `conn.transaction()` opens a real BEGIN/COMMIT around
+                    # both statements, so the LOCAL setting actually
+                    # scopes the cypher call (verified empirically:
+                    # docs/operators/2026-05-26-age-statement-timeout.sql).
                     try:
-                        cur.execute(
-                            f"SELECT * FROM cypher('mempalace_kg', $${expand_cypher}$$) AS (source agtype)"
-                        )
-                        for (source_agtype,) in cur.fetchall():
-                            raw = str(source_agtype)
-                            if raw.startswith('"') and raw.endswith('"'):
-                                raw = raw[1:-1]
-                            if raw and raw != "null":
-                                expanded_drawers.add(raw)
+                        with conn.transaction():
+                            cur.execute("SET LOCAL statement_timeout = '3s'")
+                            cur.execute(
+                                f"SELECT * FROM cypher('mempalace_kg', $${expand_cypher}$$) AS (source agtype)"
+                            )
+                            for (source_agtype,) in cur.fetchall():
+                                raw = str(source_agtype)
+                                if raw.startswith('"') and raw.endswith('"'):
+                                    raw = raw[1:-1]
+                                if raw and raw != "null":
+                                    expanded_drawers.add(raw)
                     except Exception:
-                        continue  # bad regex / missing entity — keep going
+                        continue  # bad regex / missing entity / timeout — keep going
     except Exception:
         logger.debug("_graph_expand_from_entities failed", exc_info=True)
         return []
