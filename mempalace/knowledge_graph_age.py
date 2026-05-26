@@ -10,10 +10,13 @@ created on first init and reused thereafter — initialization is idempotent.
 """
 
 import json
+import logging
 import re
 from typing import Any, Optional
 
 from .config import sanitize_iso_temporal, sanitize_kg_value
+
+logger = logging.getLogger(__name__)
 
 
 def _load_psycopg2():
@@ -227,7 +230,7 @@ class KnowledgeGraphAGE:
             if cur.fetchone() is None:
                 return
             cur.execute(
-                f'SELECT COUNT(*) - COUNT(DISTINCT (properties::text)::jsonb->>\'id\') '
+                f"SELECT COUNT(*) - COUNT(DISTINCT (properties::text)::jsonb->>'id') "
                 f'FROM "{graph}"."Drawer"'
             )
             dup_excess = cur.fetchone()[0]
@@ -238,7 +241,7 @@ class KnowledgeGraphAGE:
                 )
                 return
             cur.execute(
-                f'CREATE UNIQUE INDEX IF NOT EXISTS drawer_id_unique '
+                f"CREATE UNIQUE INDEX IF NOT EXISTS drawer_id_unique "
                 f'ON "{graph}"."Drawer" (((properties::text)::jsonb->>\'id\'))'
             )
         self._conn.commit()

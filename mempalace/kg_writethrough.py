@@ -159,9 +159,7 @@ def make_age_deletethrough(kg: Any):
         try:
             kg.delete_drawers(list(drawer_ids))
         except Exception as e:  # noqa: BLE001
-            logger.warning(
-                "delete_drawers failed for %d ids: %s", len(drawer_ids), e
-            )
+            logger.warning("delete_drawers failed for %d ids: %s", len(drawer_ids), e)
 
     return hook
 

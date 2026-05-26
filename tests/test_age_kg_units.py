@@ -277,9 +277,7 @@ def test_kg_age_clear_drops_and_recreates_graph(monkeypatch):
     # init bootstrap: fetchone returns (1,) so create_graph is skipped on init,
     # then None for the unique-index table-check so it early-returns.
     # clear bootstrap: (1,) again so drop_graph runs, then None for unique-index.
-    kg, conn = _build_kg_with_fake_conn(
-        monkeypatch, fetchone_seq=[(1,), None, (1,), None]
-    )
+    kg, conn = _build_kg_with_fake_conn(monkeypatch, fetchone_seq=[(1,), None, (1,), None])
     initial_commits = conn.commits
     kg.clear()
     statements = " ".join(sql for sql, _ in conn._cursor.executes)
