@@ -16,6 +16,10 @@
         "link": "/reference/python-api/backfill_age"
       },
       {
+        "text": "mempalace.calibration",
+        "link": "/reference/python-api/calibration"
+      },
+      {
         "text": "mempalace.cli",
         "link": "/reference/python-api/cli"
       },

@@ -12,6 +12,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.auto_query`](./auto_query) — Auto-query integration for MemPalace.
 - [`mempalace.backends`](./backends) — Storage backend implementations for MemPalace (RFC 001).
 - [`mempalace.backfill_age`](./backfill_age) — Backfill the AGE graph from an existing drawer table.
+- [`mempalace.calibration`](./calibration) — Calibrated confidence for search results.
 - [`mempalace.cli`](./cli) — MemPalace — Give your AI a memory. No API key required.
 - [`mempalace.closet_llm`](./closet_llm) — closet_llm.py — Generate closets via a user-configured LLM for richer indexing.
 - [`mempalace.config`](./config) — MemPalace configuration system.

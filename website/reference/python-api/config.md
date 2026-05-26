@@ -101,6 +101,23 @@ def backend_override(self)
 
 Explicit backend selection from env/config, or None for auto/default resolution.
 
+#### `calibration_path`
+
+```python
+def calibration_path(self)
+```
+
+Optional path to a fitted confidence calibrator JSON.
+
+When set, ``search_memories`` loads the calibrator and surfaces a
+``confidence`` field (calibrated P(relevant)) on each vector hit.
+When unset or the file is missing, no ``confidence`` field is
+emitted — the system never fakes a calibrated score.
+
+Resolution mirrors ``palace_path``: env (``MEMPALACE_CALIBRATION_PATH``)
+wins, ``config.json`` key ``"calibration_path"`` as fallback,
+``None`` means no calibration (current default).
+
 #### `postgres_dsn`
 
 ```python
