@@ -19,6 +19,7 @@ from mempalace.sources import (
     SourceItemMetadata,
     register,
     reset_adapters,
+    reset_discovery,
     unregister,
 )
 
@@ -61,6 +62,8 @@ def _isolate_registry():
             unregister(name)
         except Exception:
             pass
+    # Allow the next test to rediscover the in-tree entry-point adapters.
+    reset_discovery()
 
 
 @pytest.fixture()

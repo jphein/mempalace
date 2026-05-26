@@ -20,6 +20,7 @@ from mempalace.sources import (
     get_adapter_class,
     register,
     reset_adapters,
+    reset_discovery,
     resolve_adapter_for_source,
     unregister,
 )
@@ -66,6 +67,8 @@ def _isolate_registry():
     reset_adapters()
     for name in list(available_adapters()):
         unregister(name)
+    # Allow the next test to rediscover the in-tree entry-point adapters.
+    reset_discovery()
 
 
 # ---------------------------------------------------------------------------

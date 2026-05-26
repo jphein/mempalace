@@ -140,6 +140,18 @@ def reset_adapters() -> None:
         _instances.clear()
 
 
+def reset_discovery() -> None:
+    """Force the next ``available_adapters()`` call to re-scan entry points.
+
+    Tests that ``unregister`` entry-point-discovered adapters must call
+    this — otherwise the cached ``_discovered=True`` flag suppresses
+    rediscovery and ``available_adapters()`` permanently returns ``[]``.
+    """
+    global _discovered
+    with _lock:
+        _discovered = False
+
+
 def resolve_adapter_for_source(
     *,
     explicit: str | None = None,

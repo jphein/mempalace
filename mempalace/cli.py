@@ -1457,12 +1457,24 @@ def _daemon_search_fast(query: str, n_results: int, wing: str = None) -> dict | 
     raw = _call_daemon_rest("/search/fast", rest_params)
     if raw is None:
         return None
-    for hit in raw:
-        hit["text"] = hit.pop("snippet", "")
-        hit["bm25_score"] = round(hit.pop("rank", 0), 3)
+    if isinstance(raw, dict):
+        hits = raw.get("results")
+    elif isinstance(raw, list):
+        hits = raw
+    else:
+        hits = None
+    if not isinstance(hits, list):
+        return None
+    for hit in hits:
+        if "snippet" in hit:
+            hit["text"] = hit.pop("snippet")
+        elif "text" not in hit:
+            hit["text"] = ""
+        if "rank" in hit:
+            hit["bm25_score"] = round(hit.pop("rank"), 3)
         if hit.get("source_file"):
             hit["source"] = hit["source_file"]
-    return {"results": raw, "query": query, "source": "bm25-fast"}
+    return {"results": hits, "query": query, "source": "bm25-fast"}
 
 
 def _daemon_search_hybrid(

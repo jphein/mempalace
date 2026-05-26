@@ -58,19 +58,36 @@ def _doc_tool_names() -> list:
 # ---------------------------------------------------------------------------
 
 
+def _readme_self_tool_counts(readme: str) -> list[str]:
+    """Extract "N tools" claims that refer to mempalace itself.
+
+    Skips markdown table rows (lines containing ``|``) so competitor
+    rows like "Longhand … 17 tools" don't poison the count — those are
+    facts about other projects, not claims about mempalace.
+    """
+    counts = []
+    for line in readme.splitlines():
+        if "|" in line:
+            continue
+        counts.extend(re.findall(r"(\d+)\s+tools", line))
+    return counts
+
+
 class TestToolCount:
-    """README claims '19 tools available through MCP' in multiple places."""
+    """README claims 'N tools available through MCP' in multiple places."""
 
     def test_readme_tool_count_matches_code(self):
-        """Claim: README says 19 tools. Actual TOOLS dict may differ.
+        """Claim: README says N tools. Actual TOOLS dict may differ.
 
         This test asserts the REAL tool count so the README can be updated.
         If TOOLS has 25 entries, the README should say 25, not 19.
+
+        Only counts mempalace's own self-claims — competitor tool counts
+        in comparison tables are out of scope.
         """
         actual_count = len(_tools_dict_keys())
         readme = _readme()
-        # Find all "19 tools" claims in README
-        claimed_counts = re.findall(r"(\d+)\s+tools", readme)
+        claimed_counts = _readme_self_tool_counts(readme)
         for claimed in claimed_counts:
             assert int(claimed) == actual_count, (
                 f"README claims {claimed} tools but TOOLS dict has {actual_count}. "
@@ -732,9 +749,13 @@ class TestReadmeToolCountConsistency:
     """README mentions tool count in multiple places — they must all agree."""
 
     def test_all_tool_count_mentions_consistent(self):
-        """Every place README says 'N tools' must use the same number."""
+        """Every place README says 'N tools' about mempalace must agree.
+
+        Scoped to self-claims (non-table-row lines) so competitor counts
+        in the comparison tables don't trigger spurious failures.
+        """
         readme = _readme()
-        counts = re.findall(r"(\d+)\s+tools", readme)
+        counts = _readme_self_tool_counts(readme)
         if len(counts) > 1:
             unique = set(counts)
             assert len(unique) == 1, (

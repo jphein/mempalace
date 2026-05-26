@@ -182,11 +182,12 @@ class TestCmdStatusJson:
         args = argparse.Namespace(palace=None, json=True, quiet=False)
         daemon_payload = {"total_drawers": 7, "wings": {"wing_x": 7}}
 
-        with patch("mempalace.cli._call_daemon_tool", return_value=daemon_payload):
-            with patch("mempalace.cli._daemon_strict", return_value=True):
-                from mempalace.cli import cmd_status
+        with patch("mempalace.cli._call_daemon_rest", return_value=None):
+            with patch("mempalace.cli._call_daemon_tool", return_value=daemon_payload):
+                with patch("mempalace.cli._daemon_strict", return_value=True):
+                    from mempalace.cli import cmd_status
 
-                cmd_status(args)
+                    cmd_status(args)
 
         out = capsys.readouterr().out
         payload = json.loads(out)
@@ -204,11 +205,15 @@ class TestCmdStatusJson:
 
         with patch("mempalace.cli._daemon_strict", return_value=True):
             with patch(
-                "mempalace.cli._call_daemon_tool",
+                "mempalace.cli._call_daemon_rest",
                 side_effect=DaemonError("connection refused"),
             ):
-                with pytest.raises(SystemExit) as exc_info:
-                    cmd_status(args)
+                with patch(
+                    "mempalace.cli._call_daemon_tool",
+                    side_effect=DaemonError("connection refused"),
+                ):
+                    with pytest.raises(SystemExit) as exc_info:
+                        cmd_status(args)
 
         assert exc_info.value.code == 2
         out = capsys.readouterr().out
@@ -365,11 +370,12 @@ class TestCmdSearchJson:
         }
 
         with patch("mempalace.cli._daemon_strict", return_value=True):
-            with patch("mempalace.cli._call_daemon_tool", return_value=daemon_payload):
-                with pytest.raises(SystemExit) as exc_info:
-                    from mempalace.cli import cmd_search
+            with patch("mempalace.cli._call_daemon_rest", return_value=None):
+                with patch("mempalace.cli._call_daemon_tool", return_value=daemon_payload):
+                    with pytest.raises(SystemExit) as exc_info:
+                        from mempalace.cli import cmd_search
 
-                    cmd_search(args)
+                        cmd_search(args)
 
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
