@@ -37,16 +37,16 @@ dependencies = [
     # Users who pick minilm during onboarding still get these installed
     # but unused — small wheel-size cost in exchange for one fewer pip
     # command in the multilingual setup path.
-    "huggingface_hub>=0.20",
-    "tokenizers>=0.15",
-    "numpy>=1.24",
+    "huggingface_hub>=1.0",
+    "tokenizers>=0.23",
+    "numpy>=2.0",
     # Tier 6a content-date extraction uses dateutil for natural-language
     # date parsing (filename + content body branches). It happens to install
     # transitively today via chromadb→kubernetes→python-dateutil, but that
     # chain is not a contract — declared explicitly here to ensure
     # _extract_content_date keeps working if upstream kubernetes drops the
     # dependency. Per PR #1584 review (Igor, 2026-05-22).
-    "python-dateutil>=2.8",
+    "python-dateutil>=2.9",
 ]
 
 [project.urls]
@@ -94,7 +94,7 @@ spellcheck = ["autocorrect>=2.0"]
 # run real concurrent writes (~24-wide) instead of serializing through
 # one psycopg2 connection under an asyncio.Lock.
 kg-extract = [
-    "httpx>=0.27",
+    "httpx>=0.28",
     "psycopg[binary]>=3.2,<4",
     "psycopg-pool>=3.2,<4",
 ]
