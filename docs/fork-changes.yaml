@@ -27,11 +27,11 @@ entries:
   - id: rrf-fusion-mode-ab-harness
     date: 2026-05-26
     bucket: Added
-    commit: TBD
+    commit: 6c9d10c
     area: Search
     summary: "RRF fusion mode + convex-vs-RRF A/B harness (#162)"
     tests: "tests/test_rrf_rank.py (13), tests/test_eval_fusion_ab.py (18)"
-    pr: null
+    pr: 247
     files:
       - mempalace/searcher.py
       - scripts/eval_fusion_ab.py

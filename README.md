@@ -237,7 +237,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | RRF fusion mode + convex-vs-RRF A/B harness (#162) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
+| 1 | RRF fusion mode + convex-vs-RRF A/B harness (#162) | [#247](https://github.com/MemPalace/mempalace/pull/247) | [`6c9d10c`](https://github.com/techempower-org/mempalace/commit/6c9d10c) |
 | 2 | mempalace stats: add ROOMS breakdown (drawer count by room) to the dashboard | — | [`1673465`](https://github.com/techempower-org/mempalace/commit/1673465) |
 | 3 | Calibrated confidence field on search results + Brier-score eval column | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
 | 4 | Evaluation doc: curated-authority vs auto-mined separation (#202) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |

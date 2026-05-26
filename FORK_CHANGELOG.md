@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **RRF fusion mode + convex-vs-RRF A/B harness (#162)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **RRF fusion mode + convex-vs-RRF A/B harness (#162)** ([`6c9d10c`](https://github.com/techempower-org/mempalace/commit/6c9d10c))
   ``search_memories`` gains a ``fusion_mode`` parameter selecting how the
   merged candidate pool is finally ranked: ``"convex"`` (default — the
   existing weighted vector+BM25 blend in ``_hybrid_rank``) or ``"rrf"``
@@ -45,6 +45,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   trusted from literature.
 
   *Tests:* tests/test_rrf_rank.py (13), tests/test_eval_fusion_ab.py (18)
+  *Upstream:* [PR #247](https://github.com/MemPalace/mempalace/pull/247)
   *Files:* `mempalace/searcher.py`, `scripts/eval_fusion_ab.py`, `tests/test_rrf_rank.py`, `tests/test_eval_fusion_ab.py`
 
 
