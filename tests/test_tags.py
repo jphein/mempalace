@@ -251,11 +251,33 @@ class TestAddDrawerWithTags:
         fetched = tool_get_drawer(result["drawer_id"])
         assert fetched["tags"] == ["important", "project-x"]
 
-    def test_no_tags_means_empty_list(self, monkeypatch, config, palace_path, kg):
+    def test_no_tags_arg_triggers_auto_extraction(self, monkeypatch, config, palace_path, kg):
+        # Pre-#201: omitting ``tags`` left the drawer untagged.
+        # Post-#201: omitting ``tags`` triggers TF-IDF auto-extraction
+        # against the wing/room corpus. ``tags=[]`` is still the
+        # "explicit empty" escape hatch (covered separately).
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_add_drawer
 
         result = tool_add_drawer(wing="w", room="r", content="untagged drawer content")
+        assert result["success"] is True
+        assert isinstance(result["tags"], list)
+        # All output normalised — the contract from ``mempalace.tags``.
+        for tag in result["tags"]:
+            assert tag == tag.lower()
+            assert " " not in tag
+
+    def test_explicit_empty_tags_skips_auto_extraction(
+        self, monkeypatch, config, palace_path, kg
+    ):
+        # Explicit ``tags=[]`` is the caller saying "no tags" — auto-extract
+        # must NOT fire even though the content has plenty of usable tokens.
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace.mcp_server import tool_add_drawer
+
+        result = tool_add_drawer(
+            wing="w", room="r", content="untagged drawer content", tags=[]
+        )
         assert result["success"] is True
         assert result["tags"] == []
 
