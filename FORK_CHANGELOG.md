@@ -24,6 +24,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **mempalace stats: add ROOMS breakdown (drawer count by room) to the dashboard** ([`1673465`](https://github.com/techempower-org/mempalace/commit/1673465))
+  ``mempalace stats`` (#191, PR #193) surfaced drawer counts by wing
+  but not by room — even though the daemon's ``/status/fast`` payload
+  already returns both ``wings`` and ``rooms`` maps. The issue's
+  analytics scope explicitly asks for "drawer count by wing/room".
+
+  Add a ``ROOMS`` section to the human dashboard (mirroring the WINGS
+  block's sorted bars + ``--top`` truncation) and a ``rooms`` key to
+  the ``--json`` payload. Wings answer "which domains", rooms answer
+  "which kinds of memory" — the canonical 7-room taxonomy
+  (references, discoveries, architecture, problems, planning,
+  sessions, decisions, plus diary/debugging). Zero extra daemon cost:
+  rooms ride along in the same ``/status/fast`` response already
+  fetched for the WINGS block. Degrades to "(no rooms)" against older
+  daemons that omit the ``rooms`` key.
+
+  *Tests:* 4 — test_cli_stats.py::TestCmdStatsDaemon::{test_renders_rooms_section,test_rooms_section_handles_missing_rooms,test_top_truncates_rooms} + rooms assertion in test_json_output_shape
+  *Files:* `mempalace/cli.py`, `tests/test_cli_stats.py`
+
+
 - **Calibrated confidence field on search results + Brier-score eval column** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
   Surfaces an optional ``confidence`` field alongside each search hit:
   a calibrated probability that the hit is relevant, derived from the
