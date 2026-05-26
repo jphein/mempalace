@@ -46,7 +46,7 @@ hybrid ranking, sqlite-BM25 fallback, and scope-aware warnings.
 ### `search_memories`
 
 ```python
-def search_memories(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, n_results: int = 5, max_distance: float = 0.0, vector_disabled: bool = False, candidate_strategy: str = 'vector', collection_name: str = None) -> dict
+def search_memories(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, n_results: int = 5, max_distance: float = 0.0, vector_disabled: bool = False, candidate_strategy: str = 'vector', fusion_mode: str = 'convex', collection_name: str = None) -> dict
 ```
 
 Programmatic search — returns a dict instead of printing.
@@ -89,6 +89,13 @@ Args:
           When ``max_distance > 0.0`` is also set, BM25-only candidates
           are skipped — they have no vector distance and would silently
           violate the requested distance threshold.
+    fusion_mode: How the final candidate pool is ranked.
+
+        * ``"convex"`` (default) — historical behavior: a weighted blend
+          of normalized vector similarity and BM25 (``_hybrid_rank``).
+        * ``"rrf"`` — Reciprocal Rank Fusion of the vector ordering and
+          the BM25 ordering (``_rrf_rank``). Score-scale agnostic; only
+          the rank orderings matter. Selectable for the #162 A/B study.
 
 ### `render_with_line_numbers`
 
