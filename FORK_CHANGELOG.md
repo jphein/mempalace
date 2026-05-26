@@ -50,7 +50,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   techempower-org/mempalace#167; analysis in
   docs/research/uncertainty-aware-retrieval.md.
 
-  *Tests:* 29 — tests/test_calibration.py (26), tests/test_searcher_confidence.py (3), plus 3 in tests/test_config.py
+  *Tests:* 30 — tests/test_calibration.py (27), tests/test_searcher_confidence.py (3), plus 3 in tests/test_config.py
   *Files:* `mempalace/calibration.py`, `mempalace/searcher.py`, `mempalace/config.py`, `scripts/eval_multi_encoder_rrf.py`, `tests/test_calibration.py`, `tests/test_searcher_confidence.py`, `tests/test_config.py`
 
 

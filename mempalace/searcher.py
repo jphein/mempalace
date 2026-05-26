@@ -1622,21 +1622,32 @@ _CALIBRATOR_CACHE: dict = {}
 def _load_calibrator():
     """Return the configured :class:`~mempalace.calibration.Calibrator`, or None.
 
-    Cached by resolved path. ``None`` (unconfigured) and a missing/unreadable
-    file both yield ``None`` so the search path omits ``confidence`` rather
-    than faking it.
+    Cached by resolved path and modification time. ``None`` (unconfigured) and a
+    missing/unreadable file both yield ``None`` so the search path omits
+    ``confidence`` rather than faking it. Keying on mtime lets a long-lived
+    process (the daemon) pick up an in-place re-fit without a restart.
     """
     from .config import MempalaceConfig
 
     path = MempalaceConfig().calibration_path
     if not path:
         return None
-    if path in _CALIBRATOR_CACHE:
-        return _CALIBRATOR_CACHE[path]
+
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        mtime = None
+
+    cached = _CALIBRATOR_CACHE.get(path)
+    if cached is not None:
+        cached_cal, cached_mtime = cached
+        if cached_mtime == mtime:
+            return cached_cal
+
     from .calibration import Calibrator
 
-    cal = Calibrator.load(path)
-    _CALIBRATOR_CACHE[path] = cal
+    cal = Calibrator.load(path) if mtime is not None else None
+    _CALIBRATOR_CACHE[path] = (cal, mtime)
     return cal
 
 

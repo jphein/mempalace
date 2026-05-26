@@ -412,8 +412,9 @@ class MempalaceConfig:
         env_val = os.environ.get("MEMPALACE_CALIBRATION_PATH", "").strip()
         if env_val:
             return os.path.abspath(os.path.expanduser(env_val))
-        cfg_val = (self._file_config.get("calibration_path") or "").strip()
-        return os.path.abspath(os.path.expanduser(cfg_val)) if cfg_val else None
+        cfg_val = self._file_config.get("calibration_path")
+        cfg_str = str(cfg_val).strip() if cfg_val is not None else ""
+        return os.path.abspath(os.path.expanduser(cfg_str)) if cfg_str else None
 
     @property
     def postgres_dsn(self):

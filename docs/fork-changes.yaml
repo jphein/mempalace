@@ -38,7 +38,7 @@ entries:
       - tests/test_calibration.py
       - tests/test_searcher_confidence.py
       - tests/test_config.py
-    tests: "29 — tests/test_calibration.py (26), tests/test_searcher_confidence.py (3), plus 3 in tests/test_config.py"
+    tests: "30 — tests/test_calibration.py (27), tests/test_searcher_confidence.py (3), plus 3 in tests/test_config.py"
     pr: null
     body: |
       Surfaces an optional ``confidence`` field alongside each search hit:

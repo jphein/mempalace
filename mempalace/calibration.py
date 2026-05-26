@@ -163,7 +163,15 @@ def _pav(xs: Sequence[float], ys: Sequence[float]) -> tuple:
             block_w[-1] = w2
             block_x[-1] = x_last  # right edge of the pooled block
 
-    return block_x, block_val
+    # Expand pooled block values back to every distinct x in merged_x, so
+    # the breakpoints have one (x, y) per distinct similarity. Returning
+    # only block right-edges would drop interior x's and bisect them onto
+    # the previous block's value — a step function that diverges from
+    # sklearn's IsotonicRegression on non-fully-pooled inputs.
+    by: list = []
+    for v, w in zip(block_val, block_w):
+        by.extend([v] * w)
+    return merged_x, by
 
 
 def fit_calibrator(

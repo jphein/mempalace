@@ -188,7 +188,27 @@ class TestPavFallback:
 
         bx, by = _pav(xs, ys)
         # Reconstruct a step function from PAV breakpoints and compare on the
-        # same xs. PAV breakpoints are right-edges of pooled blocks.
+        # same xs. _pav expands pooled block values back to every distinct x,
+        # so each input similarity maps to its own breakpoint.
+        cal = Calibrator(x=bx, y=by)
+        for x, sk in zip(xs, sk_pred):
+            assert cal.apply(x) == pytest.approx(float(sk), abs=1e-6)
+
+    def test_pav_non_fully_pooled(self):
+        # Regression for the right-edge-only bug: this sequence does NOT
+        # collapse to a single constant, so the fallback must expand pooled
+        # values to every distinct x or it diverges from sklearn on the
+        # interior points.
+        pytest.importorskip("sklearn")
+        from sklearn.isotonic import IsotonicRegression
+
+        xs = [0.0, 1.0, 2.0, 3.0]
+        ys = [0.0, 1.0, 0.0, 1.0]
+
+        iso = IsotonicRegression(y_min=0.0, y_max=1.0, increasing=True, out_of_bounds="clip")
+        sk_pred = iso.fit_transform(xs, ys)
+
+        bx, by = _pav(xs, ys)
         cal = Calibrator(x=bx, y=by)
         for x, sk in zip(xs, sk_pred):
             assert cal.apply(x) == pytest.approx(float(sk), abs=1e-6)
