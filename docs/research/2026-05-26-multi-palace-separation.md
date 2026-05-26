@@ -25,7 +25,7 @@ doc supplies the principle-level justification the design doc assumes.
    data** (the P8 recovery-collection retirement, see [#169][i169]).
 3. **Recommend collection-partitioning (one palace, sibling collections by
    purpose), not multi-palace (multiple `palace_path` roots).** Partitioning
-   absorbs the kostadis use case with strictly less moving infrastructure, composes
+   absorbs the @kostadis use case with strictly less moving infrastructure, composes
    *upward* to multi-palace if a harder requirement ever lands, and keeps a single
    verbatim store, a single embedder identity, and a single entity namespace —
    which is exactly what entity-first wants.
@@ -140,7 +140,7 @@ which is its one genuine advantage (see below). **No tension, mild relevance.**
 - **Partitioning:** the write path gains one config lookup (which partition?) and
   the read path gains optional fan-out + RRF when federating. Single-partition
   reads (the default) are bit-for-bit today's cost. Federation across N partitions
-  is N searches + a fuse, paid only when explicitly requested. Within budget.
+  is N searches + a fusion step, paid only when explicitly requested. Within budget.
 - **Multi-palace:** federated read means querying N daemons/processes, which is
   network round-trips, not in-process collection switches. Higher tail latency,
   and the one-daemon-per-palace recommendation multiplies the cold-start surface.
@@ -177,8 +177,8 @@ Reads filter on it.
 
 - **Pro:** smallest change; no new collection; no migration.
 - **Con (write isolation):** the auto-hook still writes into the shared collection
-  and *tags* its rows. There is no physical wall — a bug that drops the tag dumps
-  transcript noise into the curated namespace. The kostadis requirement is "no
+  and *tags* its rows. There is no physical wall — a bug that drops the tag and dumps
+  transcript noise into the curated namespace. The @kostadis requirement is "no
   auto-hooks in my curated palace," and a shared collection cannot give a hard
   guarantee of that, only a soft filter.
 - **Con (tuning):** #202 names this directly — metadata filtering "doesn't allow
@@ -257,7 +257,7 @@ read-surface parity encoded in the partition schema.** Concretely:
    bit-for-bit.
 2. **Write address is first-class.** The Stop-hook writes to `drawers`; a curated
    import path writes to `authority`. Routing via `hook_targets` + a `--partition`
-   CLI flag + a `partition` MCP kwarg (design doc Q2). Under `daemon_strict`, an
+   CLI flag + a `partition` MCP argument (design doc Q2). Under `daemon_strict`, an
    unknown partition fails loud.
 3. **Read-surface parity is a schema invariant, not a guideline.** Every partition
    declares `searchable`; searchable partitions are federated from the canonical
@@ -299,7 +299,7 @@ per-purpose tuning at the lowest infra cost, while leaving the door open to C.
   the search layer so a mismatched federated query errors at the request, not in
   the rankings.
 - **Seed migration is a copy, not a move, to honor incremental-only.** Accepted:
-  costs transient disk for duplicated curated rows until the user tombstones the
+  costs transient disk space for duplicated curated rows until the user tombstones the
   originals under their own control.
 
 ## Coordination
@@ -324,7 +324,7 @@ per-purpose tuning at the lowest infra cost, while leaving the door open to C.
   weighting function (and whether it beats a flat unified ranking on the fork's own
   corpus) is unmeasured. Per the fork's "test retrieval against our corpus"
   discipline, that A/B belongs to the searcher work, after separation lands.
-- **The kostadis canon-editing pattern is under-specified.** "Curate manually"
+- **The @kostadis canon-editing pattern is under-specified.** "Curate manually"
   implies revising canon over time; the supersede/version semantics for a curated
   drawer (vs append-only chat drawers) are sketched here, not designed. Worth a
   follow-up once the partition surface exists.
