@@ -2312,6 +2312,23 @@ def cmd_mined(args):
     print(f"{'=' * 55}\n")
 
 
+def _count_of(value) -> int:
+    """Coerce a wing/room count from ``/status/fast`` into an int.
+
+    The daemon normally returns ``{name: int}``, but a future or
+    misbehaving daemon could nest ``{name: {"total": int}}`` or hand back
+    a non-numeric value entirely. Accept the int and the ``{"total": ...}``
+    shapes; anything else (string, list, None) counts as 0 rather than
+    crashing the whole dashboard with an AttributeError.
+    """
+    if isinstance(value, int):
+        return value
+    if isinstance(value, dict):
+        total = value.get("total", 0)
+        return total if isinstance(total, int) else 0
+    return 0
+
+
 def _stats_bar(count: int, total: int, width: int = 24) -> str:
     """Render a horizontal bar proportional to ``count`` against ``total``.
 
@@ -2382,7 +2399,7 @@ def _print_stats_dashboard(bundle: dict, top: int) -> None:
     print(f"  {'-' * 56}")
     if isinstance(wings, dict) and wings:
         items = sorted(
-            ((w, c if isinstance(c, int) else (c or {}).get("total", 0)) for w, c in wings.items()),
+            ((w, _count_of(c)) for w, c in wings.items()),
             key=lambda kv: kv[1],
             reverse=True,
         )
@@ -2410,7 +2427,7 @@ def _print_stats_dashboard(bundle: dict, top: int) -> None:
     print(f"  {'-' * 56}")
     if isinstance(rooms, dict) and rooms:
         room_items = sorted(
-            ((r, c if isinstance(c, int) else (c or {}).get("total", 0)) for r, c in rooms.items()),
+            ((r, _count_of(c)) for r, c in rooms.items()),
             key=lambda kv: kv[1],
             reverse=True,
         )

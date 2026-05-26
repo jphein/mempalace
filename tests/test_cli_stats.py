@@ -165,6 +165,45 @@ class TestCmdStatsDaemon:
         assert "references" in out and "25" in out
         assert "discoveries" in out and "17" in out
 
+    def test_rooms_section_survives_non_int_count(self, capsys):
+        """A daemon returning a string (or other non-int/non-dict) wing/room
+        count must not crash the dashboard — ``_count_of`` floors it to 0
+        instead of raising AttributeError on ``(c or {}).get(...)``."""
+        from mempalace import cli
+
+        responses = {
+            "mempalace_status": {
+                "total_drawers": 25,
+                "wings": {"projects": "lots"},
+                "rooms": {"references": 25, "discoveries": "n/a", "planning": None},
+            },
+            "mempalace_kg_stats": {
+                "entities": 0,
+                "triples": 0,
+                "current_facts": 0,
+                "expired_facts": 0,
+                "relationship_types": [],
+            },
+            "mempalace_graph_stats": {
+                "total_rooms": 0,
+                "tunnel_rooms": 0,
+                "total_edges": 0,
+                "rooms_per_wing": {},
+                "top_tunnels": [],
+            },
+        }
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_dispatcher(responses)):
+                cli.cmd_stats(self._args())  # must not raise
+
+        out = capsys.readouterr().out
+        assert "ROOMS" in out
+        assert "references" in out and "25" in out
+        # The non-int counts floor to 0 and still render their labels.
+        assert "discoveries" in out and "planning" in out
+
     def test_rooms_section_handles_missing_rooms(self, capsys):
         """An older daemon that omits ``rooms`` must not crash the render —
         the section shows "(no rooms)" instead."""
