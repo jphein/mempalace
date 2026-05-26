@@ -155,9 +155,7 @@ def test_parse_json_blob_brackets_inside_strings():
     """Bracket-counting scanner must respect string literals so a ``[``
     inside a string doesn't unbalance the count.
     """
-    raw = (
-        'Here you go: [{"subject": "a", "predicate": "uses_tag", "object": "[draft]"}]'
-    )
+    raw = 'Here you go: [{"subject": "a", "predicate": "uses_tag", "object": "[draft]"}]'
     out = _parse_json_blob(raw)
     assert out == [{"subject": "a", "predicate": "uses_tag", "object": "[draft]"}]
 
