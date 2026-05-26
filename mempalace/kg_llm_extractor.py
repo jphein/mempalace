@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
@@ -105,7 +104,40 @@ def _truncate(text: str, limit: int = TEXT_TAIL_LIMIT) -> str:
     return text[-limit:]
 
 
-_JSON_ARRAY_PATTERN = re.compile(r"\[\s*\{.*?\}\s*(?:,\s*\{.*?\}\s*)*\]", re.DOTALL)
+def _scan_balanced_array(s: str) -> Optional[str]:
+    """Return the first balanced ``[...]`` substring, respecting JSON strings.
+
+    Linear scan, no regex backtracking. Used when the model leaks prose
+    around its JSON output and a strict ``json.loads`` fails. The previous
+    regex (``\\[\\s*\\{.*?\\}...\\]`` with re.DOTALL) had catastrophic
+    backtracking on long, malformed inputs and could freeze the async
+    event loop for seconds at a time.
+    """
+    start = s.find("[")
+    if start < 0:
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(s)):
+        c = s[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_string = False
+            continue
+        if c == '"':
+            in_string = True
+        elif c == "[":
+            depth += 1
+        elif c == "]":
+            depth -= 1
+            if depth == 0:
+                return s[start : i + 1]
+    return None
 
 
 def _parse_json_blob(raw: str) -> list[dict]:
@@ -114,8 +146,8 @@ def _parse_json_blob(raw: str) -> list[dict]:
     Strategy:
     1. Strict ``json.loads`` — works when ``response_format=json_object``
        returns a clean ``{"triples": [...]}`` or bare JSON array.
-    2. Regex scan for ``[{...}, {...}]`` substring — handles cases where
-       the model leaks prose before/after the JSON.
+    2. Linear bracket-counting scan for the outer ``[...]`` — handles
+       cases where the model leaks prose before/after the JSON.
 
     Returns ``[]`` rather than raising so the worker can record a
     completion (with zero triples) instead of re-queueing forever.
@@ -126,14 +158,14 @@ def _parse_json_blob(raw: str) -> list[dict]:
     try:
         parsed = json.loads(raw_stripped)
     except (json.JSONDecodeError, ValueError):
-        match = _JSON_ARRAY_PATTERN.search(raw_stripped)
-        if not match:
+        candidate = _scan_balanced_array(raw_stripped)
+        if candidate is None:
             logger.debug("no JSON array found in LLM response: %r", raw_stripped[:200])
             return []
         try:
-            parsed = json.loads(match.group(0))
+            parsed = json.loads(candidate)
         except (json.JSONDecodeError, ValueError) as e:
-            logger.debug("regex-extracted JSON failed to parse: %s", e)
+            logger.debug("scanned JSON failed to parse: %s", e)
             return []
 
     if isinstance(parsed, dict):
