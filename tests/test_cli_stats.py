@@ -128,6 +128,152 @@ class TestCmdStatsDaemon:
         # Tags section should be hidden by default.
         assert "TAGS" not in out
 
+    def test_renders_rooms_section(self, capsys):
+        """Rooms ride along in /status/fast, so the breakdown renders by
+        default with no extra daemon call (#191)."""
+        from mempalace import cli
+
+        responses = {
+            "mempalace_status": {
+                "total_drawers": 42,
+                "wings": {"projects": 30, "sessions": 12},
+                "rooms": {"references": 25, "discoveries": 17},
+            },
+            "mempalace_kg_stats": {
+                "entities": 0,
+                "triples": 0,
+                "current_facts": 0,
+                "expired_facts": 0,
+                "relationship_types": [],
+            },
+            "mempalace_graph_stats": {
+                "total_rooms": 0,
+                "tunnel_rooms": 0,
+                "total_edges": 0,
+                "rooms_per_wing": {},
+                "top_tunnels": [],
+            },
+        }
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_dispatcher(responses)):
+                cli.cmd_stats(self._args())
+
+        out = capsys.readouterr().out
+        assert "ROOMS" in out
+        assert "references" in out and "25" in out
+        assert "discoveries" in out and "17" in out
+
+    def test_rooms_section_survives_non_int_count(self, capsys):
+        """A daemon returning a string (or other non-int/non-dict) wing/room
+        count must not crash the dashboard — ``_count_of`` floors it to 0
+        instead of raising AttributeError on ``(c or {}).get(...)``."""
+        from mempalace import cli
+
+        responses = {
+            "mempalace_status": {
+                "total_drawers": 25,
+                "wings": {"projects": "lots"},
+                "rooms": {"references": 25, "discoveries": "n/a", "planning": None},
+            },
+            "mempalace_kg_stats": {
+                "entities": 0,
+                "triples": 0,
+                "current_facts": 0,
+                "expired_facts": 0,
+                "relationship_types": [],
+            },
+            "mempalace_graph_stats": {
+                "total_rooms": 0,
+                "tunnel_rooms": 0,
+                "total_edges": 0,
+                "rooms_per_wing": {},
+                "top_tunnels": [],
+            },
+        }
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_dispatcher(responses)):
+                cli.cmd_stats(self._args())  # must not raise
+
+        out = capsys.readouterr().out
+        assert "ROOMS" in out
+        assert "references" in out and "25" in out
+        # The non-int counts floor to 0 and still render their labels.
+        assert "discoveries" in out and "planning" in out
+
+    def test_rooms_section_handles_missing_rooms(self, capsys):
+        """An older daemon that omits ``rooms`` must not crash the render —
+        the section shows "(no rooms)" instead."""
+        from mempalace import cli
+
+        responses = {
+            "mempalace_status": {"total_drawers": 5, "wings": {"projects": 5}},
+            "mempalace_kg_stats": {
+                "entities": 0,
+                "triples": 0,
+                "current_facts": 0,
+                "expired_facts": 0,
+                "relationship_types": [],
+            },
+            "mempalace_graph_stats": {
+                "total_rooms": 0,
+                "tunnel_rooms": 0,
+                "total_edges": 0,
+                "rooms_per_wing": {},
+                "top_tunnels": [],
+            },
+        }
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_dispatcher(responses)):
+                cli.cmd_stats(self._args())
+
+        out = capsys.readouterr().out
+        assert "ROOMS" in out
+        assert "(no rooms)" in out
+
+    def test_top_truncates_rooms(self, capsys):
+        """``--top N`` caps the rooms section too, with a "more rooms"
+        tail; ``--top 0`` shows all (covered separately for wings)."""
+        from mempalace import cli
+
+        rooms = {f"room{i:02}": (30 - i) for i in range(15)}
+        responses = {
+            "mempalace_status": {
+                "total_drawers": sum(rooms.values()),
+                "wings": {"projects": sum(rooms.values())},
+                "rooms": rooms,
+            },
+            "mempalace_kg_stats": {
+                "entities": 0,
+                "triples": 0,
+                "current_facts": 0,
+                "expired_facts": 0,
+                "relationship_types": [],
+            },
+            "mempalace_graph_stats": {
+                "total_rooms": 0,
+                "tunnel_rooms": 0,
+                "total_edges": 0,
+                "rooms_per_wing": {},
+                "top_tunnels": [],
+            },
+        }
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=_make_dispatcher(responses)):
+                cli.cmd_stats(self._args(top=3))
+
+        out = capsys.readouterr().out
+        assert "ROOMS" in out
+        # Top 3 by count are room00, room01, room02.
+        assert "room00" in out and "room02" in out
+        assert "more rooms" in out
+
     def test_includes_tags_section_when_flag_set(self, capsys):
         from mempalace import cli
 
@@ -167,7 +313,11 @@ class TestCmdStatsDaemon:
         from mempalace import cli
 
         responses = {
-            "mempalace_status": {"total_drawers": 9, "wings": {"projects": 9}},
+            "mempalace_status": {
+                "total_drawers": 9,
+                "wings": {"projects": 9},
+                "rooms": {"references": 6, "planning": 3},
+            },
             "mempalace_kg_stats": {
                 "entities": 1,
                 "triples": 1,
@@ -193,6 +343,7 @@ class TestCmdStatsDaemon:
         payload = json.loads(out)
         assert payload["total_drawers"] == 9
         assert payload["wings"] == {"projects": 9}
+        assert payload["rooms"] == {"references": 6, "planning": 3}
         assert payload["kg"]["entities"] == 1
         assert payload["graph"]["total_rooms"] == 1
         # Tags omitted when --tags wasn't passed.

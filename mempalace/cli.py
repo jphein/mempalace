@@ -2312,6 +2312,23 @@ def cmd_mined(args):
     print(f"{'=' * 55}\n")
 
 
+def _count_of(value) -> int:
+    """Coerce a wing/room count from ``/status/fast`` into an int.
+
+    The daemon normally returns ``{name: int}``, but a future or
+    misbehaving daemon could nest ``{name: {"total": int}}`` or hand back
+    a non-numeric value entirely. Accept the int and the ``{"total": ...}``
+    shapes; anything else (string, list, None) counts as 0 rather than
+    crashing the whole dashboard with an AttributeError.
+    """
+    if isinstance(value, int):
+        return value
+    if isinstance(value, dict):
+        total = value.get("total", 0)
+        return total if isinstance(total, int) else 0
+    return 0
+
+
 def _stats_bar(count: int, total: int, width: int = 24) -> str:
     """Render a horizontal bar proportional to ``count`` against ``total``.
 
@@ -2382,7 +2399,7 @@ def _print_stats_dashboard(bundle: dict, top: int) -> None:
     print(f"  {'-' * 56}")
     if isinstance(wings, dict) and wings:
         items = sorted(
-            ((w, c if isinstance(c, int) else (c or {}).get("total", 0)) for w, c in wings.items()),
+            ((w, _count_of(c)) for w, c in wings.items()),
             key=lambda kv: kv[1],
             reverse=True,
         )
@@ -2399,6 +2416,34 @@ def _print_stats_dashboard(bundle: dict, top: int) -> None:
         print(f"    (status error: {status.get('error')})")
     else:
         print("    (no wings)")
+    print()
+
+    # Rooms ride along in the same /status/fast payload as wings, so the
+    # breakdown is free — no extra daemon call. The issue (#191) asks for
+    # "drawer count by wing/room"; wings answer "which domains", rooms
+    # answer "which kinds of memory" (the canonical 7-room taxonomy).
+    rooms = status.get("rooms") or {}
+    print("  ROOMS")
+    print(f"  {'-' * 56}")
+    if isinstance(rooms, dict) and rooms:
+        room_items = sorted(
+            ((r, _count_of(c)) for r, c in rooms.items()),
+            key=lambda kv: kv[1],
+            reverse=True,
+        )
+        room_max = room_items[0][1] if room_items else 0
+        room_shown = room_items[:top] if top else room_items
+        for room, count in room_shown:
+            bar = _stats_bar(count, room_max)
+            print(f"    {room:<28} {count:>7}  {bar}")
+        room_remaining = len(room_items) - len(room_shown)
+        if room_remaining > 0:
+            tail = sum(c for _, c in room_items[len(room_shown) :])
+            print(f"    ... {room_remaining} more rooms ({tail} drawers; --top 0 shows all)")
+    elif "error" in status:
+        print(f"    (status error: {status.get('error')})")
+    else:
+        print("    (no rooms)")
     print()
 
     kg = bundle.get("kg") or {}
@@ -2510,6 +2555,7 @@ def cmd_stats(args):
         payload = {
             "total_drawers": (bundle.get("status") or {}).get("total_drawers", 0),
             "wings": (bundle.get("status") or {}).get("wings") or {},
+            "rooms": (bundle.get("status") or {}).get("rooms") or {},
             "kg": bundle.get("kg") or {},
             "graph": bundle.get("graph") or {},
         }
@@ -3556,7 +3602,7 @@ def main():
     # stats — palace analytics dashboard (#191)
     p_stats = sub.add_parser(
         "stats",
-        help="Palace analytics dashboard (wings, knowledge graph, tunnels, tags)",
+        help="Palace analytics dashboard (wings, rooms, knowledge graph, tunnels, tags)",
     )
     p_stats.add_argument(
         "--top",
