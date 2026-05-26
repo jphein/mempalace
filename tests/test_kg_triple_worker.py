@@ -994,7 +994,20 @@ def test_streaming_consumer_count_equals_max_concurrency():
         triples_per[did] = [{"subject": f"E{i}", "predicate": "rel", "object": f"F{i}"}]
 
     kg = _FakeKG()
-    barrier = asyncio.Barrier(N)
+
+    class _AsyncBarrier:
+        def __init__(self, parties: int) -> None:
+            self._parties = parties
+            self._count = 0
+            self._event = asyncio.Event()
+
+        async def wait(self) -> None:
+            self._count += 1
+            if self._count >= self._parties:
+                self._event.set()
+            await self._event.wait()
+
+    barrier = _AsyncBarrier(N)
 
     class _BarrierClient(_FakeHTTPClient):
         async def post(self, url, *, json, timeout=60.0):
