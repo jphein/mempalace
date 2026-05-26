@@ -75,6 +75,18 @@ def reset_adapters() -> None
 
 Close and drop all cached adapter instances (primarily for tests).
 
+### `reset_discovery`
+
+```python
+def reset_discovery() -> None
+```
+
+Force the next ``available_adapters()`` call to re-scan entry points.
+
+Tests that ``unregister`` entry-point-discovered adapters must call
+this — otherwise the cached ``_discovered=True`` flag suppresses
+rediscovery and ``available_adapters()`` permanently returns ``[]``.
+
 ### `resolve_adapter_for_source`
 
 ```python
