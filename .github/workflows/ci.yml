@@ -79,11 +79,23 @@ jobs:
       - run: ruff check .
       - run: ruff format --check .
 
+  # Postgres-backed tests run against `apache/age:release_PG16_1.6.0`, the
+  # same image production (`mempalace-db` on familiar) is built on. The AGE
+  # image is just `postgres:16` with the AGE extension compiled in, so we
+  # apt-install `postgresql-16-pgvector` into the running service container
+  # at job start. That matches the substrate documented in
+  # `tests/test_backends_postgres.py`. The integration suite
+  # `tests/test_knowledge_graph_age.py` was previously silently skipping
+  # on the `pgvector/pgvector:pg16` image (no AGE) because every test in
+  # that file gates on `TEST_POSTGRES_DSN`; promoting the image to AGE
+  # lets the KG-AGE integration tests actually exercise. The unit suite
+  # `tests/test_age_kg_units.py` is DSN-free and already covered by
+  # `test-linux`, so we don't repeat it here.
   test-postgres:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: pgvector/pgvector:pg16
+        image: apache/age:release_PG16_1.6.0
         env:
           POSTGRES_PASSWORD: postgres
           POSTGRES_DB: mempalace_test
@@ -101,7 +113,19 @@ jobs:
           python-version: "3.11"
           cache: 'pip'
       - run: pip install -e ".[dev,postgres]"
-      - name: Create pgvector extension
+      - name: Install pgvector into AGE service container
+        # The apache/age image ships AGE but not pgvector. The production
+        # substrate apt-installs `postgresql-16-pgvector` on top; mirror
+        # that here by exec-ing into the running service container.
+        env:
+          PG_CONTAINER: ${{ job.services.postgres.id }}
+        run: |
+          docker exec "$PG_CONTAINER" bash -c '
+            set -e
+            apt-get update -qq
+            apt-get install -y --no-install-recommends postgresql-16-pgvector
+          '
+      - name: Create vector + age extensions
         env:
           PGURL: postgresql://postgres:postgres@localhost:5432/mempalace_test
         run: |
@@ -109,13 +133,19 @@ jobs:
           import os, psycopg
           conn = psycopg.connect(os.environ["PGURL"])
           conn.autocommit = True
-          conn.cursor().execute("CREATE EXTENSION IF NOT EXISTS vector")
-          print("vector extension ready")
+          cur = conn.cursor()
+          cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
+          cur.execute("CREATE EXTENSION IF NOT EXISTS age")
+          print("vector + age extensions ready")
           PY
-      - name: Run postgres backend tests
+      - name: Run postgres-backed tests (backends + AGE knowledge graph)
         env:
           TEST_POSTGRES_DSN: postgresql://postgres:postgres@localhost:5432/mempalace_test
-        run: python -m pytest tests/test_backends_postgres.py -v --cov=mempalace --cov-report=xml --cov-report=term-missing --cov-fail-under=0
+        run: |
+          python -m pytest \
+            tests/test_backends_postgres.py \
+            tests/test_knowledge_graph_age.py \
+            -v --cov=mempalace --cov-report=xml --cov-report=term-missing --cov-fail-under=0
       - uses: actions/upload-artifact@v4
         with:
           name: coverage-postgres
