@@ -71,8 +71,7 @@ except ValueError:
     # A bad value (empty, float, "15m") must not crash module import — fall
     # back to the default, mirroring hook.py's PALACE_MCP_TIMEOUT handling.
     logger.warning(
-        "MEMPALACE_KG_CLAIM_LEASE_SECONDS is not an integer; "
-        "falling back to default %ds",
+        "MEMPALACE_KG_CLAIM_LEASE_SECONDS is not an integer; falling back to default %ds",
         DEFAULT_CLAIM_LEASE_SECONDS,
     )
     CLAIM_LEASE_SECONDS = DEFAULT_CLAIM_LEASE_SECONDS
