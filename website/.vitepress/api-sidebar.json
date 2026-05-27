@@ -196,6 +196,10 @@
         "link": "/reference/python-api/ratings"
       },
       {
+        "text": "mempalace.recency",
+        "link": "/reference/python-api/recency"
+      },
+      {
         "text": "mempalace.repair",
         "link": "/reference/python-api/repair"
       },
