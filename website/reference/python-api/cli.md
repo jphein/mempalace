@@ -81,6 +81,18 @@ Prune drawers whose source files are gitignored, deleted, or moved (#1252).
 def cmd_search(args)
 ```
 
+### `cmd_list`
+
+```python
+def cmd_list(args)
+```
+
+Fast direct-to-daemon drawer browser (issue #191).
+
+Pure metadata listing — wraps ``GET /list?wing=&room=&limit=&offset=``
+on the palace daemon. Output formats: ``table`` (default), ``compact``,
+``full``, ``json``. Daemon unreachable → stderr error + exit 1.
+
 ### `cmd_wakeup`
 
 ```python

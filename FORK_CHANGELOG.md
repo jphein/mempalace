@@ -24,6 +24,41 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **mempalace list — fast direct-to-daemon drawer browser (#191)** ([`257137b`](https://github.com/techempower-org/mempalace/commit/257137b))
+  A new ``mempalace list`` subcommand that wraps the palace daemon's
+  ``GET /list`` REST endpoint (which itself wraps the existing
+  ``mempalace_list_drawers`` MCP tool). Pure metadata browse — no
+  ranking, no embedding, no exclusion. Recall-preserving by design:
+  every drawer matching the optional ``--wing`` / ``--room`` filter
+  is reachable via ``--offset``, and no drawer is dropped.
+
+  This is the human/script counterpart to ``mempalace_list_drawers``;
+  the AI path continues to use that MCP tool. **No new MCP tool is
+  added** — the CLI just bridges agents and operators to the same
+  underlying listing.
+
+  Flags: ``--wing W`` / ``--room R`` (metadata filters), ``--limit N``
+  (default 20, sanity-capped at 1000), ``--offset N`` (pagination),
+  ``--format table|compact|full|json``. ``table`` is the default
+  multi-line preview view; ``compact`` is one line per drawer for
+  pipelines; ``full`` is labelled sections with no truncation;
+  ``json`` mirrors the upstream tool shape.
+
+  Daemon-unreachable (``DaemonError`` or ``_call_daemon_rest``
+  returning ``None``) prints a stderr hint and exits 1, matching the
+  cmd_status fallback and the graceful 401/403 handling added in
+  850e08c. With ``--format json`` the failure surfaces as a
+  structured envelope on stdout. An ``error`` payload from the
+  daemon (e.g. ``palace_unavailable``) exits 2 to match the
+  cmd_status contract.
+
+  Slice of the polished-CLI umbrella issue #191. Read-only, safe
+  during backfill.
+
+  *Tests:* 18 — tests/test_cli_list.py (flag propagation, four formats, daemon-down fallback)
+  *Files:* `mempalace/cli.py`, `tests/test_cli_list.py`
+
+
 - **Recency decay weighting in search + mempalace prune --stale-days CLI (#158)** ([`558d327`](https://github.com/techempower-org/mempalace/commit/558d327))
   Two derivative-store extensions that sit *next to* the verbatim record,
   neither of which touches stored content.
