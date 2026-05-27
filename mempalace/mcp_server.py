@@ -375,8 +375,11 @@ def _force_chroma_cache_reset() -> None:
         from .palace import get_backend
 
         chroma_backend = get_backend("chroma")
-        chroma_backend._clients.pop(_config.palace_path, None)
-        chroma_backend._freshness.pop(_config.palace_path, None)
+        # Route eviction through close_palace() so chromadb's rust-side
+        # SQLite file lock is released deterministically via
+        # PersistentClient.close(); bare _clients.pop() leaves the lock
+        # held until GC reaps the orphaned client (#262).
+        chroma_backend.close_palace(_config.palace_path)
     except Exception:
         pass
 
