@@ -93,6 +93,23 @@ Pure metadata listing — wraps ``GET /list?wing=&room=&limit=&offset=``
 on the palace daemon. Output formats: ``table`` (default), ``compact``,
 ``full``, ``json``. Daemon unreachable → stderr error + exit 1.
 
+### `cmd_move`
+
+```python
+def cmd_move(args)
+```
+
+Fast direct-to-daemon single-drawer relocation (issue #191).
+
+Wraps ``PATCH /memory/&#123;drawer_id}`` with a body carrying only the
+supplied ``wing`` / ``room`` keys. At least one is required — an empty
+PATCH is an ambiguous no-op the daemon would 400, so we refuse it
+client-side with a clear message. No ``--content`` flag exists by
+design: verbatim-always means the human CLI never edits drawer text.
+Daemon unreachable / 404 / 401 / 403 → exit 1 (sibling parity with
+cmd_list / cmd_graph / cmd_cypher / cmd_stats); inner-error envelope
+(daemon reachable but the move failed) → exit 2.
+
 ### `cmd_graph`
 
 ```python

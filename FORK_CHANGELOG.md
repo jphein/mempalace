@@ -24,6 +24,46 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191)** ([`d007b6f`](https://github.com/techempower-org/mempalace/commit/d007b6f))
+  ``mempalace move <drawer_id> --wing W --room R`` relocates a
+  single drawer to a different wing/room. It is the single-drawer
+  complement to the existing bulk ``rename-wing``, and the next
+  slice of the polished-CLI work after the analytics quartet
+  (list / graph / cypher / stats).
+
+  The command wraps the daemon's ``PATCH /memory/{drawer_id}``
+  route — one network hop, no AGE locks. It sends only the
+  supplied ``wing`` / ``room`` keys; at least one is required. An
+  empty PATCH is an ambiguous no-op the daemon would reject with a
+  400, so ``move`` refuses it client-side (exit 2) and sends no
+  request at all.
+
+  There is deliberately **no ``--content`` flag**, even though the
+  daemon route accepts content edits. The fork's verbatim-always
+  principle forbids the human CLI from ever mutating stored drawer
+  text — ``move`` relocates metadata only. The parser rejects
+  ``--content`` outright, and a test guards that contract.
+
+  Output mirrors the sibling fast-daemon commands:
+  ``--format=table`` (default) prints an old→new confirmation
+  (unchanged fields are marked ``(unchanged)`` since the daemon's
+  update response carries only the new values, and there's no
+  cheap single-drawer GET route to read the prior ones);
+  ``--json`` / ``--format=json`` passes the daemon envelope
+  through unchanged. The X-API-Key header is sent the same way as
+  the other REST commands.
+
+  Failure modes match the
+  ``cmd_list``/``cmd_graph``/``cmd_cypher``/``cmd_stats`` family:
+  daemon unreachable / 404 / 401 / 403 → exit 1; an inner-error
+  envelope (``success=False`` — drawer not found or a
+  sanitize/validation failure) → exit 2; a missing
+  ``PALACE_DAEMON_URL`` → exit 2.
+
+  *Tests:* 24 — tests/test_cli_move.py (flag propagation for --wing/--room/both, drawer_id in URL path, table+json output, missing-both-flags refusal without PATCH, daemon-down across unreachable/404/401/403/inner-error, parser acceptance incl. rejection of --content)
+  *Files:* `mempalace/cli.py`, `tests/test_cli_move.py`
+
+
 - **mempalace cypher — read-only Cypher query CLI (#191)** ([`32a41b1`](https://github.com/techempower-org/mempalace/commit/32a41b1))
   A new ``mempalace cypher`` subcommand — the arbitrary-walk escape
   hatch that composes with the snapshot view shipped in
