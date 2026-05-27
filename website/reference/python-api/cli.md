@@ -108,6 +108,24 @@ Output formats: ``table`` (default summary), ``full`` (every wing,
 every sampled triple, no truncation), ``json`` (pass-through shape).
 Daemon unreachable → stderr error + exit 1; inner-error payload → exit 2.
 
+### `cmd_cypher`
+
+```python
+def cmd_cypher(args)
+```
+
+Run a read-only Cypher query against the AGE knowledge graph (issue #191).
+
+Wraps the daemon's ``POST /cypher``, which executes inside a
+``READ ONLY`` postgres transaction (write verbs fail with HTTP 403,
+SQLSTATE 25006). Output formats: ``table`` (aligned columns),
+``json`` (pass-through), ``csv`` (pipe-friendly). The optional
+``--limit`` is advisory — the daemon's own statement_timeout is the
+real ceiling.
+
+Daemon unreachable → stderr error + exit 1; 403 read-only write
+attempt → friendly hint + exit 2; inner-error payload → exit 2.
+
 ### `cmd_wakeup`
 
 ```python

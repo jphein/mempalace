@@ -2062,6 +2062,262 @@ def cmd_graph(args):
         _print_graph_table(data)
 
 
+# ── mempalace cypher (issue #191) ─────────────────────────────────────
+#
+# Read-only Cypher query CLI: wraps the daemon's ``POST /cypher``
+# endpoint, which executes arbitrary Cypher against the AGE knowledge
+# graph inside a ``READ ONLY`` postgres transaction. Write verbs
+# (CREATE/MERGE/SET/DELETE/REMOVE) fail server-side with SQLSTATE 25006
+# → HTTP 403. We trust the server enforcement instead of blocklisting
+# client-side: simpler, can't drift from the daemon's policy, and the
+# spec is explicit (see PR #228 for the statement_timeout side of the
+# safety story).
+#
+# Composes with ``mempalace graph`` (pre-aggregated snapshot) — cypher
+# is the arbitrary-walk escape hatch when the snapshot isn't enough.
+
+
+_CYPHER_DEFAULT_GRAPH = "mempalace_kg"
+
+
+def _post_cypher(body: dict) -> tuple[dict | None, int | None]:
+    """POST to ``/cypher`` and classify the HTTP status.
+
+    Returns ``(data, status_code)`` where ``status_code`` is the HTTP
+    status on a non-2xx response and ``None`` on success. We classify
+    rather than just raising ``DaemonError`` because the spec needs to
+    distinguish 403 (read-only enforcement) from 401/404 (auth / older
+    daemon) so the CLI can emit a friendly "rewrite as MATCH/RETURN"
+    hint on write attempts. Network failures still raise ``DaemonError``.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = f"{_daemon_url()}/cypher"
+    headers = {"content-type": "application/json"}
+    api_key = os.environ.get("PALACE_API_KEY", "").strip()
+    if api_key:
+        headers["x-api-key"] = api_key
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_daemon_timeout()) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace")), None
+    except urllib.error.HTTPError as e:
+        return None, e.code
+    except (urllib.error.URLError, ConnectionError, OSError) as e:
+        raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
+
+
+def _resolve_cypher_format(args) -> str:
+    """``--format`` wins, then ``--json`` shorthand, default ``table``.
+
+    Same precedence shape as ``_resolve_graph_format`` / ``_resolve_search_format``.
+    """
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def _extract_cypher_rows(data: dict) -> list[dict]:
+    """Pull rows out of the daemon's /cypher envelope.
+
+    The daemon parses RETURN aliases out of the Cypher source and ships
+    back ``{"rows": [{...}, ...]}`` (plus optional metadata). Defensive
+    against future shape drift: accept top-level ``rows`` or ``data``.
+    """
+    rows = data.get("rows")
+    if rows is None:
+        rows = data.get("data") or []
+    return rows if isinstance(rows, list) else []
+
+
+def _print_cypher_table(rows: list[dict]) -> None:
+    """Aligned-column table: one row per Cypher result row."""
+    if not rows:
+        print("\n  No rows.\n")
+        return
+
+    # Stable column order: union of all keys, preserving first-seen order.
+    columns: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                columns.append(key)
+                seen.add(key)
+
+    def _cell(v) -> str:
+        if v is None:
+            return ""
+        if isinstance(v, (dict, list)):
+            return json.dumps(v, ensure_ascii=False)
+        return str(v)
+
+    widths = {c: len(c) for c in columns}
+    str_rows: list[dict] = []
+    for row in rows:
+        str_row = {c: _cell(row.get(c)) for c in columns}
+        for c in columns:
+            widths[c] = max(widths[c], len(str_row[c]))
+        str_rows.append(str_row)
+
+    header = "  " + "  ".join(c.ljust(widths[c]) for c in columns)
+    sep = "  " + "  ".join("─" * widths[c] for c in columns)
+    print()
+    print(header)
+    print(sep)
+    for r in str_rows:
+        print("  " + "  ".join(r[c].ljust(widths[c]) for c in columns))
+    print(f"\n  {len(rows)} row{'s' if len(rows) != 1 else ''}.\n")
+
+
+def _print_cypher_csv(rows: list[dict]) -> None:
+    """CSV to stdout — pipe-friendly, no header decoration."""
+    import csv
+
+    if not rows:
+        return
+
+    columns: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        for key in row.keys():
+            if key not in seen:
+                columns.append(key)
+                seen.add(key)
+
+    writer = csv.DictWriter(sys.stdout, fieldnames=columns, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        flat = {}
+        for c in columns:
+            v = row.get(c)
+            if isinstance(v, (dict, list)):
+                flat[c] = json.dumps(v, ensure_ascii=False)
+            else:
+                flat[c] = "" if v is None else v
+        writer.writerow(flat)
+
+
+def cmd_cypher(args):
+    """Run a read-only Cypher query against the AGE knowledge graph (issue #191).
+
+    Wraps the daemon's ``POST /cypher``, which executes inside a
+    ``READ ONLY`` postgres transaction (write verbs fail with HTTP 403,
+    SQLSTATE 25006). Output formats: ``table`` (aligned columns),
+    ``json`` (pass-through), ``csv`` (pipe-friendly). The optional
+    ``--limit`` is advisory — the daemon's own statement_timeout is the
+    real ceiling.
+
+    Daemon unreachable → stderr error + exit 1; 403 read-only write
+    attempt → friendly hint + exit 2; inner-error payload → exit 2.
+    """
+    fmt = _resolve_cypher_format(args)
+    want_json = fmt == "json"
+
+    query = getattr(args, "query", "")
+    if not query or not str(query).strip():
+        if want_json:
+            _emit_json({"error": "missing required positional QUERY", "source": "cli"})
+        else:
+            print("error: missing required positional QUERY", file=sys.stderr)
+        sys.exit(2)
+
+    graph = getattr(args, "graph", None) or _CYPHER_DEFAULT_GRAPH
+    body: dict = {"cypher": str(query), "graph": str(graph)}
+
+    try:
+        data, status = _post_cypher(body)
+    except DaemonError as e:
+        # Match cmd_graph / cmd_list daemon-down fallback. JSON callers
+        # get a structured error on stdout; humans get the standard
+        # "daemon unreachable" line on stderr.
+        if want_json:
+            _emit_json({"error": str(e), "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({e})",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if status == 403:
+        # Server-enforced read-only: SQLSTATE 25006 surfaces as HTTP 403.
+        # Don't dump traceback noise — give the operator a one-line hint
+        # that maps to the next action.
+        hint = (
+            "daemon /cypher returned 403 — this endpoint is read-only; "
+            "rewrite as MATCH / RETURN, or use the mempalace_kg_* MCP tools to mutate"
+        )
+        if want_json:
+            _emit_json({"error": hint, "source": "daemon", "status": 403})
+        else:
+            print(hint, file=sys.stderr)
+        sys.exit(2)
+
+    if status is not None:
+        # 401/404/503 etc — endpoint missing on an older daemon, auth
+        # mismatch, or non-postgres backend. Treat the same as
+        # unreachable so scripts get one failure shape.
+        if want_json:
+            _emit_json(
+                {
+                    "error": f"daemon /cypher returned {status}",
+                    "source": "daemon",
+                    "status": status,
+                }
+            )
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"/cypher returned {status} (see mempalace status for diagnostics)",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    # Daemon may surface an inner error envelope — match cmd_graph's exit-2.
+    if data is not None and "error" in data and "rows" not in data and "data" not in data:
+        if want_json:
+            _emit_json(data)
+        else:
+            print(f"\n  {data['error']}", file=sys.stderr)
+        sys.exit(2)
+
+    rows = _extract_cypher_rows(data or {})
+
+    if want_json:
+        # Stable top-level shape — pass through the daemon envelope so
+        # scripts can rely on it. Defaults make missing keys explicit.
+        out = {
+            "rows": rows,
+            "count": len(rows),
+            "graph": graph,
+        }
+        # Surface any extra metadata the daemon adds without crowding it
+        # into "rows" — e.g. elapsed_ms, warnings.
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if k not in ("rows", "data", "count", "graph"):
+                    out[k] = v
+        _emit_json(out)
+        return
+
+    if fmt == "csv":
+        _print_cypher_csv(rows)
+        return
+
+    _print_cypher_table(rows)
+
+
 def cmd_wakeup(args):
     """Show L0 (identity) + L1 (essential story) — the wake-up context."""
     from .layers import MemoryStack
@@ -3937,6 +4193,40 @@ def main():
         ),
     )
 
+    # cypher — read-only Cypher query against the AGE knowledge graph
+    p_cypher = sub.add_parser(
+        "cypher",
+        help="Run a read-only Cypher query against the AGE knowledge graph",
+    )
+    p_cypher.add_argument(
+        "query",
+        help="Cypher query string (MATCH / RETURN; write verbs are server-rejected)",
+    )
+    p_cypher.add_argument(
+        "--graph",
+        default=_CYPHER_DEFAULT_GRAPH,
+        help=f"AGE graph name (default: {_CYPHER_DEFAULT_GRAPH})",
+    )
+    p_cypher.add_argument(
+        "--format",
+        choices=("table", "json", "csv"),
+        default=None,
+        help=(
+            "Output format: table (default, aligned columns), "
+            "json (pass-through daemon envelope; same as --json), "
+            "csv (pipe-friendly, no decoration)"
+        ),
+    )
+    p_cypher.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help=(
+            "Advisory cap. The daemon's statement_timeout (PR #228) is the real "
+            "ceiling — pass LIMIT in the query itself for a hard cutoff."
+        ),
+    )
+
     # compress
     p_compress = sub.add_parser(
         "compress", help="Compress drawers using AAAK Dialect (~30x reduction)"
@@ -4338,6 +4628,7 @@ def main():
         "search": cmd_search,
         "list": cmd_list,
         "graph": cmd_graph,
+        "cypher": cmd_cypher,
         "export": cmd_export,
         "sweep": cmd_sweep,
         "sync": cmd_sync,
