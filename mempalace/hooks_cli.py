@@ -1034,6 +1034,105 @@ def _wing_from_transcript_path(transcript_path: str) -> str:
     return "wing_sessions"
 
 
+# Sentinel returned by the cwd/transcript-path resolver when no unambiguous
+# signal was found. ``derive_wing`` treats this as "fall through to hints".
+_UNFILED_WING = "wing_sessions"
+
+
+def derive_wing(
+    transcript_path: str,
+    project_dir: Optional[str] = None,
+    entity_hint: Optional[str] = None,
+) -> str:
+    """Derive a wing from unambiguous signals, with entity as last-resort hint.
+
+    This is the formal derivation contract for #157. The priority order is:
+
+        1. cwd            (from the JSONL transcript — canonical)
+        2. transcript path (encoded .claude/projects folder / -Projects- segment)
+        3. project directory hint (explicit ``project_dir`` passed by the caller)
+        4. entity hint    (optional — only when 1-3 are all absent)
+        5. unfiled        (``wing_sessions``)
+
+    Signals 1 and 2 are resolved together by :func:`_wing_from_transcript_path`
+    (cwd first, then the encoded path). Signal 3 is the directory the caller
+    knows it is operating in, used when the transcript carries no usable path.
+
+    The entity hint (4) is a *hint, never a gate*: it is consulted only when
+    every unambiguous signal above is absent. A confident entity match can
+    never override a cwd/transcript/project-dir signal. This is the demotion
+    required by #157 — the entity detector informs, it does not classify.
+    """
+    # 1 + 2 — cwd and transcript path (canonical, unambiguous)
+    wing = _wing_from_transcript_path(transcript_path)
+    if wing != _UNFILED_WING:
+        return wing
+
+    # 3 — explicit project directory hint (unambiguous: the caller knows
+    #     which directory it is in even when the transcript path is unusable)
+    if project_dir:
+        leaf = Path(project_dir).expanduser().name.strip()
+        if leaf:
+            from mempalace.config import normalize_wing_name
+
+            return f"wing_{normalize_wing_name(leaf)}"
+
+    # 4 — entity hint (last resort only; never overrides 1-3)
+    if entity_hint:
+        from mempalace.config import normalize_wing_name
+
+        slug = normalize_wing_name(entity_hint.strip())
+        if slug:
+            return f"wing_{slug}"
+
+    # 5 — unfiled
+    return _UNFILED_WING
+
+
+def derive_room(
+    content: str = "",
+    room_hint: Optional[str] = None,
+    entity_hint: Optional[str] = None,
+) -> str:
+    """Derive a canonical room from unambiguous signals, entity as last resort.
+
+    Mirrors :func:`derive_wing`'s contract for the room axis (#157):
+
+        1. explicit room hint (caller-supplied canonical room — unambiguous)
+        2. keyword-derived room (content scored against canonical room rules)
+        3. entity hint    (optional — only when 1-2 yield nothing)
+        4. unfiled        (canonical default room)
+
+    As with the wing, the entity hint never gates: a keyword-derived room
+    always beats an entity guess. The room result is always one of the
+    canonical rooms (FK-safe), since both the keyword path and the default
+    come from :mod:`mempalace.convo_miner`'s canonical rule set.
+    """
+    from mempalace.convo_miner import DEFAULT_ROOM, detect_convo_room
+
+    # 1 — explicit canonical room hint
+    if room_hint and room_hint.strip():
+        return room_hint.strip()
+
+    # 2 — keyword-derived room (returns DEFAULT_ROOM when nothing scores)
+    if content:
+        room = detect_convo_room(content)
+        if room != DEFAULT_ROOM:
+            return room
+
+    # 3 — entity hint (last resort; only when no keyword signal landed)
+    if entity_hint and entity_hint.strip():
+        from mempalace.convo_miner import _load_room_rules
+
+        canonical = set(_load_room_rules().keys())
+        candidate = entity_hint.strip()
+        if candidate in canonical:
+            return candidate
+
+    # 4 — unfiled (canonical default)
+    return DEFAULT_ROOM
+
+
 def hook_stop(data: dict, harness: str):
     """Stop hook: block every N messages for auto-save."""
     if not _palace_root_exists():
