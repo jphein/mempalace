@@ -110,6 +110,22 @@ Daemon unreachable / 404 / 401 / 403 → exit 1 (sibling parity with
 cmd_list / cmd_graph / cmd_cypher / cmd_stats); inner-error envelope
 (daemon reachable but the move failed) → exit 2.
 
+### `cmd_bulk_move`
+
+```python
+def cmd_bulk_move(args)
+```
+
+Bulk drawer relocation by source wing/room (issue #191).
+
+The multi-drawer complement to ``move``. Selects drawers via
+``GET /list`` (offset-paginated) and PATCHes each match to the target
+wing/room. Dry-run by default; ``--apply`` mutates (TTY prompt unless
+``--yes``; refuses unattended without ``--yes``). Verbatim-always:
+metadata only, no ``--content`` flag. Daemon unreachable / 404 / 401 /
+403 during listing → exit 1; selection/target missing or any PATCH
+failure → exit 2.
+
 ### `cmd_graph`
 
 ```python

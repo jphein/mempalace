@@ -1973,6 +1973,314 @@ def _print_move_result(data, drawer_id, requested_wing=None, requested_room=None
     print()
 
 
+# ── mempalace bulk-move ───────────────────────────────────────────────
+#
+# Bulk metadata relocation: the multi-drawer complement to `move`. Selects
+# drawers by source wing/room (``GET /list`` with offset pagination) and
+# PATCHes each one independently to a target wing/room. Same verbatim-always
+# constraint as `move` — only metadata moves, never drawer text, so there
+# is no ``--content`` flag.
+#
+# The safety model is deliberately conservative because this mutates many
+# drawers at once:
+#   * a source filter (--wing and/or --room) is *required* — never operate
+#     on the whole palace by accident;
+#   * a target (--to-wing and/or --to-room) is required;
+#   * dry-run is the DEFAULT — you must pass --apply to mutate;
+#   * --apply prompts for confirmation on a TTY (skip with --yes) and
+#     *refuses* to run unattended (non-TTY without --yes) so a pipeline
+#     can't silently mass-mutate the palace;
+#   * one drawer's PATCH failing does not abort the batch — failures are
+#     collected and reported, exit 2 if any failed.
+
+
+def _resolve_bulk_move_format(args) -> str:
+    """Pick ``mempalace bulk-move`` output format. ``--format`` wins, then ``--json``."""
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def _gather_bulk_move_matches(wing, room, want_json):
+    """Page through ``GET /list`` collecting every drawer matching wing/room.
+
+    Returns the list of drawer dicts (id + current wing/room). Exits the
+    process on daemon failure, mirroring ``cmd_list`` exit codes:
+      * DaemonError / None return (404/401/403) → exit 1 (sibling parity);
+      * inner-error envelope (``data["error"]`` and no drawers) → exit 2.
+    """
+    matches: list[dict] = []
+    offset = 0
+    page = _LIST_LIMIT_MAX
+    while True:
+        params: dict = {"limit": page, "offset": offset}
+        if wing:
+            params["wing"] = wing
+        if room:
+            params["room"] = room
+        try:
+            data = _call_daemon_rest("/list", params)
+        except DaemonError as e:
+            if want_json:
+                _emit_json({"error": str(e), "source": "daemon"})
+            else:
+                print(
+                    f"palace daemon unreachable at {_daemon_url()} — "
+                    f"see mempalace status for diagnostics ({e})",
+                    file=sys.stderr,
+                )
+            sys.exit(1)
+
+        if data is None:
+            if want_json:
+                _emit_json({"error": "daemon /list unavailable", "source": "daemon"})
+            else:
+                print(
+                    f"palace daemon unreachable at {_daemon_url()} — "
+                    "see mempalace status for diagnostics",
+                    file=sys.stderr,
+                )
+            sys.exit(1)
+
+        drawers = data.get("drawers") or []
+        if "error" in data and not drawers:
+            if want_json:
+                _emit_json(data)
+            else:
+                print(f"\n  {data['error']}", file=sys.stderr)
+            sys.exit(2)
+
+        matches.extend(drawers)
+
+        total = int(data.get("total", len(matches)) or 0)
+        offset += len(drawers)
+        # Stop when we've collected everything, or the daemon returned an
+        # empty page (defensive — avoids an infinite loop if total is stale).
+        if not drawers or offset >= total:
+            break
+    return matches
+
+
+def _bulk_move_drawer_id(drawer: dict) -> str:
+    """Pull the id out of a /list drawer dict (daemon uses ``drawer_id``)."""
+    return drawer.get("drawer_id") or drawer.get("id") or ""
+
+
+def _bulk_move_label(wing, room) -> str:
+    """``wing/room`` label for prompts/previews; ``*`` marks an unconstrained side."""
+    return f"{wing or '*'}/{room or '*'}"
+
+
+def _validate_bulk_move_args(src_wing, src_room, to_wing, to_room, want_json):
+    """Enforce the safety preconditions; exit 2 with guidance if violated.
+
+    Source filter required (never touch the whole palace), target required,
+    daemon required — mirrors ``cmd_move``'s no-change / daemon-required
+    exit-2 contract.
+    """
+    if src_wing is None and src_room is None:
+        msg = (
+            "bulk-move requires a source filter: at least one of "
+            "--wing / --room (refusing to operate on the whole palace)."
+        )
+        if want_json:
+            _emit_json({"error": "no_source_filter", "hint": msg})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+    if to_wing is None and to_room is None:
+        msg = "bulk-move requires at least one of --to-wing / --to-room (nothing to change)."
+        if want_json:
+            _emit_json({"error": "no_change", "hint": msg})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+    if not _daemon_url():
+        msg = (
+            "bulk-move requires the palace-daemon. Set PALACE_DAEMON_URL "
+            "(or daemon_url in ~/.mempalace/config.json) and retry."
+        )
+        if want_json:
+            _emit_json({"error": "daemon_required", "hint": msg})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+
+def _print_bulk_move_preview(matches, to_wing, to_room, src_label) -> None:
+    """Human-readable dry-run preview: one ``id  cur → target`` line per drawer."""
+    print()
+    print(f"  Matched {len(matches)} drawer(s) in {src_label}")
+    for d in matches:
+        did = _bulk_move_drawer_id(d)
+        short = did[:12] if did else "(no-id)"
+        cur_w = d.get("wing") or ""
+        cur_r = d.get("room") or ""
+        tgt_w = to_wing if to_wing is not None else cur_w
+        tgt_r = to_room if to_room is not None else cur_r
+        print(f"    {short}  {cur_w}/{cur_r} → {tgt_w}/{tgt_r}")
+    print(f"\n  DRY RUN — re-run with --apply to move {len(matches)} drawers.\n")
+
+
+def _bulk_move_confirm(args, matched, src_label, dst_label, want_json) -> bool:
+    """Confirmation gate before a mass mutation.
+
+    Returns True to proceed. ``--yes`` skips the gate. On a TTY (and not
+    json) we prompt and proceed only on y/yes. Non-interactive / json
+    without ``--yes`` is *refused* (exit 2) — no silent mass mutation in a
+    pipeline. Returns False on an interactive decline (caller prints
+    ``aborted`` and exits 0).
+    """
+    if bool(getattr(args, "yes", False)):
+        return True
+    if want_json or not sys.stdin.isatty():
+        msg = f"refusing to bulk-move {matched} drawers without --yes in a non-interactive shell"
+        if want_json:
+            _emit_json({"error": "confirmation_required", "hint": msg, "matched": matched})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+    answer = input(f"Move {matched} drawers {src_label} → {dst_label}? [y/N] ").strip().lower()
+    return answer in ("y", "yes")
+
+
+def _bulk_move_execute(matches, body_template):
+    """PATCH each drawer independently; never abort the batch on one failure.
+
+    Returns ``(moved_ids, failures)`` where a failure is a
+    ``{"id", "error"}`` dict (DaemonError, None return, or
+    ``success is False``).
+    """
+    moved: list[str] = []
+    failed: list[dict] = []
+    for d in matches:
+        did = _bulk_move_drawer_id(d)
+        if not did:
+            failed.append({"id": "", "error": "missing drawer id in /list response"})
+            continue
+        try:
+            result = _patch_daemon_rest(f"/memory/{did}", dict(body_template))
+        except DaemonError as e:
+            failed.append({"id": did, "error": str(e)})
+            continue
+        if result is None:
+            failed.append({"id": did, "error": "daemon PATCH /memory unavailable"})
+            continue
+        if result.get("success") is False:
+            failed.append({"id": did, "error": result.get("error", "move failed")})
+            continue
+        moved.append(did)
+    return moved, failed
+
+
+def cmd_bulk_move(args):
+    """Bulk drawer relocation by source wing/room (issue #191).
+
+    The multi-drawer complement to ``move``. Selects drawers via
+    ``GET /list`` (offset-paginated) and PATCHes each match to the target
+    wing/room. Dry-run by default; ``--apply`` mutates (TTY prompt unless
+    ``--yes``; refuses unattended without ``--yes``). Verbatim-always:
+    metadata only, no ``--content`` flag. Daemon unreachable / 404 / 401 /
+    403 during listing → exit 1; selection/target missing or any PATCH
+    failure → exit 2.
+    """
+    fmt = _resolve_bulk_move_format(args)
+    want_json = fmt == "json"
+
+    src_wing = getattr(args, "wing", None)
+    src_room = getattr(args, "room", None)
+    to_wing = getattr(args, "to_wing", None)
+    to_room = getattr(args, "to_room", None)
+
+    _validate_bulk_move_args(src_wing, src_room, to_wing, to_room, want_json)
+
+    # Only the supplied target keys go into each PATCH body / the json target.
+    body_template: dict = {}
+    if to_wing is not None:
+        body_template["wing"] = to_wing
+    if to_room is not None:
+        body_template["room"] = to_room
+    target_obj = dict(body_template)
+    source_obj = {"wing": src_wing, "room": src_room}
+
+    src_label = _bulk_move_label(src_wing, src_room)
+    dst_label = _bulk_move_label(
+        to_wing if to_wing is not None else src_wing,
+        to_room if to_room is not None else src_room,
+    )
+
+    matches = _gather_bulk_move_matches(src_wing, src_room, want_json)
+    matched = len(matches)
+
+    # Dry-run is the DEFAULT — preview and exit, no PATCH calls.
+    if not bool(getattr(args, "apply", False)):
+        if want_json:
+            _emit_json(
+                {
+                    "matched": matched,
+                    "dry_run": True,
+                    "moved": [],
+                    "failed": [],
+                    "target": target_obj,
+                    "source": source_obj,
+                }
+            )
+            return
+        _print_bulk_move_preview(matches, to_wing, to_room, src_label)
+        return
+
+    if matched == 0:
+        # Nothing to do — report and exit cleanly. No prompt, no PATCH.
+        if want_json:
+            _emit_json(
+                {
+                    "matched": 0,
+                    "dry_run": False,
+                    "moved": [],
+                    "failed": [],
+                    "target": target_obj,
+                    "source": source_obj,
+                }
+            )
+            return
+        print(f"\n  No drawers match {src_label} — nothing to move.\n")
+        return
+
+    if not _bulk_move_confirm(args, matched, src_label, dst_label, want_json):
+        print("  aborted")
+        return
+
+    moved, failed = _bulk_move_execute(matches, body_template)
+
+    if want_json:
+        _emit_json(
+            {
+                "matched": matched,
+                "dry_run": False,
+                "moved": moved,
+                "failed": failed,
+                "target": target_obj,
+                "source": source_obj,
+            }
+        )
+    else:
+        print(f"\n  moved {len(moved)}, failed {len(failed)}")
+        if failed:
+            print("  failed drawers:")
+            for f in failed:
+                fid = (f.get("id") or "")[:12] or "(no-id)"
+                print(f"    {fid}  {f.get('error', '')}")
+        print()
+
+    if failed:
+        sys.exit(2)
+
+
 # ── mempalace graph ───────────────────────────────────────────────────
 #
 # Pre-aggregated structural snapshot: wings, rooms, passive tunnels,
@@ -4392,6 +4700,54 @@ def main():
         ),
     )
 
+    # bulk-move — multi-drawer metadata relocation by source wing/room
+    p_bulk_move = sub.add_parser(
+        "bulk-move",
+        help="Relocate many drawers (by source wing/room) to a target wing/room (metadata only)",
+    )
+    p_bulk_move.add_argument(
+        "--wing",
+        default=None,
+        help="Source: select drawers in this wing (at least one of --wing/--room required)",
+    )
+    p_bulk_move.add_argument(
+        "--room",
+        default=None,
+        help="Source: select drawers in this room (at least one of --wing/--room required)",
+    )
+    p_bulk_move.add_argument(
+        "--to-wing",
+        dest="to_wing",
+        default=None,
+        help="Target wing (at least one of --to-wing/--to-room required)",
+    )
+    p_bulk_move.add_argument(
+        "--to-room",
+        dest="to_room",
+        default=None,
+        help="Target room (at least one of --to-wing/--to-room required)",
+    )
+    p_bulk_move.add_argument(
+        "--apply",
+        action="store_true",
+        help="Actually move the drawers. Without this, bulk-move only previews (dry run).",
+    )
+    p_bulk_move.add_argument(
+        "--yes",
+        "-y",
+        action="store_true",
+        help="Skip the confirmation prompt (required to --apply in a non-interactive shell)",
+    )
+    p_bulk_move.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, preview/summary), "
+            "json (machine-readable; same as --json)"
+        ),
+    )
+
     # graph
     p_graph = sub.add_parser(
         "graph",
@@ -4878,6 +5234,7 @@ def main():
         "search": cmd_search,
         "list": cmd_list,
         "move": cmd_move,
+        "bulk-move": cmd_bulk_move,
         "graph": cmd_graph,
         "cypher": cmd_cypher,
         "export": cmd_export,
