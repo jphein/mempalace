@@ -1082,6 +1082,70 @@ class TestSearchTool:
         assert entry["params"]["safe"] == "ok"
 
 
+# ── Chroma cache reset (#262) ────────────────────────────────────────────
+
+
+class TestForceChromaCacheReset:
+    """``_force_chroma_cache_reset()`` must release chromadb's rust-side
+    SQLite file lock deterministically by routing eviction through
+    ``ChromaBackend.close_palace()`` rather than bare ``_clients.pop()``
+    (issue #262). A bare pop leaves the lock held until GC reaps the
+    orphaned ``PersistentClient``, which races any second writer that
+    expects the path to be released after the reset."""
+
+    def test_reset_routes_through_close_palace(self, monkeypatch, config, kg):
+        """The reset must call ``backend.close_palace(palace_path)`` and
+        must not fall back to a bare dict pop on ``_clients``."""
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace import mcp_server
+
+        class _StubBackend:
+            def __init__(self):
+                self.closed = []
+                self._clients = {}
+                self._freshness = {}
+
+            def close_palace(self, palace):
+                self.closed.append(palace)
+
+        stub = _StubBackend()
+        monkeypatch.setattr(mcp_server, "_config", config)
+
+        import mempalace.palace as palace_mod
+
+        monkeypatch.setattr(palace_mod, "get_backend", lambda name: stub)
+
+        mcp_server._force_chroma_cache_reset()
+
+        assert stub.closed == [config.palace_path]
+
+    def test_reset_releases_sqlite_lock_for_reopen(self, monkeypatch, config, palace_path, kg):
+        """End-to-end: after the reset, the palace path's chromadb file
+        lock must be released — proven by ``shutil.rmtree`` + reopen
+        succeeding in the same process, the same proof used by
+        ``test_chroma_close_palace_releases_sqlite_lock_for_reopen``."""
+        import shutil
+
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace import mcp_server
+        from mempalace.palace import get_backend
+
+        backend = get_backend("chroma")
+        backend.get_or_create_collection(palace_path, "mempalace_drawers").upsert(
+            documents=["hello"], ids=["a"], metadatas=[{"k": "v"}]
+        )
+        assert palace_path in backend._clients
+
+        mcp_server._force_chroma_cache_reset()
+
+        assert palace_path not in backend._clients
+        shutil.rmtree(palace_path)
+
+        col = backend.get_or_create_collection(palace_path, "mempalace_drawers")
+        col.upsert(documents=["world"], ids=["b"], metadatas=[{"k": "v2"}])
+        assert col.count() == 1
+
+
 # ── Write Tools ─────────────────────────────────────────────────────────
 
 
