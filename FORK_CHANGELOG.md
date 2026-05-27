@@ -306,6 +306,67 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
+- **mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191)** ([`853bb25`](https://github.com/techempower-org/mempalace/commit/853bb25))
+  ``mempalace stats`` migrates from a 3-4-call MCP-tool fan-out
+  (``mempalace_status`` + ``mempalace_kg_stats`` +
+  ``mempalace_graph_stats`` + optional ``mempalace_list_tags``)
+  to a single ``GET /stats`` REST hit. The unified envelope
+  returns three blocks: ``kg`` (entities, triples,
+  relationship_types), ``graph`` (rooms, tunnels, edges), and
+  ``status`` (drawer counts, wings, rooms, protocol / AAAK text).
+  One network hop instead of four — same data, faster.
+
+  The slice also widens the analytics surface beyond the original
+  issue spec. ``--section`` now accepts three real values plus
+  ``all``:
+
+  - ``--section=kg`` — knowledge graph counts. Useful for "how
+    many entities/triples does the palace know" without scrolling
+    past wing breakdowns.
+  - ``--section=graph`` — the AGE graph's structural picture
+    (room count, tunnel rooms shared by 2+ wings, edge totals,
+    top tunnels). Useful for understanding cross-wing reach.
+  - ``--section=status`` — wing/room drawer counts plus the
+    canonical 7-room taxonomy footprint. Richer than ``mempalace
+    status``, which uses ``/status/fast`` for health-only.
+  - ``--section=all`` (default) — every block, in the same order
+    as the dashboard before this change.
+
+  ``--no-relationship-types`` suppresses the relationship_types
+  list, which in production carries 1000+ entries and dominates
+  the table render when scripting. Table mode replaces the list
+  with the count; json mode swaps the list for
+  ``{"relationship_types_count": N}``, keeping the daemon
+  envelope contract intact for jq pipelines that need to know the
+  count without parsing the array.
+
+  ``--format=table|json`` is the canonical flag; ``--json``
+  remains as a shorthand for backward compatibility. Table mode
+  suppresses ``protocol`` and ``aaak_dialect`` (text blobs from
+  the ``status`` block, not analytics); json mode passes them
+  through so consumers piping to jq see every field the daemon
+  emitted.
+
+  ``--tags`` continues to fire an extra ``mempalace_list_tags``
+  MCP call because ``/stats`` deliberately does not include the
+  tag breakdown — tag counts can be 100K+ entries on a populated
+  palace and don't belong in a fast-path summary.
+
+  Failure modes now match the sibling
+  ``cmd_list``/``cmd_graph``/``cmd_cypher`` family: daemon
+  unreachable surfaces as exit 1 (changed from exit 2 under the
+  multi-call implementation), 404/401/403 as exit 1, inner-error
+  envelopes as exit 2, and a missing ``PALACE_DAEMON_URL`` as
+  exit 2. The exit-code alignment is the only behavior change
+  visible to scripts: ``stats`` now signals "daemon down" with
+  the same exit code as ``list``/``graph``/``cypher``.
+
+  Slice of #191.
+
+  *Tests:* 32 — tests/test_cli_stats.py (flag propagation across all four --section values, table+json formats, empty/partial payloads, daemon-down across unreachable/404/401/403/inner-error)
+  *Files:* `mempalace/cli.py`, `tests/test_cli_stats.py`
+
+
 - **Formalize wing/room derivation order; demote entity detector to last-resort hint (#157)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
   Document and enforce the derivation order for wing/room assignment
   as an explicit contract:
