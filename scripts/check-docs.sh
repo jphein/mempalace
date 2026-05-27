@@ -247,7 +247,7 @@ else
     # avoids importing the runtime stack just to count a dict literal).
     expected=$("$py" - <<'PYEOF' 2>/dev/null || echo ""
 import ast, sys
-tree = ast.parse(open("mempalace/mcp_server.py").read())
+tree = ast.parse(open("mempalace/mcp_server.py", encoding="utf-8").read())
 for n in ast.walk(tree):
     if (isinstance(n, ast.Assign)
             and any(getattr(t, "id", None) == "TOOLS" for t in n.targets)
@@ -269,12 +269,14 @@ PYEOF
         # the total), so a single regex captures the right number.
         tc_drift=0
         while IFS= read -r line; do
-            n=$(printf '%s\n' "$line" | grep -oE '[0-9]+ (MCP )?tools' | grep -oE '^[0-9]+')
-            [ -z "$n" ] && continue
-            if [ "$n" != "$expected" ]; then
-                fail "tool-count drift: ${line%%:*} claims '$n tools' (expected $expected)"
-                tc_drift=1
-            fi
+            # A single line can hold more than one "N tools" match, so check
+            # every number on it, not just the first.
+            for n in $(printf '%s\n' "$line" | grep -oE '[0-9]+ (MCP )?tools' | grep -oE '^[0-9]+'); do
+                if [ "$n" != "$expected" ]; then
+                    fail "tool-count drift: ${line%%:*} claims '$n tools' (expected $expected)"
+                    tc_drift=1
+                fi
+            done
         done < <(git grep -nE '[0-9]+ (MCP )?tools' -- '*.md' '*.json' \
                    ':!README.md' ':!docs/ECOSYSTEM.md' ':!website/public/llms-full.txt' 2>/dev/null)
         (( tc_drift == 0 )) && ok "all doc tool-count claims == $expected"
