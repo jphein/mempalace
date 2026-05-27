@@ -3144,7 +3144,7 @@ def cmd_mined(args):
 
 
 def _count_of(value) -> int:
-    """Coerce a wing/room count from ``/status/fast`` into an int.
+    """Coerce a wing/room count from ``/stats`` status block into an int.
 
     The daemon normally returns ``{name: int}``, but a future or
     misbehaving daemon could nest ``{name: {"total": int}}`` or hand back
@@ -3174,50 +3174,48 @@ def _stats_bar(count: int, total: int, width: int = 24) -> str:
     return "█" * filled + "░" * (width - filled)
 
 
-def _gather_daemon_stats(want_tags: bool) -> dict:
-    """Fan out daemon calls for the ``stats`` dashboard.
+_STATS_VALID_SECTIONS = ("kg", "graph", "status", "all")
 
-    Each section is independent — KG/graph failures don't blank the whole
-    dashboard. We catch :class:`DaemonError` per section and inline a
-    ``"_error"`` key so the renderer can surface "(KG unavailable: ...)"
-    next to that block instead of bailing out entirely. The daemon's
-    overall reachability is owned by the caller via ``mempalace_status``;
-    if that one fails the whole command is aborted upstream.
+
+def _resolve_stats_format(args) -> str:
+    """Pick ``mempalace stats`` output format. ``--format`` wins, then ``--json``."""
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def _resolve_stats_sections(args) -> set[str]:
+    """Translate ``--section`` into the set of /stats top-level keys to render.
+
+    ``all`` (default) expands to ``{kg, graph, status}``. Anything else
+    narrows to a single block. argparse's ``choices=`` guards the value
+    before we get here so we don't validate again.
     """
-    bundle: dict = {}
-
-    status_data = _call_daemon_rest("/status/fast")
-    if status_data is None:
-        status_data = _call_daemon_tool("mempalace_status", {})
-    bundle["status"] = status_data
-
-    try:
-        bundle["kg"] = _call_daemon_tool("mempalace_kg_stats", {})
-    except DaemonError as e:
-        bundle["kg"] = {"_error": str(e)}
-
-    try:
-        bundle["graph"] = _call_daemon_tool("mempalace_graph_stats", {})
-    except DaemonError as e:
-        bundle["graph"] = {"_error": str(e)}
-
-    if want_tags:
-        try:
-            bundle["tags"] = _call_daemon_tool("mempalace_list_tags", {"min_count": 1})
-        except DaemonError as e:
-            bundle["tags"] = {"_error": str(e)}
-
-    return bundle
+    sec = getattr(args, "section", None) or "all"
+    if sec == "all":
+        return {"kg", "graph", "status"}
+    return {sec}
 
 
-def _print_stats_dashboard(bundle: dict, top: int) -> None:
-    """Render the stats bundle as a human-friendly dashboard.
+def _print_stats_dashboard(
+    data: dict,
+    top: int,
+    sections: set[str],
+    hide_rels: bool,
+    tags_bundle: dict | None = None,
+) -> None:
+    """Render the /stats envelope as a human-friendly dashboard.
 
     Mirrors ``_print_daemon_status``'s 55-char rules + two-space indent
     style so ``status`` and ``stats`` look like siblings to a human
-    skimming the terminal.
+    skimming the terminal. ``protocol`` and ``aaak_dialect`` are
+    suppressed in table mode — they're text blobs, not analytics. Pass
+    them through in ``json`` mode for jq pipelines.
     """
-    status = bundle.get("status") or {}
+    status = data.get("status") or {}
     total = status.get("total_drawers", 0)
     wings = status.get("wings") or {}
 
@@ -3226,99 +3224,93 @@ def _print_stats_dashboard(bundle: dict, top: int) -> None:
     print(f"  via palace-daemon @ {_daemon_url()}")
     print(f"{'=' * 60}\n")
 
-    print("  WINGS")
-    print(f"  {'-' * 56}")
-    if isinstance(wings, dict) and wings:
-        items = sorted(
-            ((w, _count_of(c)) for w, c in wings.items()),
-            key=lambda kv: kv[1],
-            reverse=True,
-        )
-        max_count = items[0][1] if items else 0
-        shown = items[:top] if top else items
-        for wing, count in shown:
-            bar = _stats_bar(count, max_count)
-            print(f"    {wing:<28} {count:>7}  {bar}")
-        remaining = len(items) - len(shown)
-        if remaining > 0:
-            tail = sum(c for _, c in items[len(shown) :])
-            print(f"    ... {remaining} more wings ({tail} drawers; --top 0 shows all)")
-    elif "error" in status:
-        print(f"    (status error: {status.get('error')})")
-    else:
-        print("    (no wings)")
-    print()
+    if "status" in sections:
+        print("  WINGS")
+        print(f"  {'-' * 56}")
+        if isinstance(wings, dict) and wings:
+            items = sorted(
+                ((w, _count_of(c)) for w, c in wings.items()),
+                key=lambda kv: kv[1],
+                reverse=True,
+            )
+            max_count = items[0][1] if items else 0
+            shown = items[:top] if top else items
+            for wing, count in shown:
+                bar = _stats_bar(count, max_count)
+                print(f"    {wing:<28} {count:>7}  {bar}")
+            remaining = len(items) - len(shown)
+            if remaining > 0:
+                tail = sum(c for _, c in items[len(shown) :])
+                print(f"    ... {remaining} more wings ({tail} drawers; --top 0 shows all)")
+        else:
+            print("    (no wings)")
+        print()
 
-    # Rooms ride along in the same /status/fast payload as wings, so the
-    # breakdown is free — no extra daemon call. The issue (#191) asks for
-    # "drawer count by wing/room"; wings answer "which domains", rooms
-    # answer "which kinds of memory" (the canonical 7-room taxonomy).
-    rooms = status.get("rooms") or {}
-    print("  ROOMS")
-    print(f"  {'-' * 56}")
-    if isinstance(rooms, dict) and rooms:
-        room_items = sorted(
-            ((r, _count_of(c)) for r, c in rooms.items()),
-            key=lambda kv: kv[1],
-            reverse=True,
-        )
-        room_max = room_items[0][1] if room_items else 0
-        room_shown = room_items[:top] if top else room_items
-        for room, count in room_shown:
-            bar = _stats_bar(count, room_max)
-            print(f"    {room:<28} {count:>7}  {bar}")
-        room_remaining = len(room_items) - len(room_shown)
-        if room_remaining > 0:
-            tail = sum(c for _, c in room_items[len(room_shown) :])
-            print(f"    ... {room_remaining} more rooms ({tail} drawers; --top 0 shows all)")
-    elif "error" in status:
-        print(f"    (status error: {status.get('error')})")
-    else:
-        print("    (no rooms)")
-    print()
+        rooms = status.get("rooms") or {}
+        print("  ROOMS")
+        print(f"  {'-' * 56}")
+        if isinstance(rooms, dict) and rooms:
+            room_items = sorted(
+                ((r, _count_of(c)) for r, c in rooms.items()),
+                key=lambda kv: kv[1],
+                reverse=True,
+            )
+            room_max = room_items[0][1] if room_items else 0
+            room_shown = room_items[:top] if top else room_items
+            for room, count in room_shown:
+                bar = _stats_bar(count, room_max)
+                print(f"    {room:<28} {count:>7}  {bar}")
+            room_remaining = len(room_items) - len(room_shown)
+            if room_remaining > 0:
+                tail = sum(c for _, c in room_items[len(room_shown) :])
+                print(f"    ... {room_remaining} more rooms ({tail} drawers; --top 0 shows all)")
+        else:
+            print("    (no rooms)")
+        print()
 
-    kg = bundle.get("kg") or {}
-    print("  KNOWLEDGE GRAPH")
-    print(f"  {'-' * 56}")
-    if "_error" in kg:
-        print(f"    (unavailable: {kg['_error']})")
-    elif "error" in kg:
-        print(f"    (error: {kg.get('error')})")
-    else:
-        print(f"    entities         : {kg.get('entities', 0):>7}")
-        print(f"    triples          : {kg.get('triples', 0):>7}")
-        print(f"    current facts    : {kg.get('current_facts', 0):>7}")
-        print(f"    expired facts    : {kg.get('expired_facts', 0):>7}")
-        rels = kg.get("relationship_types") or []
-        if rels:
-            preview = ", ".join(rels[:8])
-            suffix = f" (+{len(rels) - 8} more)" if len(rels) > 8 else ""
-            print(f"    relations ({len(rels):>2})  : {preview}{suffix}")
-    print()
+    if "kg" in sections:
+        kg = data.get("kg") or {}
+        print("  KNOWLEDGE GRAPH")
+        print(f"  {'-' * 56}")
+        if "error" in kg:
+            print(f"    (error: {kg.get('error')})")
+        else:
+            print(f"    entities         : {kg.get('entities', 0):>7}")
+            print(f"    triples          : {kg.get('triples', 0):>7}")
+            print(f"    current facts    : {kg.get('current_facts', 0):>7}")
+            print(f"    expired facts    : {kg.get('expired_facts', 0):>7}")
+            rels = kg.get("relationship_types") or []
+            if rels and not hide_rels:
+                preview = ", ".join(rels[:8])
+                suffix = f" (+{len(rels) - 8} more)" if len(rels) > 8 else ""
+                print(f"    relations ({len(rels):>2})  : {preview}{suffix}")
+            elif rels and hide_rels:
+                print(f"    relations        : {len(rels)} types (suppressed)")
+        print()
 
-    graph = bundle.get("graph") or {}
-    print("  GRAPH")
-    print(f"  {'-' * 56}")
-    if "_error" in graph:
-        print(f"    (unavailable: {graph['_error']})")
-    elif "error" in graph:
-        print(f"    (error: {graph.get('error')})")
-    else:
-        print(f"    total rooms      : {graph.get('total_rooms', 0):>7}")
-        print(
-            f"    tunnel rooms     : {graph.get('tunnel_rooms', 0):>7}  (rooms shared by 2+ wings)"
-        )
-        print(f"    edges            : {graph.get('total_edges', 0):>7}")
-        top_tunnels = graph.get("top_tunnels") or []
-        if top_tunnels:
-            print("    top tunnels      :")
-            for t in top_tunnels[: min(5, top) if top else 5]:
-                wing_list = ", ".join(t.get("wings") or [])
-                print(f"      - {t.get('room', '?'):<22} [{wing_list}]")
-    print()
+    if "graph" in sections:
+        graph = data.get("graph") or {}
+        print("  GRAPH")
+        print(f"  {'-' * 56}")
+        if "error" in graph:
+            print(f"    (error: {graph.get('error')})")
+        else:
+            print(f"    total rooms      : {graph.get('total_rooms', 0):>7}")
+            print(
+                f"    tunnel rooms     : {graph.get('tunnel_rooms', 0):>7}  "
+                "(rooms shared by 2+ wings)"
+            )
+            print(f"    edges            : {graph.get('total_edges', 0):>7}")
+            top_tunnels = graph.get("top_tunnels") or []
+            if top_tunnels:
+                print("    top tunnels      :")
+                for t in top_tunnels[: min(5, top) if top else 5]:
+                    wing_list = ", ".join(t.get("wings") or [])
+                    print(f"      - {t.get('room', '?'):<22} [{wing_list}]")
+        print()
 
-    if "tags" in bundle:
-        tags = bundle["tags"] or {}
+    if tags_bundle is not None:
+        tags = tags_bundle or {}
         print("  TAGS")
         print(f"  {'-' * 56}")
         if "_error" in tags:
@@ -3346,21 +3338,27 @@ def _print_stats_dashboard(bundle: dict, top: int) -> None:
 
 
 def cmd_stats(args):
-    """Palace analytics dashboard (#191).
+    """Fast direct-to-daemon palace analytics CLI (#191).
 
-    Composes ``mempalace_status`` + ``mempalace_kg_stats`` +
-    ``mempalace_graph_stats`` (and optionally ``mempalace_list_tags``)
-    into a single read-only view of corpus health. Daemon-only — there is
-    no local fallback today because the KG/graph data lives in the
-    daemon's postgres + AGE store; surfacing a misleading partial view
-    from a stale local chromadb would re-introduce the split-brain
-    ``status`` already warns against. When the daemon URL is unset, we
-    abort with the same "set PALACE_DAEMON_URL" hint as the rest of the
-    CLI's daemon-strict surfaces.
+    Wraps ``GET /stats`` on the palace daemon, which returns a unified
+    envelope of three blocks: ``kg`` (entities, triples, relationship
+    types), ``graph`` (rooms, tunnels, edges), ``status`` (drawer counts,
+    wings, rooms, protocol/AAAK text). Replaces the older multi-RPC
+    fan-out — one network hit instead of four. ``--section`` narrows the
+    table output to a single block; json mode always passes through the
+    whole envelope so jq pipelines see the daemon contract unchanged.
+    ``--tags`` still triggers an extra ``mempalace_list_tags`` MCP call
+    because /stats doesn't include the tag breakdown (tag counts can be
+    100K+ entries and don't belong in the fast-path summary). Daemon
+    unreachable → exit 1 (matches sibling cmd_list/cmd_graph/cmd_cypher);
+    inner-error envelope → exit 2.
     """
-    want_json = getattr(args, "json", False)
+    fmt = _resolve_stats_format(args)
+    want_json = fmt == "json"
     want_tags = getattr(args, "tags", False)
+    hide_rels = getattr(args, "no_relationship_types", False)
     top = max(0, getattr(args, "top", 10) or 0)
+    sections = _resolve_stats_sections(args)
 
     if not _daemon_url():
         msg = (
@@ -3374,28 +3372,68 @@ def cmd_stats(args):
         sys.exit(2)
 
     try:
-        bundle = _gather_daemon_stats(want_tags=want_tags)
+        data = _call_daemon_rest("/stats")
     except DaemonError as e:
         if want_json:
             _emit_json({"error": str(e), "source": "daemon"})
         else:
-            print(f"\n  ERROR: {e}", file=sys.stderr)
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({e})",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if data is None:
+        if want_json:
+            _emit_json({"error": "daemon /stats unavailable", "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                "see mempalace status for diagnostics",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if "error" in data and not (data.get("kg") or data.get("graph") or data.get("status")):
+        if want_json:
+            _emit_json(data)
+        else:
+            print(f"\n  {data['error']}", file=sys.stderr)
         sys.exit(2)
 
+    tags_bundle: dict | None = None
+    if want_tags:
+        try:
+            tags_bundle = _call_daemon_tool("mempalace_list_tags", {"min_count": 1})
+        except DaemonError as e:
+            tags_bundle = {"_error": str(e)}
+
     if want_json:
-        payload = {
-            "total_drawers": (bundle.get("status") or {}).get("total_drawers", 0),
-            "wings": (bundle.get("status") or {}).get("wings") or {},
-            "rooms": (bundle.get("status") or {}).get("rooms") or {},
-            "kg": bundle.get("kg") or {},
-            "graph": bundle.get("graph") or {},
+        # Pass-through preserves the daemon envelope contract — operators
+        # piping to jq get every field including protocol/aaak_dialect.
+        # --no-relationship-types replaces the list with a count to keep
+        # script consumers from drowning in a 1000-entry array.
+        out = {
+            "kg": dict(data.get("kg") or {}),
+            "graph": data.get("graph") or {},
+            "status": data.get("status") or {},
         }
-        if want_tags:
-            payload["tags"] = bundle.get("tags") or {}
-        _emit_json(payload)
+        if hide_rels and "relationship_types" in out["kg"]:
+            rels = out["kg"].pop("relationship_types") or []
+            out["kg"]["relationship_types_count"] = len(rels)
+        if tags_bundle is not None:
+            out["tags"] = tags_bundle
+        _emit_json(out)
         return
 
-    _print_stats_dashboard(bundle, top=top)
+    _print_stats_dashboard(
+        data,
+        top=top,
+        sections=sections,
+        hide_rels=hide_rels,
+        tags_bundle=tags_bundle,
+    )
 
 
 def cmd_repair_status(args):
@@ -4552,6 +4590,32 @@ def main():
         "--tags",
         action="store_true",
         help="Include the tag-count breakdown (extra daemon call)",
+    )
+    p_stats.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format (default table; --json is shorthand for --format json)",
+    )
+    p_stats.add_argument(
+        "--section",
+        choices=_STATS_VALID_SECTIONS,
+        default="all",
+        help=(
+            "Limit table output to one block: kg (entities/triples), "
+            "graph (rooms/tunnels/edges), status (wings/rooms/drawer counts), "
+            "or all (default). json mode always passes through every block."
+        ),
+    )
+    p_stats.add_argument(
+        "--no-relationship-types",
+        action="store_true",
+        dest="no_relationship_types",
+        help=(
+            "Suppress the relationship_types list (can be 1000+ entries). "
+            "Table mode shows the count only; json replaces the list with "
+            "{'relationship_types_count': N}."
+        ),
     )
 
     # ── Propagate --json/--quiet to every subparser (issue #44) ─────
