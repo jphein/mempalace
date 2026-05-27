@@ -1082,6 +1082,60 @@ def _tool_status_via_sqlite() -> dict:
     return result
 
 
+def _tool_status_via_postgres() -> Optional[dict]:
+    """Postgres fast-path for tool_status: SQL group-by, sub-100ms on 370k rows.
+
+    Mirrors palace-daemon's ``/status/fast`` (main.py ``status_fast``):
+    three queries against ``mempalace_drawers`` wrapped in a 3s
+    ``statement_timeout`` so a stuck query can't replace one slow path
+    with another. Returns ``None`` when the postgres backend isn't
+    actually reachable (no DSN configured, driver missing, connection
+    refused) so the caller can fall back to the legacy metadata sweep
+    rather than surfacing a hard failure. Issue #267.
+    """
+    dsn = _config.postgres_dsn
+    if not dsn:
+        return None
+    table = _config.collection_name or "mempalace_drawers"
+    try:
+        import psycopg
+        from psycopg import sql as _sql
+    except ImportError:
+        return None
+
+    table_id = _sql.Identifier(table)
+    wings: dict = {}
+    rooms: dict = {}
+    try:
+        with psycopg.connect(dsn, connect_timeout=3) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SET LOCAL statement_timeout = '3s'")
+                cur.execute(_sql.SQL("SELECT count(*) FROM {}").format(table_id))
+                total = cur.fetchone()[0]
+                cur.execute(
+                    _sql.SQL("SELECT wing, count(*) FROM {} GROUP BY wing").format(table_id)
+                )
+                for w, c in cur.fetchall():
+                    wings[w if w is not None else "unknown"] = c
+                cur.execute(
+                    _sql.SQL(
+                        "SELECT room, count(*) FROM {} WHERE room IS NOT NULL GROUP BY room"
+                    ).format(table_id)
+                )
+                for r, c in cur.fetchall():
+                    rooms[r] = c
+    except Exception:
+        logger.exception("tool_status postgres fast-path failed")
+        return None
+    return {
+        "total_drawers": int(total or 0),
+        "wings": wings,
+        "rooms": rooms,
+        "protocol": PALACE_PROTOCOL,
+        "aaak_dialect": AAAK_SPEC,
+    }
+
+
 def tool_status():
     # Run the safe sqlite/pickle probe before we touch chromadb. In the
     # #1222 failure mode, opening the persistent client to call .count()
@@ -1092,6 +1146,17 @@ def tool_status():
 
     if _vector_disabled:
         return _tool_status_via_sqlite()
+
+    # Postgres backend: pull wing/room counts from indexed SQL rather than
+    # sweeping every drawer's metadata in Python (~29s → <100ms on a 370k-
+    # row palace; #267).
+    if _config.backend == "postgres":
+        fast = _tool_status_via_postgres()
+        if fast is not None:
+            return fast
+        # Fast path unavailable (no DSN, driver missing, query failed) —
+        # fall through to the legacy metadata sweep so the caller still
+        # gets a response.
 
     # Use create=True only when a palace DB already exists on disk -- this
     # bootstraps the ChromaDB collection on a valid-but-empty palace without
