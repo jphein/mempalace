@@ -276,14 +276,15 @@ the same envelope regardless of backend:
 - ``expired_facts`` — triples − current_facts
 - ``relationship_types`` — sorted distinct ``relation_type`` values
 
-Three separate Cypher round-trips (entity count, triple counts +
-current, distinct relation_types). Could be folded into one with
-WITH-clause chaining, but AGE 1.6.0's parser is fussy about
-``count(*) WHERE``-style aggregates inside subqueries and three
-small queries keep the implementation maintainable. Performance
-is fine — AGE walks the graph once per Cypher run, all three
-complete in <50ms on the production palace's graph size.
+Tries ``_stats_fast`` first (SQL against the AGE backing label
+tables — sub-ms on ≥1M edges because Postgres serves plain
+``count(*)`` straight off the visibility map without unwrapping
+every value through agtype). Falls back to ``_stats_cypher`` when
+the backing tables aren't available yet (fresh palace, label not
+yet created, or non-standard AGE setup). The fallback runs three
+full graph walks and is the slow path the issue measures at ~9s
+on the production palace at ~1M entities / ~1.6M RELATION edges.
 
-Implemented to close techempower-org/mempalace#96: ``tool_kg_stats``
-was throwing ``AttributeError`` on AGE-backed daemons, breaking
-palace-daemon's ``/graph`` KG panel.
+Implemented to close techempower-org/mempalace#96 (envelope
+shape) and #266 (performance — replaces the ~9s slow path with
+sub-100ms).

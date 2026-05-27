@@ -387,3 +387,85 @@ def test_age_stats_handles_all_expired():
         assert s["expired_facts"] == 2
     finally:
         kg.close()
+
+
+# ── stats() fast path + fallback (#266) ───────────────────────────────
+
+
+@pgmark
+def test_age_stats_fast_path_matches_cypher_path():
+    """Backing-table fast path returns the same envelope as the Cypher
+    fallback. We exercise both paths on the same seeded graph and check
+    every field for equality.
+
+    This guards the #266 contract: switching to the fast path must not
+    change observed values for any caller. Tests both paths against a
+    real AGE-enabled postgres so the agtype ``->>`` cast actually runs.
+    """
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple("JP", "married_to", "Alice")
+        kg.add_triple("JP", "child_of", "Bob")
+        kg.add_triple("Alice", "child_of", "Bob")
+        kg.add_triple("JP", "loves", "Old_hobby", valid_from="2010-01-01", valid_to="2015-01-01")
+
+        fast = kg._stats_fast()
+        slow = kg._stats_cypher()
+        assert fast == slow
+        # Also confirm public stats() returns the same (it should pick fast).
+        assert kg.stats() == fast
+    finally:
+        kg.close()
+
+
+@pgmark
+def test_age_stats_falls_back_when_fast_path_raises(monkeypatch):
+    """If the backing tables aren't available (fresh palace, label not
+    created, exotic AGE version), ``stats()`` must transparently fall
+    through to the Cypher path and still return a correct envelope.
+    """
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple("A", "knows", "B")
+        kg.add_triple("A", "knows", "C", valid_from="2020-01-01", valid_to="2021-01-01")
+
+        def boom(self):
+            raise RuntimeError("backing tables not available")
+
+        monkeypatch.setattr(KnowledgeGraphAGE, "_stats_fast", boom)
+        s = kg.stats()
+        assert s["entities"] == 3
+        assert s["triples"] == 2
+        assert s["current_facts"] == 1
+        assert s["expired_facts"] == 1
+        assert s["relationship_types"] == ["knows"]
+    finally:
+        kg.close()
+
+
+@pgmark
+def test_age_stats_per_field_cypher_helpers_match_canonical():
+    """The per-field Cypher helpers used by the fast-path savepoint
+    fallback agree with the canonical ``_stats_cypher`` walk. Guards the
+    contract that if the agtype ``->>`` cast misfires on a future AGE,
+    the field-level fallbacks still produce identical values.
+    """
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple("X", "likes", "Y")
+        kg.add_triple("X", "hates", "Z", valid_from="2020-01-01", valid_to="2021-01-01")
+
+        slow = kg._stats_cypher()
+        assert kg._current_facts_cypher() == slow["current_facts"]
+        assert kg._relationship_types_cypher() == slow["relationship_types"]
+    finally:
+        kg.close()
