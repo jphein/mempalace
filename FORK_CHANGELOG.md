@@ -24,6 +24,52 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **mempalace graph — fast direct-to-daemon KG structural snapshot (#191)** ([`499f42d`](https://github.com/techempower-org/mempalace/commit/499f42d))
+  A new ``mempalace graph`` subcommand — the structural counterpart
+  to ``mempalace list``. Wraps the palace daemon's ``GET /graph?limit=``
+  endpoint, which returns a pre-aggregated palace shape (wings,
+  rooms, passive tunnels) plus a KG slice (top-N entities, sample
+  RELATION/MENTIONS triples, kg_stats with global totals).
+
+  Read-only, safe to run during backfill — the daemon assembles
+  the snapshot from pre-aggregated tables, not from a live AGE
+  Cypher walk. Recall-preserving by design: ``--limit`` only caps
+  the KG entity sample (and 2x for MENTIONS triples per the
+  daemon's openapi spec); wings, rooms, and tunnels always ship
+  in full.
+
+  Flags: ``--limit N`` (default 500, sanity-clamped to [1, 50000]
+  to match the daemon's hard ceiling), ``--format table|full|json``.
+  ``table`` is the default summary view — palace structure block
+  (wing/room/tunnel/drawer counts) + top-10 wings by drawer count +
+  KG stats + sample entities and triples. ``full`` enumerates every
+  wing, every room breakdown, every tunnel, and every sampled
+  entity/triple/mention with no truncation — useful for piping
+  into ``grep`` or further analysis. ``json`` mirrors the daemon's
+  response shape exactly (``wings``, ``rooms``, ``tunnels``,
+  ``kg_entities``, ``kg_triples``, ``kg_mentions``, ``kg_stats``).
+
+  Daemon-unreachable (``DaemonError`` from timeout or network
+  failure, or ``_call_daemon_rest`` returning ``None`` on 404/401/403)
+  prints a stderr hint and exits 1, matching the cmd_list /
+  cmd_status fallback. With ``--format json`` the failure surfaces
+  as a structured envelope on stdout so machine callers get a
+  parseable shape. An ``error`` payload from the daemon with no
+  structural keys (e.g. ``palace_unavailable``) exits 2 to match
+  the same contract.
+
+  No new MCP tool is added — the AI path can already query AGE
+  directly via ``POST /cypher`` for finer-grained graph walks.
+  This bridges operators and scripts to the same pre-aggregated
+  snapshot the daemon already serves.
+
+  Slice of the polished-CLI umbrella issue #191, building on the
+  ``mempalace list`` slice (cli-list-drawer-browser).
+
+  *Tests:* 16 — tests/test_cli_graph.py (flag propagation, limit clamping, three formats, daemon-down fallback)
+  *Files:* `mempalace/cli.py`, `tests/test_cli_graph.py`
+
+
 - **mempalace list — fast direct-to-daemon drawer browser (#191)** ([`257137b`](https://github.com/techempower-org/mempalace/commit/257137b))
   A new ``mempalace list`` subcommand that wraps the palace daemon's
   ``GET /list`` REST endpoint (which itself wraps the existing

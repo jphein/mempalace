@@ -93,6 +93,21 @@ Pure metadata listing — wraps ``GET /list?wing=&room=&limit=&offset=``
 on the palace daemon. Output formats: ``table`` (default), ``compact``,
 ``full``, ``json``. Daemon unreachable → stderr error + exit 1.
 
+### `cmd_graph`
+
+```python
+def cmd_graph(args)
+```
+
+Fast direct-to-daemon KG + palace structural snapshot (issue #191).
+
+Pure read — wraps ``GET /graph?limit=`` on the palace daemon, which
+returns pre-aggregated wing/room/tunnel counts plus a KG slice
+(top-N entities, sample RELATION/MENTIONS triples, global kg_stats).
+Output formats: ``table`` (default summary), ``full`` (every wing,
+every sampled triple, no truncation), ``json`` (pass-through shape).
+Daemon unreachable → stderr error + exit 1; inner-error payload → exit 2.
+
 ### `cmd_wakeup`
 
 ```python

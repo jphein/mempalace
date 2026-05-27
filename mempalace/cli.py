@@ -1805,6 +1805,263 @@ def cmd_list(args):
         _print_list_table(data)
 
 
+# ── mempalace graph ───────────────────────────────────────────────────
+#
+# Pre-aggregated structural snapshot: wings, rooms, passive tunnels,
+# plus a KG slice (top-N entities + sample RELATION/MENTIONS triples +
+# global kg_stats). Wraps the daemon's ``GET /graph?limit=`` endpoint.
+# Read-only, safe to run during backfill — the daemon assembles the
+# snapshot from pre-aggregated tables.
+#
+# Recall-preserving by design: this is a *structural* snapshot of the
+# palace shape and KG, not a drawer search. It never excludes content;
+# the limit only caps how many KG entities (and 2×limit MENTIONS) ship
+# back. Operators querying for more granularity hit AGE Cypher
+# directly via ``POST /cypher`` (per the daemon openapi note).
+
+
+_GRAPH_LIMIT_MAX = 50000  # matches the daemon's hard ceiling on /graph
+
+
+def _print_graph_table(data: dict) -> None:
+    """Human-readable summary: palace structure + KG snapshot."""
+    wings = data.get("wings") or {}
+    rooms = data.get("rooms") or []
+    tunnels = data.get("tunnels") or []
+    kg_stats = data.get("kg_stats") or {}
+    kg_entities = data.get("kg_entities") or []
+    kg_triples = data.get("kg_triples") or []
+    kg_mentions = data.get("kg_mentions") or []
+
+    total_drawers = sum(int(v or 0) for v in wings.values())
+    print()
+    print("  Palace structure")
+    print(f"    wings:    {len(wings):>10}")
+    print(f"    rooms:    {sum(len(r.get('rooms') or {}) for r in rooms):>10}")
+    print(f"    tunnels:  {len(tunnels):>10}")
+    print(f"    drawers:  {total_drawers:>10}")
+
+    if wings:
+        print()
+        print("  Top wings by drawer count")
+        top_wings = sorted(wings.items(), key=lambda kv: int(kv[1] or 0), reverse=True)[:10]
+        for name, count in top_wings:
+            print(f"    {int(count or 0):>8}  {name}")
+
+    print()
+    print("  Knowledge graph")
+    print(f"    entities: {int(kg_stats.get('entities', 0) or 0):>10}")
+    print(f"    triples:  {int(kg_stats.get('triples', 0) or 0):>10}")
+    print(f"    mentions: {int(kg_stats.get('mentions', 0) or 0):>10}")
+    rel_types = kg_stats.get("relationship_types") or []
+    if rel_types:
+        print(f"    rel-types: {', '.join(rel_types)}")
+    print(f"    sample entities (capped at --limit): {len(kg_entities)}")
+    print(f"    sample triples:                       {len(kg_triples)}")
+    print(f"    sample mentions:                      {len(kg_mentions)}")
+
+    if kg_entities:
+        print()
+        print("  Sample entities")
+        for ent in kg_entities[:10]:
+            name = ent.get("name") or ent.get("id") or "(unnamed)"
+            etype = ent.get("type") or ""
+            suffix = f"  [{etype}]" if etype else ""
+            print(f"    {name}{suffix}")
+
+    if kg_triples:
+        print()
+        print("  Sample triples")
+        for tr in kg_triples[:10]:
+            subj = tr.get("subject") or "?"
+            pred = tr.get("predicate") or "?"
+            obj = tr.get("object") or "?"
+            print(f"    {subj} —[{pred}]→ {obj}")
+
+    print()
+
+
+def _print_graph_full(data: dict) -> None:
+    """Labelled sections, no truncation — every wing, every triple, every mention."""
+    wings = data.get("wings") or {}
+    rooms = data.get("rooms") or []
+    tunnels = data.get("tunnels") or []
+    kg_stats = data.get("kg_stats") or {}
+    kg_entities = data.get("kg_entities") or []
+    kg_triples = data.get("kg_triples") or []
+    kg_mentions = data.get("kg_mentions") or []
+    sep = "  " + "─" * 70
+
+    print()
+    print(sep)
+    print("  WINGS")
+    for name in sorted(wings):
+        print(f"    {int(wings[name] or 0):>8}  {name}")
+
+    print(sep)
+    print("  ROOMS (per wing)")
+    for entry in rooms:
+        wing = entry.get("wing") or "(no-wing)"
+        breakdown = entry.get("rooms") or {}
+        cells = ", ".join(f"{r}:{int(c or 0)}" for r, c in sorted(breakdown.items()))
+        print(f"    {wing}: {cells}")
+
+    print(sep)
+    print("  TUNNELS (rooms appearing in 2+ wings)")
+    for tun in tunnels:
+        room = tun.get("room") or "(no-room)"
+        wings_list = tun.get("wings") or []
+        print(f"    {room}: {len(wings_list)} wings → {', '.join(wings_list)}")
+
+    print(sep)
+    print("  KG STATS")
+    print(f"    entities:  {int(kg_stats.get('entities', 0) or 0)}")
+    print(f"    triples:   {int(kg_stats.get('triples', 0) or 0)}")
+    print(f"    mentions:  {int(kg_stats.get('mentions', 0) or 0)}")
+    rel_types = kg_stats.get("relationship_types") or []
+    if rel_types:
+        print(f"    rel-types: {', '.join(rel_types)}")
+
+    print(sep)
+    print(f"  KG ENTITIES (sample, n={len(kg_entities)})")
+    for ent in kg_entities:
+        eid = ent.get("id") or ""
+        name = ent.get("name") or "(unnamed)"
+        etype = ent.get("type") or ""
+        props = ent.get("properties") or {}
+        suffix = f"  [{etype}]" if etype else ""
+        print(f"    {name}{suffix}  id={eid}")
+        if props:
+            print(f"      properties: {props}")
+
+    print(sep)
+    print(f"  KG TRIPLES (sample, n={len(kg_triples)})")
+    for tr in kg_triples:
+        subj = tr.get("subject") or "?"
+        pred = tr.get("predicate") or "?"
+        obj = tr.get("object") or "?"
+        conf = tr.get("confidence")
+        vf = tr.get("valid_from")
+        vt = tr.get("valid_to")
+        meta_bits = []
+        if conf is not None:
+            meta_bits.append(f"conf={conf}")
+        if vf:
+            meta_bits.append(f"from={vf}")
+        if vt:
+            meta_bits.append(f"to={vt}")
+        meta = f"  ({', '.join(meta_bits)})" if meta_bits else ""
+        print(f"    {subj} —[{pred}]→ {obj}{meta}")
+
+    print(sep)
+    print(f"  KG MENTIONS (sample, n={len(kg_mentions)})")
+    for mn in kg_mentions:
+        subj = mn.get("subject") or "?"
+        obj = mn.get("object") or "?"
+        src = mn.get("source_file") or ""
+        suffix = f"  [{src}]" if src else ""
+        print(f"    {subj} → {obj}{suffix}")
+
+    print(sep)
+    print()
+
+
+def _resolve_graph_format(args) -> str:
+    """Pick ``mempalace graph`` output format. ``--format`` wins, then ``--json``."""
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def cmd_graph(args):
+    """Fast direct-to-daemon KG + palace structural snapshot (issue #191).
+
+    Pure read — wraps ``GET /graph?limit=`` on the palace daemon, which
+    returns pre-aggregated wing/room/tunnel counts plus a KG slice
+    (top-N entities, sample RELATION/MENTIONS triples, global kg_stats).
+    Output formats: ``table`` (default summary), ``full`` (every wing,
+    every sampled triple, no truncation), ``json`` (pass-through shape).
+    Daemon unreachable → stderr error + exit 1; inner-error payload → exit 2.
+    """
+    fmt = _resolve_graph_format(args)
+    want_json = fmt == "json"
+
+    raw_limit = getattr(args, "limit", 500)
+    if raw_limit is None:
+        raw_limit = 500
+    limit = max(1, min(int(raw_limit), _GRAPH_LIMIT_MAX))
+    params: dict = {"limit": limit}
+
+    try:
+        data = _call_daemon_rest("/graph", params)
+    except DaemonError as e:
+        # Match cmd_list / cmd_status daemon-down fallback. JSON callers
+        # get a structured error on stdout; humans get the standard
+        # "daemon unreachable" line on stderr.
+        if want_json:
+            _emit_json({"error": str(e), "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({e})",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if data is None:
+        # _call_daemon_rest returns None on 404/401/403 — endpoint
+        # missing on an older daemon, or auth mismatch. Treat the same
+        # as unreachable so scripts get one failure shape.
+        if want_json:
+            _emit_json({"error": "daemon /graph unavailable", "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                "see mempalace status for diagnostics",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    # Daemon may surface an inner error envelope (palace unreachable
+    # from inside the daemon) — match cmd_list's exit-2 contract.
+    if (
+        "error" in data
+        and not data.get("kg_stats")
+        and not data.get("kg_entities")
+        and not data.get("kg_triples")
+        and not data.get("wings")
+    ):
+        if want_json:
+            _emit_json(data)
+        else:
+            print(f"\n  {data['error']}", file=sys.stderr)
+        sys.exit(2)
+
+    if want_json:
+        # Stable top-level shape — pass through daemon keys unchanged so
+        # scripts can rely on them. Defaults make missing keys explicit
+        # rather than KeyError-ing downstream consumers.
+        out = {
+            "wings": data.get("wings") or {},
+            "rooms": data.get("rooms") or [],
+            "tunnels": data.get("tunnels") or [],
+            "kg_entities": data.get("kg_entities") or [],
+            "kg_triples": data.get("kg_triples") or [],
+            "kg_mentions": data.get("kg_mentions") or [],
+            "kg_stats": data.get("kg_stats") or {},
+        }
+        _emit_json(out)
+        return
+
+    if fmt == "full":
+        _print_graph_full(data)
+    else:
+        _print_graph_table(data)
+
+
 def cmd_wakeup(args):
     """Show L0 (identity) + L1 (essential story) — the wake-up context."""
     from .layers import MemoryStack
@@ -3655,6 +3912,31 @@ def main():
         ),
     )
 
+    # graph
+    p_graph = sub.add_parser(
+        "graph",
+        help="KG + palace structural snapshot (wings, rooms, tunnels, kg_stats)",
+    )
+    p_graph.add_argument(
+        "--limit",
+        type=int,
+        default=500,
+        help=(
+            "Cap on KG entity count (and 2x this for MENTIONS triples). "
+            "Default: 500, max: 50000 — matches the daemon's hard ceiling."
+        ),
+    )
+    p_graph.add_argument(
+        "--format",
+        choices=("table", "full", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, summary + top wings + sample), "
+            "full (every wing, every sampled triple, no truncation), "
+            "json (machine-readable; same as --json)"
+        ),
+    )
+
     # compress
     p_compress = sub.add_parser(
         "compress", help="Compress drawers using AAAK Dialect (~30x reduction)"
@@ -4055,6 +4337,7 @@ def main():
         "split": cmd_split,
         "search": cmd_search,
         "list": cmd_list,
+        "graph": cmd_graph,
         "export": cmd_export,
         "sweep": cmd_sweep,
         "sync": cmd_sync,
