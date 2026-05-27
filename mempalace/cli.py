@@ -1636,6 +1636,175 @@ def _emit_local_search_json(
     sys.exit(0 if (result.get("results") or []) else 1)
 
 
+# ── mempalace list — fast direct-to-daemon drawer browser (#191) ────────
+#
+# Pure metadata browse: no ranking, no exclusion, no embedding. Wraps
+# the daemon's GET /list endpoint (which itself wraps the
+# ``mempalace_list_drawers`` MCP tool). Read-only, safe to run during
+# backfill — it just paginates the metadata table.
+#
+# Recall-preserving by design: every drawer matching the wing/room
+# filter is reachable via offset, and no drawer is dropped. This is the
+# human/script counterpart to the existing ``mempalace_list_drawers``
+# MCP tool (which serves the AI path).
+
+
+_LIST_LIMIT_MAX = 1000  # sanity ceiling; the daemon clamps to 100 anyway
+
+
+def _print_list_table(data: dict) -> None:
+    """Human-readable multi-line render — drawer_id (short) + wing/room + preview."""
+    drawers = data.get("drawers") or []
+    total = data.get("total", len(drawers))
+    offset = data.get("offset", 0)
+    limit = data.get("limit", len(drawers))
+    if not drawers:
+        print("\n  No drawers found.")
+        return
+    end = offset + len(drawers)
+    print(f"\n  Drawers {offset + 1}–{end} of {total} (limit {limit})\n")
+    for d in drawers:
+        did = d.get("drawer_id", "")
+        short = did[:12] if did else "(no-id)"
+        wing = d.get("wing") or "(no-wing)"
+        room = d.get("room") or "(no-room)"
+        preview = (d.get("content_preview") or "").replace("\n", " ").strip()
+        if len(preview) > 80:
+            preview = preview[:77] + "..."
+        print(f"  {short}  {wing}/{room}")
+        if preview:
+            print(f"    {preview}")
+    print()
+
+
+def _print_list_compact(data: dict) -> None:
+    """One line per drawer: ``<id12> <wing>/<room>: <preview[:120]>``."""
+    for d in data.get("drawers") or []:
+        did = (d.get("drawer_id") or "")[:12]
+        wing = d.get("wing") or "-"
+        room = d.get("room") or "-"
+        preview = (d.get("content_preview") or "").replace("\n", " ").strip()
+        if len(preview) > 120:
+            preview = preview[:117] + "..."
+        print(f"{did} {wing}/{room}: {preview}")
+
+
+def _print_list_full(data: dict) -> None:
+    """Labelled sections, no truncation; separators between drawers."""
+    drawers = data.get("drawers") or []
+    total = data.get("total", len(drawers))
+    offset = data.get("offset", 0)
+    if not drawers:
+        print("\n  No drawers found.")
+        return
+    print(f"\n  Drawers {offset + 1}–{offset + len(drawers)} of {total}\n")
+    sep = "  " + "─" * 70
+    for d in drawers:
+        print(sep)
+        print(f"  drawer_id: {d.get('drawer_id', '')}")
+        print(f"  wing:      {d.get('wing') or ''}")
+        print(f"  room:      {d.get('room') or ''}")
+        tags = d.get("tags") or []
+        if tags:
+            print(f"  tags:      {', '.join(tags)}")
+        print("  content:")
+        for line in (d.get("content_preview") or "").splitlines() or [""]:
+            print(f"    {line}")
+    print(sep)
+    print()
+
+
+def _resolve_list_format(args) -> str:
+    """Pick ``mempalace list`` output format. ``--format`` wins, then ``--json``."""
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def cmd_list(args):
+    """Fast direct-to-daemon drawer browser (issue #191).
+
+    Pure metadata listing — wraps ``GET /list?wing=&room=&limit=&offset=``
+    on the palace daemon. Output formats: ``table`` (default), ``compact``,
+    ``full``, ``json``. Daemon unreachable → stderr error + exit 1.
+    """
+    fmt = _resolve_list_format(args)
+    want_json = fmt == "json"
+
+    limit = max(1, min(int(getattr(args, "limit", 20) or 20), _LIST_LIMIT_MAX))
+    offset = max(0, int(getattr(args, "offset", 0) or 0))
+
+    params: dict = {"limit": limit, "offset": offset}
+    if getattr(args, "wing", None):
+        params["wing"] = args.wing
+    if getattr(args, "room", None):
+        params["room"] = args.room
+
+    try:
+        data = _call_daemon_rest("/list", params)
+    except DaemonError as e:
+        # Match cmd_status's daemon-down fallback (line 2230) and the
+        # graceful 401/403 + unreachable handling added in 850e08c. On
+        # JSON output, emit a structured error so machine callers see
+        # the same shape as other failure paths.
+        if want_json:
+            _emit_json({"error": str(e), "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({e})",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if data is None:
+        # _call_daemon_rest returns None on 404/401/403 — endpoint
+        # missing on an older daemon, or auth mismatch. Same exit code
+        # as the unreachable case so scripts can treat "no daemon list"
+        # uniformly without parsing the message.
+        if want_json:
+            _emit_json({"error": "daemon /list unavailable", "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                "see mempalace status for diagnostics",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    # Daemon /list mirrors mempalace_list_drawers' shape: error key when
+    # the underlying palace is unreachable from inside the daemon.
+    if "error" in data and not data.get("drawers"):
+        if want_json:
+            _emit_json(data)
+        else:
+            print(f"\n  {data['error']}", file=sys.stderr)
+        sys.exit(2)
+
+    if want_json:
+        # Stable top-level shape — drawers/total/count/offset/limit pass
+        # through unchanged so scripts can rely on the keys.
+        out = {
+            "drawers": data.get("drawers") or [],
+            "total": data.get("total", 0),
+            "count": data.get("count", len(data.get("drawers") or [])),
+            "offset": data.get("offset", offset),
+            "limit": data.get("limit", limit),
+        }
+        _emit_json(out)
+        return
+
+    if fmt == "compact":
+        _print_list_compact(data)
+    elif fmt == "full":
+        _print_list_full(data)
+    else:
+        _print_list_table(data)
+
+
 def cmd_wakeup(args):
     """Show L0 (identity) + L1 (essential story) — the wake-up context."""
     from .layers import MemoryStack
@@ -3456,6 +3625,36 @@ def main():
         ),
     )
 
+    # list — fast direct-to-daemon drawer browser (#191)
+    p_list = sub.add_parser(
+        "list",
+        help="Browse drawers by wing/room metadata (no ranking, no embedding)",
+    )
+    p_list.add_argument("--wing", default=None, help="Limit to one wing")
+    p_list.add_argument("--room", default=None, help="Limit to one room")
+    p_list.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Max drawers to return (default: 20, max: 1000)",
+    )
+    p_list.add_argument(
+        "--offset",
+        type=int,
+        default=0,
+        help="Pagination offset (default: 0)",
+    )
+    p_list.add_argument(
+        "--format",
+        choices=("table", "compact", "full", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, multi-line preview), "
+            "compact (one line per drawer), full (labelled sections, "
+            "no truncation), json (machine-readable; same as --json)"
+        ),
+    )
+
     # compress
     p_compress = sub.add_parser(
         "compress", help="Compress drawers using AAAK Dialect (~30x reduction)"
@@ -3855,6 +4054,7 @@ def main():
         "mine": cmd_mine,
         "split": cmd_split,
         "search": cmd_search,
+        "list": cmd_list,
         "export": cmd_export,
         "sweep": cmd_sweep,
         "sync": cmd_sync,
