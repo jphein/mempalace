@@ -13,6 +13,8 @@ back gracefully when postgres is configured but unreachable.
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from mempalace import mcp_server
 
 
@@ -103,7 +105,7 @@ def test_tool_status_postgres_uses_sql_group_by(monkeypatch):
     sql_log: list[str] = []
     monkeypatch.setattr(os, "environ", _postgres_env())
 
-    import psycopg
+    psycopg = pytest.importorskip("psycopg")
 
     monkeypatch.setattr(
         psycopg,
@@ -143,7 +145,7 @@ def test_tool_status_postgres_envelope_keys_match_chroma_shape(monkeypatch):
     _reset_caches()
     monkeypatch.setattr(os, "environ", _postgres_env())
 
-    import psycopg
+    psycopg = pytest.importorskip("psycopg")
 
     monkeypatch.setattr(
         psycopg,
@@ -200,7 +202,7 @@ def test_tool_status_postgres_falls_back_when_query_raises(monkeypatch):
     monkeypatch.setattr(os, "environ", _postgres_env())
     monkeypatch.setattr(mcp_server.os.path, "isfile", lambda _p: False)
 
-    import psycopg
+    psycopg = pytest.importorskip("psycopg")
 
     def _boom(*_args, **_kwargs):
         raise RuntimeError("simulated connection failure")
