@@ -19,6 +19,7 @@ from typing import Optional
 
 from .backends import CollectionNotInitializedError, PalaceNotFoundError
 from .palace import get_closets_collection, get_collection
+from .ratings import net_rating, rating_distance_adjustment
 
 # Closet pointer line format: "topic|entities|→drawer_id_a,drawer_id_b"
 # Multiple lines may join with newlines inside one closet document.
@@ -285,6 +286,16 @@ def _rrf_rank(
 # rare-but-cheap signal; ablation script lived in /tmp, not committed.
 CLOSET_RANK_BOOSTS = [0.40, 0.25, 0.15, 0.08, 0.04]
 CLOSET_DISTANCE_CAP = 1.5  # cosine dist > 1.5 = too weak to use as signal
+
+
+def _rating_boost_enabled() -> bool:
+    """Whether the feedback-rating ranking signal (#159) is active.
+
+    On by default; set ``PALACE_RATING_BOOST=0`` to disable (A/B, debugging).
+    Read live from the environment so the daemon picks up the toggle without
+    a restart, mirroring the multi-encoder RRF gate.
+    """
+    return os.environ.get("PALACE_RATING_BOOST", "1").strip() != "0"
 
 
 def build_where_filter(
@@ -1946,12 +1957,22 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
                 matched_via = "drawer+closet"
                 closet_preview = c_preview
 
+        # Feedback rating adjustment (#159): an explicit useful/not-useful
+        # signal stored in drawer metadata nudges the effective distance.
+        # Bounded and capped (mempalace.ratings) so it can reorder neighbors
+        # but never displace a relevant drawer out of the result set — recall
+        # is preserved. Gated by PALACE_RATING_BOOST (default on; set "0" to
+        # disable for A/B or debugging).
+        rating_adj = 0.0
+        if _rating_boost_enabled():
+            rating_adj = rating_distance_adjustment(meta)
+
         # Clamp to the valid cosine-distance range [0, 2]. When a strong
         # closet boost (up to 0.40) exceeds the raw distance, the subtraction
         # can go negative — which (a) yields ``similarity > 1.0`` downstream
         # and (b) makes the sort key land *below* ordinary positive distances,
         # inverting the ranking so the best hybrid matches sort last.
-        effective_dist = max(0.0, min(2.0, dist - boost))
+        effective_dist = max(0.0, min(2.0, dist - boost + rating_adj))
         entry = {
             "drawer_id": drawer_id,
             "text": doc,
@@ -1964,6 +1985,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
             "distance": round(dist, 4),
             "effective_distance": round(effective_dist, 4),
             "closet_boost": round(boost, 3),
+            "rating_score": net_rating(meta),
             "matched_via": matched_via,
             # Internal: retain the full source_file path + chunk_index so the
             # enrichment step below doesn't have to reverse-lookup via
