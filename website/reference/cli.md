@@ -130,6 +130,53 @@ mempalace cypher "MATCH (n) RETURN n" --json
 | `--format` | `table` | `table` (aligned columns), `json`, or `csv` |
 | `--json` | — | Shorthand for `--format json` |
 
+## `mempalace move`
+
+Relocate a single drawer to a different wing and/or room — metadata only, the
+verbatim content is never touched. Direct-to-daemon. Omitting both `--wing` and
+`--room` is a no-op (nothing to change).
+
+```bash
+mempalace move <drawer_id> --wing myapp
+mempalace move <drawer_id> --wing myapp --room auth
+mempalace move <drawer_id> --room archive --format json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `drawer_id` | — | ID of the drawer to move (positional, required) |
+| `--wing` | unchanged | New wing (omit to leave unchanged) |
+| `--room` | unchanged | New room (omit to leave unchanged) |
+| `--format` | `table` | `table` (old→new confirmation) or `json` (daemon pass-through) |
+
+## `mempalace bulk-move`
+
+Relocate every drawer matching a source wing/room filter to a target wing/room
+— metadata only, content untouched. **Dry-run by default**: without `--apply`
+it previews the matched drawers and the destination, changing nothing. Each
+drawer is moved by an independent PATCH, so a single failure doesn't abort the
+batch. At least one source filter (`--wing`/`--room`) and one target
+(`--to-wing`/`--to-room`) are required.
+
+```bash
+# preview only (dry run)
+mempalace bulk-move --wing scratch --to-wing archive
+# execute, with interactive confirmation
+mempalace bulk-move --wing scratch --room old --to-wing archive --apply
+# execute non-interactively (CI / scripts)
+mempalace bulk-move --wing scratch --to-wing archive --apply --yes
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--wing` | — | Source: select drawers in this wing (at least one of `--wing`/`--room`) |
+| `--room` | — | Source: select drawers in this room (at least one of `--wing`/`--room`) |
+| `--to-wing` | — | Target wing (at least one of `--to-wing`/`--to-room`) |
+| `--to-room` | — | Target room (at least one of `--to-wing`/`--to-room`) |
+| `--apply` | — | Actually move the drawers (without it, preview only) |
+| `--yes`, `-y` | — | Skip the confirmation prompt (required to `--apply` non-interactively) |
+| `--format` | `table` | `table` (preview/summary) or `json` (machine-readable) |
+
 ## `mempalace split`
 
 Split concatenated transcript mega-files into per-session files.
