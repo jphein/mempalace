@@ -20,7 +20,7 @@ The spec is deliberately scoped to a *thin classifier with conservative defaults
 Two data points frame the problem:
 
 1. **SME's first live readings on `jp-realm-v0.1`** (30 questions): `rlm + Qwen 2.5 7B` (2/30 tool calls) and `rlm + Llama 3.3 70B` (8/30 tool calls) both score 46.67% recall — identical despite a 4× difference in invocation rate. The deterministic pipeline (`familiar` v0.3.9) on the same corpus scores 78.33%. The LLM-orchestrated runs ceiling at *willingness to call the tool*, not at retrieval quality.
-2. **OpenCode + Claude Code current state**: the MCP server exposes 30 tools (`mempalace_search`, `mempalace_kg_query`, `mempalace_diary_read`, `mempalace_list_wings`, `mempalace_get_taxonomy`, `mempalace_traverse`, `mempalace_status`, `mempalace_kg_timeline`, etc.). Per `docs/integrations/opencode.md` §"A note on automatic context injection", today's recall path is *agents explicitly invoking the MCP tools*. There is no per-turn classifier deciding when memory would help; the agent decides, often does not, and the user has to prompt "check mempalace for X" to make it happen.
+2. **OpenCode + Claude Code current state**: the MCP server exposes 34 tools (`mempalace_search`, `mempalace_kg_query`, `mempalace_diary_read`, `mempalace_list_wings`, `mempalace_get_taxonomy`, `mempalace_traverse`, `mempalace_status`, `mempalace_kg_timeline`, etc.). Per `docs/integrations/opencode.md` §"A note on automatic context injection", today's recall path is *agents explicitly invoking the MCP tools*. There is no per-turn classifier deciding when memory would help; the agent decides, often does not, and the user has to prompt "check mempalace for X" to make it happen.
 
 This is the SME Cat 9a gap (invocation rate by a live model) on the same fork that owns the corpus. We have the substrate (300K+ verbatim drawers in pgvector behind palace-daemon), we have the MCP tool surface, and we have the empirical evidence that pushing retrieval quality further has diminishing returns past good invocation. Building the auto-query layer is the prerequisite for measuring Cat 9a and the highest-leverage place to spend an engineering week.
 
@@ -355,7 +355,7 @@ For reference, the existing MCP tools the classifier composes (from `mempalace/m
 | `mempalace_memories_filed_away` | checkpoint status | no |
 | `mempalace_reconnect` | HNSW reset | no |
 
-The classifier uses 5 of 30 tools. The rest are management/write surfaces that auto-query has no business touching.
+The classifier uses 5 of 34 tools. The rest are management/write surfaces that auto-query has no business touching.
 
 ## Appendix B — Worked example
 

@@ -13,6 +13,9 @@
 #   5. website/public/llms-full.txt regenerates clean from its sources.
 #   6. website/reference/python-api/ regenerates clean from mempalace/
 #      docstrings (re-runs render-api-docs.py --check internally).
+#   7. Every "N tools" / "N MCP tools" claim in our docs matches
+#      len(mempalace.mcp_server.TOOLS). Competitor counts (README
+#      landscape table, ECOSYSTEM.md, llms-full.txt) are excluded.
 #
 # Exit codes:
 #   0 — clean
@@ -44,7 +47,7 @@ fail()  { printf '  \033[31m✗\033[0m %s\n' "$1" >&2; ((failures++)); }
 failures=0
 
 # ── 1. test count ────────────────────────────────────────────────────────
-step "1/5  test count in README"
+step "1/7  test count in README"
 readme_count=$(grep -oE '[0-9]+ tests pass on `main`' README.md | grep -oE '^[0-9]+' || echo "")
 if [ -z "$readme_count" ]; then
     warn "README has no '<N> tests pass on \`main\`' phrase — skipping"
@@ -75,7 +78,7 @@ else
 fi
 
 # ── 2. commit hash references ────────────────────────────────────────────
-step "2/5  commit hashes referenced in docs resolve"
+step "2/7  commit hashes referenced in docs resolve"
 docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # Strip cross-repo URLs first so we only check hashes that should resolve
 # in *this* fork. Pattern: anything inside (https://github.com/<other>/<repo>/commit/HASH)
@@ -103,7 +106,7 @@ if (( unresolved == 0 )) && (( ${#hashes[@]} > 0 )); then
 fi
 
 # ── 3. FORK_CHANGELOG.md is up-to-date with the canonical YAML ───────────
-step "3/5  FORK_CHANGELOG.md regenerates clean"
+step "3/7  FORK_CHANGELOG.md regenerates clean"
 render_bin="$REPO_ROOT/scripts/render-docs.py"
 if [ -x "$render_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -120,7 +123,7 @@ else
 fi
 
 # ── 4. upstream PR states ────────────────────────────────────────────────
-step "4/5  upstream PR states match doc claims"
+step "4/7  upstream PR states match doc claims"
 if ! command -v gh >/dev/null 2>&1; then
     warn "gh not on PATH — skipping PR state check"
 elif ! gh auth status >/dev/null 2>&1; then
@@ -200,7 +203,7 @@ else
 fi
 
 # ── 5. llms-full.txt regenerates clean from its sources ─────────────────
-step "5/6  llms-full.txt regenerates clean"
+step "5/7  llms-full.txt regenerates clean"
 llms_bin="$REPO_ROOT/scripts/render-llms-full.py"
 if [ -x "$llms_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -217,7 +220,7 @@ else
 fi
 
 # ── 6. Python API reference regenerates clean from source docstrings ────
-step "6/6  python-api/ regenerates clean"
+step "6/7  python-api/ regenerates clean"
 api_bin="$REPO_ROOT/scripts/render-api-docs.py"
 if [ -x "$api_bin" ]; then
     py="$REPO_ROOT/.venv/bin/python"
@@ -231,6 +234,53 @@ if [ -x "$api_bin" ]; then
     fi
 else
     warn "scripts/render-api-docs.py not present — skipping api-docs check"
+fi
+
+# ── 7. MCP tool count claims match mcp_server.TOOLS ─────────────────────
+step "7/7  MCP tool count in docs matches mcp_server.TOOLS"
+py="$REPO_ROOT/.venv/bin/python"
+[ -x "$py" ] || py="$(command -v python3 2>/dev/null || true)"
+if [ -z "$py" ]; then
+    warn "no python interpreter — skipping tool-count check"
+else
+    # Count via AST (import-free, stdlib only — mirrors render-api-docs.py,
+    # avoids importing the runtime stack just to count a dict literal).
+    expected=$("$py" - <<'PYEOF' 2>/dev/null || echo ""
+import ast, sys
+tree = ast.parse(open("mempalace/mcp_server.py", encoding="utf-8").read())
+for n in ast.walk(tree):
+    if (isinstance(n, ast.Assign)
+            and any(getattr(t, "id", None) == "TOOLS" for t in n.targets)
+            and isinstance(n.value, ast.Dict)):
+        print(len(n.value.keys)); sys.exit(0)
+sys.exit(1)
+PYEOF
+)
+    if [ -z "$expected" ]; then
+        warn "could not parse TOOLS from mempalace/mcp_server.py — skipping tool-count check"
+    else
+        # Competitor tool counts live in the landscape comparison table
+        # (README.md), the ecosystem notes (docs/ECOSYSTEM.md), and
+        # website/public/llms-full.txt (which embeds the README verbatim).
+        # Those are other projects' surfaces, not ours, so exclude them.
+        # Every remaining "N tools" / "N MCP tools" mention in tracked docs
+        # must equal len(TOOLS). The total count is always the integer
+        # immediately before "tools" (even in "5 of 34 tools", the 34 is
+        # the total), so a single regex captures the right number.
+        tc_drift=0
+        while IFS= read -r line; do
+            # A single line can hold more than one "N tools" match, so check
+            # every number on it, not just the first.
+            for n in $(printf '%s\n' "$line" | grep -oE '[0-9]+ (MCP )?tools' | grep -oE '^[0-9]+'); do
+                if [ "$n" != "$expected" ]; then
+                    fail "tool-count drift: ${line%%:*} claims '$n tools' (expected $expected)"
+                    tc_drift=1
+                fi
+            done
+        done < <(git grep -nE '[0-9]+ (MCP )?tools' -- '*.md' '*.json' \
+                   ':!README.md' ':!docs/ECOSYSTEM.md' ':!website/public/llms-full.txt' 2>/dev/null)
+        (( tc_drift == 0 )) && ok "all doc tool-count claims == $expected"
+    fi
 fi
 
 # Check 6 (fork-only YAML commits → CLAUDE.md row inventory) retired
