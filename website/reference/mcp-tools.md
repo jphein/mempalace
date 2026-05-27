@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Detailed parameter schemas for all 30 MCP tools.
+Detailed parameter schemas for all 31 MCP tools.
 
 ## Palace — Read Tools
 
@@ -171,6 +171,19 @@ Update an existing drawer's content and/or metadata (wing, room, tags). Fetches 
 | `tags` | array of string | No | Replace the drawer's tag list (pass `[]` to clear; omit to leave untouched) |
 
 **Returns:** `{ success, drawer_id, updated_fields }`
+
+---
+
+### `mempalace_rate_memory`
+
+Record feedback on whether a search result was useful. Stored as drawer metadata (never mutates content); accumulated ratings become a bounded boost/penalty in search ranking — they reorder results but never exclude a drawer.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `drawer_id` | string | **Yes** | ID of the drawer to rate |
+| `useful` | boolean | **Yes** | `true` increments the useful count, `false` the not-useful count |
+
+**Returns:** `{ success, drawer_id, rating_useful, rating_not_useful, net_rating }` — `net_rating` (useful − not_useful) drives the `rating_score` surfaced in search results.
 
 ---
 

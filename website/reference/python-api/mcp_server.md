@@ -239,6 +239,20 @@ Update an existing drawer's content and/or metadata.
     * non-empty list — replace the existing tag list with the
       normalised input.
 
+### `tool_rate_memory`
+
+```python
+def tool_rate_memory(drawer_id: str, useful: bool)
+```
+
+Record feedback on whether a search result was helpful (#159).
+
+Stores the rating as drawer *metadata* — the verbatim content is never
+touched. Each call increments one of two counters (``rating_useful`` /
+``rating_not_useful``); the net of the two becomes a bounded, capped
+ranking signal in ``search_memories`` that can reorder neighbours but
+never excludes a drawer (recall is preserved).
+
 ### `tool_rename_wing`
 
 ```python

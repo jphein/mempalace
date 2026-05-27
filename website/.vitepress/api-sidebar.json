@@ -192,6 +192,10 @@
         "link": "/reference/python-api/query_sanitizer"
       },
       {
+        "text": "mempalace.ratings",
+        "link": "/reference/python-api/ratings"
+      },
+      {
         "text": "mempalace.repair",
         "link": "/reference/python-api/repair"
       },

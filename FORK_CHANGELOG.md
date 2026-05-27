@@ -24,6 +24,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **mempalace_rate_memory MCP tool + bounded rating signal in search ranking (#159)** ([`583536c`](https://github.com/techempower-org/mempalace/commit/583536c))
+  A new ``mempalace_rate_memory(drawer_id, useful: bool)`` MCP tool lets
+  an agent or user record whether a search result was helpful. The rating
+  is stored as drawer *metadata* — two counters (``rating_useful`` /
+  ``rating_not_useful``) accumulated via a metadata-only ``col.update``.
+  The verbatim drawer content is never touched, honoring the
+  verbatim-always principle: ratings live alongside the words, never
+  inside them.
+
+  ``search_memories`` reads the net rating (useful − not_useful) and
+  applies a bounded, capped cosine-distance shift (``mempalace.ratings``:
+  0.03 per net point, capped at ±0.12 — deliberately below the weakest
+  closet-boost rung). A useful drawer moves up, an unhelpful one moves
+  down, but the shift can only reorder neighbours — it can never push a
+  relevant drawer out of the result set, so 100% recall is preserved.
+  Each hit surfaces its ``rating_score`` for transparency. The signal is
+  gated by ``PALACE_RATING_BOOST`` (default on; ``=0`` disables for A/B or
+  debugging), read live so the daemon picks it up without a restart.
+
+  Tier 1 (explicit ratings) only. Tier 2 (implicit echo/fizzle signals
+  from issue #159) is deferred to a follow-up — kept out of this slice to
+  stay small and focused. Fully local: no network, no external API, no
+  telemetry.
+
+  *Tests:* 22 — tests/test_rate_memory.py (ratings helpers, MCP tool, searcher integration)
+  *Files:* `mempalace/ratings.py`, `mempalace/mcp_server.py`, `mempalace/searcher.py`, `tests/test_rate_memory.py`
+
+
 - **RRF fusion mode + convex-vs-RRF A/B harness (#162)** ([`6c9d10c`](https://github.com/techempower-org/mempalace/commit/6c9d10c))
   ``search_memories`` gains a ``fusion_mode`` parameter selecting how the
   merged candidate pool is finally ranked: ``"convex"`` (default — the

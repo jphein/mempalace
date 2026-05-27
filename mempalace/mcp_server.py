@@ -2140,6 +2140,68 @@ def tool_update_drawer(
         return {"success": False, "error": str(e)}
 
 
+def tool_rate_memory(drawer_id: str, useful: bool):
+    """Record feedback on whether a search result was helpful (#159).
+
+    Stores the rating as drawer *metadata* — the verbatim content is never
+    touched. Each call increments one of two counters (``rating_useful`` /
+    ``rating_not_useful``); the net of the two becomes a bounded, capped
+    ranking signal in ``search_memories`` that can reorder neighbours but
+    never excludes a drawer (recall is preserved).
+    """
+    global _metadata_cache
+
+    from .ratings import apply_rating_to_metadata, extract_rating_from_metadata, net_rating
+
+    if not isinstance(useful, bool):
+        return {"success": False, "error": "`useful` must be a boolean"}
+
+    col = _get_collection()
+    if not col:
+        return _no_palace()
+    try:
+        existing = col.get(ids=[drawer_id], include=["metadatas"])
+        if not existing["ids"]:
+            return {"success": False, "error": f"Drawer not found: {drawer_id}"}
+
+        new_meta = dict(_safe_meta(existing["metadatas"][0]))
+        apply_rating_to_metadata(new_meta, useful)
+        useful_count, not_useful_count = extract_rating_from_metadata(new_meta)
+
+        _wal_log(
+            "rate_memory",
+            {
+                "drawer_id": drawer_id,
+                "useful": useful,
+                "rating_useful": useful_count,
+                "rating_not_useful": not_useful_count,
+            },
+        )
+
+        # Metadata-only update: never pass `documents`, so the stored
+        # verbatim text is left exactly as written.
+        col.update(ids=[drawer_id], metadatas=[new_meta])
+        _metadata_cache = None
+
+        logger.info(
+            "Rated drawer %s useful=%s (useful=%d not_useful=%d)",
+            drawer_id,
+            useful,
+            useful_count,
+            not_useful_count,
+        )
+        return {
+            "success": True,
+            "drawer_id": drawer_id,
+            "useful": useful,
+            "rating_useful": useful_count,
+            "rating_not_useful": not_useful_count,
+            "net_rating": net_rating(new_meta),
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def tool_rename_wing(from_wing: str, to_wing: str, batch_size: int = 500):
     """Rename all drawers in one wing to another, server-side.
 
@@ -3270,6 +3332,21 @@ TOOLS = {
             "required": ["drawer_id"],
         },
         "handler": tool_update_drawer,
+    },
+    "mempalace_rate_memory": {
+        "description": "Record feedback on whether a search result was useful. Stored as drawer metadata (never mutates content); accumulated ratings become a bounded boost/penalty in search ranking — they reorder results but never exclude a drawer.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "drawer_id": {"type": "string", "description": "ID of the drawer being rated"},
+                "useful": {
+                    "type": "boolean",
+                    "description": "True if the result was helpful, False if not",
+                },
+            },
+            "required": ["drawer_id", "useful"],
+        },
+        "handler": tool_rate_memory,
     },
     "mempalace_rename_wing": {
         "description": "Rename all drawers from one wing to another, server-side. Much faster than individual update_drawer calls. Use for wing name standardization.",
