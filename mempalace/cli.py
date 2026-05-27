@@ -271,6 +271,40 @@ def _post_daemon_rest(path: str, body: dict) -> dict:
         raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
 
 
+def _patch_daemon_rest(path: str, body: dict) -> dict:
+    """PATCH a daemon REST endpoint — for single-drawer metadata moves.
+
+    Mirrors :func:`_post_daemon_rest` (X-API-Key header, JSON body) but uses
+    the PATCH verb. Returns the parsed JSON response, or None on 404/401/403
+    (endpoint missing on an older daemon, or auth mismatch — the caller maps
+    that to the same exit code as an unreachable daemon). Raises DaemonError
+    on network failure.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = f"{_daemon_url()}{path}"
+    headers = {"content-type": "application/json"}
+    api_key = os.environ.get("PALACE_API_KEY", "").strip()
+    if api_key:
+        headers["x-api-key"] = api_key
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(body).encode("utf-8"),
+        headers=headers,
+        method="PATCH",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=_daemon_timeout()) as resp:
+            return json.loads(resp.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as e:
+        if e.code in (404, 401, 403):
+            return None
+        raise DaemonError(f"daemon REST {path} failed ({e.code}): {e.reason}") from e
+    except (urllib.error.URLError, ConnectionError, OSError) as e:
+        raise DaemonError(f"daemon unreachable at {_daemon_url()}: {e}") from e
+
+
 def _post_daemon_mine_cli(directory: str, wing: str, mode: str = "convos") -> bool:
     """POST a mine request to the daemon's ``/mine`` endpoint.
 
@@ -1803,6 +1837,140 @@ def cmd_list(args):
         _print_list_full(data)
     else:
         _print_list_table(data)
+
+
+# ── mempalace move ────────────────────────────────────────────────────
+#
+# Single-drawer metadata relocation: wraps the daemon's
+# ``PATCH /memory/{drawer_id}`` (palace-daemon main.py:1522). The route
+# accepts content/wing/room, but `move` deliberately exposes only
+# --wing / --room — the fork's verbatim-always principle forbids the
+# human CLI from ever mutating stored drawer text. `move` relocates
+# metadata only; the bulk wing-rename complement is `rename-wing`.
+
+
+def _resolve_move_format(args) -> str:
+    """Pick ``mempalace move`` output format. ``--format`` wins, then ``--json``."""
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def cmd_move(args):
+    """Fast direct-to-daemon single-drawer relocation (issue #191).
+
+    Wraps ``PATCH /memory/{drawer_id}`` with a body carrying only the
+    supplied ``wing`` / ``room`` keys. At least one is required — an empty
+    PATCH is an ambiguous no-op the daemon would 400, so we refuse it
+    client-side with a clear message. No ``--content`` flag exists by
+    design: verbatim-always means the human CLI never edits drawer text.
+    Daemon unreachable / 404 / 401 / 403 → exit 1 (sibling parity with
+    cmd_list / cmd_graph / cmd_cypher / cmd_stats); inner-error envelope
+    (daemon reachable but the move failed) → exit 2.
+    """
+    fmt = _resolve_move_format(args)
+    want_json = fmt == "json"
+
+    drawer_id = args.drawer_id
+    new_wing = getattr(args, "wing", None)
+    new_room = getattr(args, "room", None)
+
+    if new_wing is None and new_room is None:
+        msg = "move requires at least one of --wing / --room (nothing to change)."
+        if want_json:
+            _emit_json({"error": "no_change", "hint": msg})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+    if not _daemon_url():
+        msg = (
+            "move requires the palace-daemon. Set PALACE_DAEMON_URL "
+            "(or daemon_url in ~/.mempalace/config.json) and retry."
+        )
+        if want_json:
+            _emit_json({"error": "daemon_required", "hint": msg})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+    body: dict = {}
+    if new_wing is not None:
+        body["wing"] = new_wing
+    if new_room is not None:
+        body["room"] = new_room
+
+    try:
+        data = _patch_daemon_rest(f"/memory/{drawer_id}", body)
+    except DaemonError as e:
+        if want_json:
+            _emit_json({"error": str(e), "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({e})",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if data is None:
+        # _patch_daemon_rest returns None on 404/401/403 — route missing on
+        # an older daemon, or auth mismatch. Exit 1 matches the unreachable
+        # case so scripts treat "no daemon move" uniformly.
+        if want_json:
+            _emit_json({"error": "daemon PATCH /memory unavailable", "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                "see mempalace status for diagnostics",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    # mempalace_update_drawer returns success=False on a not-found drawer or
+    # an inner sanitize/validation failure — daemon reachable, move failed.
+    if not data.get("success", True):
+        if want_json:
+            _emit_json(data)
+        else:
+            print(f"\n  ERROR: {data.get('error', 'move failed')}", file=sys.stderr)
+        sys.exit(2)
+
+    if want_json:
+        _emit_json(data)
+        return
+
+    _print_move_result(data, drawer_id, requested_wing=new_wing, requested_room=new_room)
+
+
+def _print_move_result(data, drawer_id, requested_wing=None, requested_room=None):
+    """Human-readable old→new confirmation for a single-drawer move.
+
+    The daemon's update_drawer response carries only the *new* wing/room
+    (there's no cheap single-drawer GET route to read the prior values), so
+    the "old" column shows the requested change as ``→ new`` and unchanged
+    fields are marked ``(unchanged)``. Warnings (e.g. non-canonical room
+    per the taxonomy) are surfaced if the daemon returned any.
+    """
+    final_wing = data.get("wing", "")
+    final_room = data.get("room", "")
+    print()
+    print(f"  Moved drawer {drawer_id}")
+    if requested_wing is not None:
+        print(f"    wing → {final_wing}")
+    else:
+        print(f"    wing   {final_wing}  (unchanged)")
+    if requested_room is not None:
+        print(f"    room → {final_room}")
+    else:
+        print(f"    room   {final_room}  (unchanged)")
+    warnings = data.get("warnings") or []
+    for w in warnings:
+        print(f"    warning: {w}")
+    print()
 
 
 # ── mempalace graph ───────────────────────────────────────────────────
@@ -4206,6 +4374,24 @@ def main():
         ),
     )
 
+    # move — single-drawer metadata relocation (complement to rename-wing)
+    p_move = sub.add_parser(
+        "move",
+        help="Relocate one drawer to a different wing/room (metadata only)",
+    )
+    p_move.add_argument("drawer_id", help="ID of the drawer to move")
+    p_move.add_argument("--wing", default=None, help="New wing (omit to leave unchanged)")
+    p_move.add_argument("--room", default=None, help="New room (omit to leave unchanged)")
+    p_move.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, old→new confirmation), "
+            "json (daemon pass-through; same as --json)"
+        ),
+    )
+
     # graph
     p_graph = sub.add_parser(
         "graph",
@@ -4691,6 +4877,7 @@ def main():
         "split": cmd_split,
         "search": cmd_search,
         "list": cmd_list,
+        "move": cmd_move,
         "graph": cmd_graph,
         "cypher": cmd_cypher,
         "export": cmd_export,
