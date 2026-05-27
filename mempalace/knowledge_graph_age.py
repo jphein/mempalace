@@ -811,18 +811,152 @@ class KnowledgeGraphAGE:
         - ``expired_facts`` — triples − current_facts
         - ``relationship_types`` — sorted distinct ``relation_type`` values
 
-        Three separate Cypher round-trips (entity count, triple counts +
-        current, distinct relation_types). Could be folded into one with
-        WITH-clause chaining, but AGE 1.6.0's parser is fussy about
-        ``count(*) WHERE``-style aggregates inside subqueries and three
-        small queries keep the implementation maintainable. Performance
-        is fine — AGE walks the graph once per Cypher run, all three
-        complete in <50ms on the production palace's graph size.
+        Tries ``_stats_fast`` first (SQL against the AGE backing label
+        tables — sub-ms on ≥1M edges because Postgres serves plain
+        ``count(*)`` straight off the visibility map without unwrapping
+        every value through agtype). Falls back to ``_stats_cypher`` when
+        the backing tables aren't available yet (fresh palace, label not
+        yet created, or non-standard AGE setup). The fallback runs three
+        full graph walks and is the slow path the issue measures at ~9s
+        on the production palace at ~1M entities / ~1.6M RELATION edges.
 
-        Implemented to close techempower-org/mempalace#96: ``tool_kg_stats``
-        was throwing ``AttributeError`` on AGE-backed daemons, breaking
-        palace-daemon's ``/graph`` KG panel.
+        Implemented to close techempower-org/mempalace#96 (envelope
+        shape) and #266 (performance — replaces the ~9s slow path with
+        sub-100ms).
         """
+        try:
+            return self._stats_fast()
+        except Exception as exc:
+            try:
+                self._conn.rollback()
+            except Exception:
+                pass
+            logger.debug("stats() fast path unavailable, falling back to Cypher: %s", exc)
+            return self._stats_cypher()
+
+    def _stats_fast(self) -> dict:
+        """Backing-table fast path for ``stats()``.
+
+        Ported from palace-daemon ``f56e238`` — AGE registers each label
+        as a regular Postgres table under the graph's schema
+        (``mempalace_kg."Entity"``, ``mempalace_kg."RELATION"``, ...),
+        so a plain ``SELECT count(*)`` hits the visibility map without
+        materializing agtype-wrapped rows. Identifier case is preserved
+        by AGE so the quoted-identifier names are mandatory; lowercase
+        names 404.
+
+        ``current_facts`` and ``relationship_types`` use the agtype
+        ``->>`` operator to read the RELATION properties column as JSON.
+        Both are wrapped in savepoints so a missing-operator error (older
+        AGE without agtype ``->>`` support) only loses the savepoint, not
+        the outer transaction, and we transparently fall through to a
+        single Cypher walk for that one field.
+
+        Raises on backing-table miss (e.g. label not yet created on a
+        fresh palace) so the outer ``stats()`` method can fall back to
+        the full-Cypher path.
+        """
+        graph = self.GRAPH_NAME
+        with self._conn.cursor() as cur:
+            cur.execute(f'SELECT count(*) FROM "{graph}"."Entity"')
+            row = cur.fetchone()
+            entities = int(row[0]) if row else 0
+
+            cur.execute(f'SELECT count(*) FROM "{graph}"."RELATION"')
+            row = cur.fetchone()
+            triples = int(row[0]) if row else 0
+
+            # current_facts: prefer agtype ->> cast; on operator-missing
+            # error roll the savepoint back and fall through to Cypher
+            # for this field only.
+            if triples == 0:
+                current = 0
+            else:
+                cur.execute("SAVEPOINT stats_current")
+                try:
+                    cur.execute(
+                        f'SELECT count(*) FROM "{graph}"."RELATION" '
+                        "WHERE (properties->>'valid_to') IS NULL"
+                    )
+                    row = cur.fetchone()
+                    current = int(row[0]) if row else 0
+                    cur.execute("RELEASE SAVEPOINT stats_current")
+                except Exception as exc:
+                    cur.execute("ROLLBACK TO SAVEPOINT stats_current")
+                    cur.execute("RELEASE SAVEPOINT stats_current")
+                    logger.debug(
+                        "agtype ->> unavailable for current_facts, falling back to Cypher: %s",
+                        exc,
+                    )
+                    current = self._current_facts_cypher()
+
+            # relationship_types: same savepoint pattern.
+            if triples == 0:
+                relationship_types: list[str] = []
+            else:
+                cur.execute("SAVEPOINT stats_types")
+                try:
+                    cur.execute(
+                        f"SELECT DISTINCT (properties->>'relation_type') "
+                        f'FROM "{graph}"."RELATION"'
+                    )
+                    rows = cur.fetchall()
+                    relationship_types = sorted(r[0] for r in rows if isinstance(r[0], str))
+                    cur.execute("RELEASE SAVEPOINT stats_types")
+                except Exception as exc:
+                    cur.execute("ROLLBACK TO SAVEPOINT stats_types")
+                    cur.execute("RELEASE SAVEPOINT stats_types")
+                    logger.debug(
+                        "agtype ->> unavailable for relation_type, falling back to Cypher: %s",
+                        exc,
+                    )
+                    relationship_types = self._relationship_types_cypher()
+        self._conn.commit()
+
+        return {
+            "entities": entities,
+            "triples": triples,
+            "current_facts": current,
+            "expired_facts": triples - current,
+            "relationship_types": relationship_types,
+        }
+
+    def _current_facts_cypher(self) -> int:
+        """Cypher fallback for ``current_facts`` when the agtype ``->>``
+        cast isn't supported. One graph walk instead of three — still the
+        expensive operation but bounded to a single field."""
+        rows = self._run_cypher(
+            """
+            MATCH ()-[r:RELATION]->()
+            WHERE r.valid_to IS NULL
+            RETURN count(r) AS cnt
+            """,
+            {},
+            fetch=True,
+        )
+        return int(self._unwrap_agtype(rows[0][0])) if rows else 0
+
+    def _relationship_types_cypher(self) -> list:
+        """Cypher fallback for ``relationship_types`` when agtype ``->>``
+        isn't supported. One graph walk, returns sorted distinct values
+        with NULLs dropped (matches the SQL path semantics)."""
+        rows = self._run_cypher(
+            """
+            MATCH ()-[r:RELATION]->()
+            RETURN DISTINCT r.relation_type AS rt
+            """,
+            {},
+            fetch=True,
+        )
+        return sorted(v for v in (self._unwrap_agtype(r[0]) for r in rows) if isinstance(v, str))
+
+    def _stats_cypher(self) -> dict:
+        """Original three-Cypher-walk stats path, retained as the
+        outermost fallback when the backing tables aren't accessible
+        (fresh palace where the label hasn't been created yet, or a
+        non-standard AGE setup). Three separate round-trips because AGE
+        1.6.0's parser is fussy about ``count(*) WHERE``-style aggregates
+        inside subqueries."""
         entity_rows = self._run_cypher(
             "MATCH (n:Entity) RETURN count(n) AS cnt",
             {},
@@ -846,19 +980,7 @@ class KnowledgeGraphAGE:
             triples = 0
             current = 0
 
-        type_rows = self._run_cypher(
-            """
-            MATCH ()-[r:RELATION]->()
-            RETURN DISTINCT r.relation_type AS rt
-            """,
-            {},
-            fetch=True,
-        )
-        # Some rows may have NULL relation_type if a write predates the
-        # property; drop those before sorting so callers see a clean list.
-        relationship_types = sorted(
-            v for v in (self._unwrap_agtype(r[0]) for r in type_rows) if isinstance(v, str)
-        )
+        relationship_types = self._relationship_types_cypher()
 
         return {
             "entities": entities,
