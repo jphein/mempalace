@@ -26,6 +26,8 @@ from mempalace.hooks_cli import (
     _sanitize_session_id,
     _validate_transcript_path,
     _wing_from_transcript_path,
+    derive_room,
+    derive_wing,
     hook_stop,
     hook_session_start,
     hook_precompact,
@@ -2031,3 +2033,103 @@ def test_regular_file_at_palace_root_treated_as_absent(tmp_path, monkeypatch):
     # The stray file is left untouched; we never try to convert it.
     assert fake_root.is_file()
     assert fake_root.read_text() == "oops, this is a file not a directory"
+
+
+# --- derive_wing: derivation-order contract (#157) ---
+#
+# Priority: cwd > transcript path > project-dir hint > entity hint > unfiled.
+# The entity detector is a *hint, never a gate* — it can never override an
+# unambiguous signal.
+
+
+def test_derive_wing_cwd_beats_entity_hint(tmp_path):
+    """cwd from the JSONL transcript wins over a confident entity hint."""
+    transcript = tmp_path / "session.jsonl"
+    transcript.write_text(json.dumps({"cwd": "/home/jp/Projects/realm-watch"}) + "\n")
+    wing = derive_wing(str(transcript), entity_hint="Alice")
+    assert wing == "wing_realm_watch"
+
+
+def test_derive_wing_transcript_path_beats_entity_hint():
+    """An encoded transcript path beats the entity hint (no cwd present)."""
+    path = "/home/jp/.claude/projects/-home-jp-Projects-memorypalace/abc.jsonl"
+    wing = derive_wing(path, entity_hint="Bob")
+    assert wing == "wing_memorypalace"
+
+
+def test_derive_wing_project_dir_hint_beats_entity_hint():
+    """The explicit project-dir hint is unambiguous and beats the entity hint."""
+    # No usable cwd / encoded path → falls through to the project-dir hint.
+    wing = derive_wing(
+        "/some/random/path.jsonl",
+        project_dir="/home/jp/Projects/customer-portal",
+        entity_hint="Carol",
+    )
+    assert wing == "wing_customer_portal"
+
+
+def test_derive_wing_entity_hint_only_as_last_resort():
+    """The entity hint is consulted only when every unambiguous signal absent."""
+    wing = derive_wing("/some/random/path.jsonl", entity_hint="Acme Corp")
+    assert wing == "wing_acme_corp"
+
+
+def test_derive_wing_unfiled_when_no_signal():
+    """No cwd, no transcript path, no project dir, no entity → unfiled."""
+    assert derive_wing("/some/random/path.jsonl") == "wing_sessions"
+
+
+def test_derive_wing_entity_hint_does_not_override_default_when_path_resolves(tmp_path):
+    """A resolvable cwd must win even when an entity hint is also supplied."""
+    transcript = tmp_path / "s.jsonl"
+    transcript.write_text(json.dumps({"cwd": "/home/jp/Projects/widgets"}) + "\n")
+    # Entity hint present, but cwd is unambiguous → entity must be ignored.
+    assert derive_wing(str(transcript), project_dir="/tmp/other", entity_hint="X") == "wing_widgets"
+
+
+# --- derive_room: derivation-order contract (#157) ---
+
+
+def test_derive_room_explicit_hint_wins():
+    """An explicit canonical room hint beats keyword scoring and entity hint."""
+    # Content that would keyword-score to something, but the hint overrides.
+    room = derive_room(content="we fixed a bug in the parser", room_hint="meetings")
+    assert room == "meetings"
+
+
+def test_derive_room_keyword_beats_entity_hint():
+    """A keyword-derived room beats an entity hint."""
+    from mempalace.convo_miner import DEFAULT_ROOM, detect_convo_room
+
+    # Pick content that actually scores to a non-default canonical room.
+    sample = "we made a decision and agreed on the architecture and tradeoffs"
+    keyword_room = detect_convo_room(sample)
+    if keyword_room == DEFAULT_ROOM:
+        pytest.skip("sample did not score to a non-default room in this config")
+    # Entity hint points elsewhere; keyword signal must win.
+    assert derive_room(content=sample, entity_hint="problems") == keyword_room
+
+
+def test_derive_room_entity_hint_only_when_no_keyword():
+    """The entity hint fills in only when content yields no keyword signal."""
+    from mempalace.convo_miner import _load_room_rules
+
+    canonical = list(_load_room_rules().keys())
+    # Use a real canonical room as the entity hint so it is accepted.
+    target = canonical[0]
+    # Empty content → no keyword signal → entity hint used.
+    assert derive_room(content="", entity_hint=target) == target
+
+
+def test_derive_room_entity_hint_must_be_canonical():
+    """A non-canonical entity hint is rejected; falls back to default room."""
+    from mempalace.convo_miner import DEFAULT_ROOM
+
+    assert derive_room(content="", entity_hint="not_a_real_room_xyz") == DEFAULT_ROOM
+
+
+def test_derive_room_unfiled_default():
+    """No hint, no content, no entity → canonical default room."""
+    from mempalace.convo_miner import DEFAULT_ROOM
+
+    assert derive_room() == DEFAULT_ROOM
