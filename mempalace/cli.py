@@ -1931,6 +1931,155 @@ def cmd_purge(args):
     print(f"\n  Purged {match_count:,} drawers. Remaining: {remaining:,}\n")
 
 
+def cmd_prune(args):
+    """Delete drawers older than ``--stale-days N`` (dry-run by default).
+
+    Age is the span between a drawer's ``filed_at`` timestamp and now. Unlike
+    ``purge``'s metadata-equality filter, the staleness predicate is a string
+    timestamp that chromadb ``where=`` can't range-compare reliably, so we
+    fetch candidate metadata and decide age in Python (``mempalace.recency``),
+    then delete by explicit id list.
+
+    Safety: this is the only command that destroys data on a *time* predicate
+    rather than an explicit selection, so it is **dry-run by default**. Nothing
+    is deleted unless ``--confirm`` is passed. A drawer with no parseable
+    ``filed_at`` is treated as ageless and is **never** pruned — we never
+    delete a drawer we can't date.
+    """
+    from datetime import datetime, timezone
+
+    from .backends.base import PalaceRef
+    from .backends.chroma import ChromaBackend
+    from .migrate import contains_palace_database
+    from .recency import age_days
+
+    want_json = getattr(args, "json", False)
+    stale_days = args.stale_days
+    confirm = getattr(args, "confirm", False)
+
+    if stale_days is None or stale_days <= 0:
+        msg = "--stale-days must be a positive integer"
+        print(json.dumps({"error": msg}) if want_json else f"  Error: {msg}")
+        return
+
+    palace_path = os.path.abspath(
+        os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
+    )
+
+    if not os.path.isdir(palace_path) or not contains_palace_database(palace_path):
+        if want_json:
+            print(json.dumps({"error": "no palace database", "palace": palace_path}))
+        else:
+            _print_retired_local_palace_or_default(palace_path)
+        return
+
+    # Optional wing/room scope — without it, prune spans the whole palace.
+    clauses = []
+    if args.wing:
+        clauses.append({"wing": args.wing})
+    if args.room:
+        clauses.append({"room": args.room})
+    where = None
+    if clauses:
+        where = clauses[0] if len(clauses) == 1 else {"$and": clauses}
+
+    backend = ChromaBackend()
+    try:
+        col = backend.get_collection(
+            palace=PalaceRef(id=palace_path, local_path=palace_path),
+            collection_name="mempalace_drawers",
+        )
+    except Exception as e:
+        print(json.dumps({"error": str(e)}) if want_json else f"\n  Error reading palace: {e}")
+        return
+
+    # Pull ids + metadata for the scope; age is decided in Python.
+    try:
+        got = (
+            col.get(where=where, include=["metadatas"]) if where else col.get(include=["metadatas"])
+        )
+    except Exception as e:
+        print(json.dumps({"error": str(e)}) if want_json else f"\n  Error querying drawers: {e}")
+        return
+
+    if isinstance(got, dict):
+        all_ids = got.get("ids") or []
+        all_metas = got.get("metadatas") or []
+    else:
+        all_ids = getattr(got, "ids", []) or []
+        all_metas = getattr(got, "metadatas", []) or []
+
+    now = datetime.now(timezone.utc)
+    stale_ids = []
+    undated = 0
+    for did, meta in zip(all_ids, all_metas):
+        age = age_days(meta or {}, now=now)
+        if age is None:
+            undated += 1
+            continue
+        if age >= stale_days:
+            stale_ids.append(did)
+
+    scope_parts = []
+    if args.wing:
+        scope_parts.append(f"wing={args.wing}")
+    if args.room:
+        scope_parts.append(f"room={args.room}")
+    scope = " ".join(scope_parts) if scope_parts else "entire palace"
+
+    if want_json:
+        print(
+            json.dumps(
+                {
+                    "stale_days": stale_days,
+                    "scope": scope,
+                    "scanned": len(all_ids),
+                    "stale": len(stale_ids),
+                    "undated_skipped": undated,
+                    "confirmed": bool(confirm),
+                    "deleted": 0,
+                }
+            )
+        )
+    else:
+        print(f"\n  Scanned {len(all_ids):,} drawers in {scope}")
+        print(f"  {len(stale_ids):,} older than {stale_days} days; {undated:,} undated (kept)")
+
+    if not stale_ids:
+        if not want_json:
+            print("  Nothing to prune.\n")
+        return
+
+    if not confirm:
+        if not want_json:
+            print(
+                f"\n  DRY RUN — nothing deleted. Re-run with --confirm to delete "
+                f"{len(stale_ids):,} drawers.\n"
+            )
+        return
+
+    try:
+        col.delete(ids=stale_ids)
+    except Exception as e:
+        print(json.dumps({"error": str(e)}) if want_json else f"\n  Delete failed: {e}\n")
+        return
+
+    remaining = col.count()
+    if want_json:
+        print(
+            json.dumps(
+                {
+                    "stale_days": stale_days,
+                    "scope": scope,
+                    "deleted": len(stale_ids),
+                    "remaining": remaining,
+                }
+            )
+        )
+    else:
+        print(f"\n  Pruned {len(stale_ids):,} drawers. Remaining: {remaining:,}\n")
+
+
 def cmd_rename_wing(args):
     want_json = getattr(args, "json", False)
     from_wing = args.from_wing
@@ -3527,6 +3676,24 @@ def main():
     )
     p_purge.add_argument("--yes", "-y", action="store_true", help="Skip confirmation prompt")
 
+    p_prune = sub.add_parser(
+        "prune",
+        help="Delete drawers older than --stale-days N (dry-run unless --confirm)",
+    )
+    p_prune.add_argument(
+        "--stale-days",
+        type=int,
+        required=True,
+        help="Prune drawers whose filed_at is older than this many days",
+    )
+    p_prune.add_argument("--wing", help="Limit prune to this wing")
+    p_prune.add_argument("--room", help="Limit prune to this room")
+    p_prune.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Actually delete (without this flag, prune only reports a dry-run count)",
+    )
+
     p_rename_wing = sub.add_parser(
         "rename-wing",
         help="Rename all drawers from one wing to another (atomic on postgres)",
@@ -3699,6 +3866,7 @@ def main():
         "migrate": cmd_migrate,
         "migrate-to-postgres": cmd_migrate_to_postgres,
         "purge": cmd_purge,
+        "prune": cmd_prune,
         "rename-wing": cmd_rename_wing,
         "rooms": cmd_rooms,
         "status": cmd_status,
