@@ -170,13 +170,19 @@ class _FakeCursor:
         db = self.conn.db
         # Claim batch
         if "UPDATE mempalace_kg_extraction_queue q" in s and "FOR UPDATE SKIP LOCKED" in s:
-            worker_id, limit = params
+            worker_id, lease_seconds, limit = params
             with db.lock:
+                # Mirror the SQL lease predicate: a row is claimable if it is
+                # not completed AND either unclaimed or its claim is older than
+                # the lease (orphaned by a dead worker). Peek the clock for the
+                # threshold without advancing it.
+                stale_before = db._clock - lease_seconds
                 candidates = sorted(
                     (
                         r
                         for r in db.queue.values()
-                        if r.started_at is None and r.completed_at is None
+                        if r.completed_at is None
+                        and (r.started_at is None or r.started_at < stale_before)
                     ),
                     key=lambda r: r.queued_at,
                 )[:limit]
@@ -257,8 +263,25 @@ class _FakeCursor:
                     if r.completed_at is not None
                 )
                 drawers_5m = sum(1 for r in db.queue.values() if r.completed_at is not None)
+                lease_seconds = params[0] if params else kw.CLAIM_LEASE_SECONDS
+                stale_before = db._clock - lease_seconds
+                stale_reclaimable = sum(
+                    1
+                    for r in db.queue.values()
+                    if r.completed_at is None
+                    and r.started_at is not None
+                    and r.started_at < stale_before
+                )
             self._results = [
-                (queue_depth, in_progress, completed_today, errors_total, triples_5m, drawers_5m)
+                (
+                    queue_depth,
+                    in_progress,
+                    completed_today,
+                    errors_total,
+                    triples_5m,
+                    drawers_5m,
+                    stale_reclaimable,
+                )
             ]
             return
 
@@ -477,6 +500,66 @@ def test_claim_returns_no_overlap_under_contention():
     assert set(a_ids).isdisjoint(set(b_ids)), (a_ids, b_ids)
 
 
+def test_stale_claimed_row_is_reclaimed_after_lease():
+    """A row claimed by a worker that then died mid-flight (started_at set,
+    never completed, never errored) must become claimable again once its
+    claim is older than the lease. This is the self-healing path for a hard
+    worker death (SIGKILL / host OOM / dropped connection) where no error
+    handler runs to reset started_at."""
+    db = _FakeDB()
+    db.enqueue("orphan")
+    conn = _FakeConn(db)
+
+    first = kw._claim_batch(conn, "worker-a", 5, lease_seconds=10)
+    assert [r.drawer_id for r in first] == ["orphan"]
+    # Worker A dies here: no completion, no error — started_at stays set.
+    assert db.queue["orphan"].completed_at is None
+    assert db.queue["orphan"].started_at is not None
+
+    db._clock += 100  # time passes well beyond the 10s lease
+
+    second = kw._claim_batch(conn, "worker-b", 5, lease_seconds=10)
+    assert [r.drawer_id for r in second] == ["orphan"]
+    assert db.queue["orphan"].worker_id == "worker-b"
+
+
+def test_fresh_claimed_row_not_reclaimed_within_lease():
+    """A row claimed recently (within the lease) must NOT be reclaimed — a
+    live, in-flight worker still owns it. Reclaiming early would double-process
+    the drawer."""
+    db = _FakeDB()
+    db.enqueue("inflight")
+    conn = _FakeConn(db)
+
+    first = kw._claim_batch(conn, "worker-a", 5, lease_seconds=100)
+    assert [r.drawer_id for r in first] == ["inflight"]
+
+    db._clock += 5  # well within the 100s lease
+
+    second = kw._claim_batch(conn, "worker-b", 5, lease_seconds=100)
+    assert second == []
+    assert db.queue["inflight"].worker_id == "worker-a"
+
+
+def test_completed_row_never_reclaimed_even_past_lease():
+    """A completed row must never be reclaimed, regardless of how old its
+    claim is — completion is terminal."""
+    db = _FakeDB()
+    db.queue["done"] = _QueueRow(
+        drawer_id="done",
+        queued_at=db.now(),
+        started_at=db.now(),
+        completed_at=db.now(),
+        triples_extracted=3,
+    )
+    conn = _FakeConn(db)
+
+    db._clock += 100  # far past any lease
+
+    rows = kw._claim_batch(conn, "worker-b", 5, lease_seconds=10)
+    assert rows == []
+
+
 def test_seed_backfill_inserts_drawers_into_queue():
     db = _FakeDB()
     for i in range(3):
@@ -534,12 +617,31 @@ def test_status_snapshot_shape():
         "errors_total",
         "triples_extracted_5m",
         "drawers_per_min_5m",
+        "stale_reclaimable",
     }
     assert snap["queue_depth"] >= 1
     assert snap["in_progress"] == 1
     assert snap["completed_today"] == 1
     assert snap["errors_total"] == 1
     assert snap["triples_extracted_5m"] == 4
+    # pending-1 was just claimed (started_at recent), so it is in_progress
+    # but not yet stale.
+    assert snap["stale_reclaimable"] == 0
+
+
+def test_status_counts_orphaned_rows_as_stale_reclaimable(monkeypatch):
+    """A row claimed long ago but never completed/errored shows up as
+    stale_reclaimable so operators can see orphan accumulation."""
+    db = _FakeDB()
+    db.enqueue("orphan")
+    db.queue["orphan"].started_at = db.now()  # claimed
+    db._clock += 100  # claim ages past the short lease below
+    conn = _FakeConn(db)
+
+    # _status_snapshot reads kw.CLAIM_LEASE_SECONDS at call time.
+    monkeypatch.setattr(kw, "CLAIM_LEASE_SECONDS", 10)
+    snap = kw._status_snapshot(conn)
+    assert snap["stale_reclaimable"] == 1
 
 
 def test_run_worker_processes_drawer_end_to_end():

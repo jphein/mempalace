@@ -54,6 +54,19 @@ DEFAULT_POLL_INTERVAL = 30
 DEFAULT_CONCURRENCY = 24
 DEFAULT_TRIPLE_CONFIDENCE = 0.7
 
+# Claim lease / visibility-timeout. A row that was claimed (started_at set)
+# but never completed or errored is presumed orphaned by a dead worker once
+# its claim is older than this, and becomes re-claimable. The success path
+# sets completed_at and the error path resets started_at, so this only ever
+# recovers HARD deaths (SIGKILL, host OOM, dropped connection) where no Python
+# handler ran. It must comfortably exceed the longest time a live worker holds
+# a row mid-flight, otherwise a slow-but-alive worker's batch could be stolen
+# and double-processed. Override via MEMPALACE_KG_CLAIM_LEASE_SECONDS.
+DEFAULT_CLAIM_LEASE_SECONDS = 900  # 15 min
+CLAIM_LEASE_SECONDS = int(
+    os.getenv("MEMPALACE_KG_CLAIM_LEASE_SECONDS", str(DEFAULT_CLAIM_LEASE_SECONDS))
+)
+
 AGE_GRAPH_NAME = "mempalace_kg"
 # Same dollar-quote tag KnowledgeGraphAGE uses for its synchronous writes.
 # Kept in sync so adversarial-value checks in ``_cypher_literal`` apply
@@ -96,7 +109,8 @@ _CLAIM_SQL = """
     FROM (
         SELECT drawer_id
         FROM mempalace_kg_extraction_queue
-        WHERE started_at IS NULL AND completed_at IS NULL
+        WHERE completed_at IS NULL
+          AND (started_at IS NULL OR started_at < NOW() - make_interval(secs => %s))
         ORDER BY queued_at
         LIMIT %s
         FOR UPDATE SKIP LOCKED
@@ -106,24 +120,30 @@ _CLAIM_SQL = """
 """
 
 
-async def _claim_batch_async(conn, worker_id: str, batch_size: int) -> list[_ClaimedDrawer]:
+async def _claim_batch_async(
+    conn, worker_id: str, batch_size: int, lease_seconds: int = CLAIM_LEASE_SECONDS
+) -> list[_ClaimedDrawer]:
     """Atomically claim up to ``batch_size`` queued drawers via async conn.
 
     Uses ``FOR UPDATE SKIP LOCKED`` so concurrent workers split the queue
-    without blocking each other or claiming the same row twice.
+    without blocking each other or claiming the same row twice. Rows whose
+    claim is older than ``lease_seconds`` (orphaned by a dead worker) are
+    re-claimable — see ``CLAIM_LEASE_SECONDS``.
     """
     async with conn.cursor() as cur:
-        await cur.execute(_CLAIM_SQL, (worker_id, batch_size))
+        await cur.execute(_CLAIM_SQL, (worker_id, lease_seconds, batch_size))
         rows = await cur.fetchall()
     await conn.commit()
     return [_ClaimedDrawer(drawer_id=r[0], wing=r[1], room=r[2]) for r in rows]
 
 
-def _claim_batch(conn, worker_id: str, batch_size: int) -> list[_ClaimedDrawer]:
+def _claim_batch(
+    conn, worker_id: str, batch_size: int, lease_seconds: int = CLAIM_LEASE_SECONDS
+) -> list[_ClaimedDrawer]:
     """Synchronous claim path. Kept for the test surface and any caller
     that holds a sync connection (e.g. ``get_status`` below)."""
     with conn.cursor() as cur:
-        cur.execute(_CLAIM_SQL, (worker_id, batch_size))
+        cur.execute(_CLAIM_SQL, (worker_id, lease_seconds, batch_size))
         rows = cur.fetchall()
     conn.commit()
     return [_ClaimedDrawer(drawer_id=r[0], wing=r[1], room=r[2]) for r in rows]
@@ -275,13 +295,26 @@ _STATUS_SQL = """
         ) AS triples_5m,
         COUNT(*) FILTER (
             WHERE completed_at >= NOW() - INTERVAL '5 minutes'
-        ) AS drawers_5m
+        ) AS drawers_5m,
+        COUNT(*) FILTER (
+            WHERE completed_at IS NULL
+              AND started_at IS NOT NULL
+              AND started_at < NOW() - make_interval(secs => %s)
+        ) AS stale_reclaimable
     FROM mempalace_kg_extraction_queue
 """
 
 
 def _status_row_to_dict(row: tuple) -> dict:
-    queue_depth, in_progress, completed_today, errors_total, triples_5m, drawers_5m = row
+    (
+        queue_depth,
+        in_progress,
+        completed_today,
+        errors_total,
+        triples_5m,
+        drawers_5m,
+        stale_reclaimable,
+    ) = row
     drawers_per_min = (drawers_5m or 0) / 5.0
     return {
         "queue_depth": int(queue_depth or 0),
@@ -290,13 +323,17 @@ def _status_row_to_dict(row: tuple) -> dict:
         "errors_total": int(errors_total or 0),
         "triples_extracted_5m": int(triples_5m or 0),
         "drawers_per_min_5m": round(drawers_per_min, 2),
+        # Orphaned-and-eligible: claimed but neither completed nor errored,
+        # past the lease — the lease reclaim will pick these up. A nonzero
+        # value surfaces worker deaths that the self-healing path is recovering.
+        "stale_reclaimable": int(stale_reclaimable or 0),
     }
 
 
 def _status_snapshot(conn) -> dict:
     """Return queue depth, in-progress, completed-today, and error counts."""
     with conn.cursor() as cur:
-        cur.execute(_STATUS_SQL)
+        cur.execute(_STATUS_SQL, (CLAIM_LEASE_SECONDS,))
         row = cur.fetchone()
     return _status_row_to_dict(row)
 
