@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **mempalace_rate_memory MCP tool + bounded rating signal in search ranking (#159)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **mempalace_rate_memory MCP tool + bounded rating signal in search ranking (#159)** ([`583536c`](https://github.com/techempower-org/mempalace/commit/583536c))
   A new ``mempalace_rate_memory(drawer_id, useful: bool)`` MCP tool lets
   an agent or user record whether a search result was helpful. The rating
   is stored as drawer *metadata* — two counters (``rating_useful`` /

@@ -27,7 +27,7 @@ entries:
   - id: rate-memory-feedback-loop
     date: 2026-05-26
     bucket: Added
-    commit: TBD
+    commit: 583536c
     area: Search
     summary: "mempalace_rate_memory MCP tool + bounded rating signal in search ranking (#159)"
     tests: "22 — tests/test_rate_memory.py (ratings helpers, MCP tool, searcher integration)"

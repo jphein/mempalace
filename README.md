@@ -237,7 +237,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | mempalace_rate_memory MCP tool + bounded rating signal in search ranking (#159) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
+| 1 | mempalace_rate_memory MCP tool + bounded rating signal in search ranking (#159) | — | [`583536c`](https://github.com/techempower-org/mempalace/commit/583536c) |
 | 2 | Formalize wing/room derivation order; demote entity detector to last-resort hint (#157) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
 | 3 | RRF fusion mode + convex-vs-RRF A/B harness (#162) | [#247](https://github.com/MemPalace/mempalace/pull/247) | [`6c9d10c`](https://github.com/techempower-org/mempalace/commit/6c9d10c) |
 | 4 | mempalace stats: add ROOMS breakdown (drawer count by room) to the dashboard | — | [`1673465`](https://github.com/techempower-org/mempalace/commit/1673465) |

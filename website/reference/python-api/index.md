@@ -56,6 +56,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.pending_queue`](./pending_queue) — Append-only journal for mine requests that couldn't reach the daemon.
 - [`mempalace.project_scanner`](./project_scanner) — project_scanner.py — Detect projects and people from real signal.
 - [`mempalace.query_sanitizer`](./query_sanitizer) — query_sanitizer.py — Mitigate system prompt contamination in search queries.
+- [`mempalace.ratings`](./ratings) — Feedback ratings for search results (#159, Tier 1).
 - [`mempalace.repair`](./repair) — repair.py — Scan, prune corrupt entries, and rebuild HNSW index
 - [`mempalace.room_detector_local`](./room_detector_local) — room_detector_local.py — Local setup, no API required.
 - [`mempalace.room_taxonomy`](./room_taxonomy) — Canonical room taxonomy — soft-warn validation.
