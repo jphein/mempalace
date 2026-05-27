@@ -1662,6 +1662,9 @@ def mine(
     include_ignored: list = None,
     files: list = None,
     max_chunks_per_file: Optional[int] = None,
+    *,
+    collection=None,
+    closets_collection=None,
 ):
     """Mine a project directory into the palace.
 
@@ -1675,7 +1678,31 @@ def mine(
     :func:`_resolve_max_chunks_per_file`). ``None`` defers to
     ``MEMPALACE_MAX_CHUNKS_PER_FILE`` or ``MAX_CHUNKS_PER_FILE``; ``0``
     disables the cap entirely (#1455).
+
+    ``collection`` / ``closets_collection`` let a single-client host
+    (e.g. palace-daemon) write through its own already-open backend handle
+    instead of constructing a second one. When ``collection`` is supplied:
+
+      - the internal ``get_collection(palace_path)`` call is skipped;
+      - ``mine_palace_lock(palace_path)`` is NOT acquired (the caller
+        guarantees exclusivity around its own client);
+      - the post-mine FTS5 ``_validate_palace_fts5_after_mine`` step is
+        skipped because it would call ``_close_chroma_handles`` against
+        the caller's still-open client and reopen sqlite3 read-only —
+        the caller can run its own integrity check on its own schedule.
+
+    If ``collection`` is supplied but ``closets_collection`` is not, the
+    closet upserts use the same injected collection's backend the same
+    way the non-injected path would (via ``get_closets_collection`` on
+    the live palace path) — so callers that only have a drawers handle
+    are still served correctly.
+
+    Existing positional/keyword callers see no behaviour change: when
+    both kwargs are omitted, ``mine`` walks exactly the original code
+    path (construct client, acquire lock, validate at end).
     """
+    inject_handles = collection is not None or closets_collection is not None
+
     if dry_run:
         return _mine_impl(
             project_dir,
@@ -1688,6 +1715,29 @@ def mine(
             include_ignored=include_ignored,
             files=files,
             max_chunks_per_file=max_chunks_per_file,
+            collection=collection,
+            closets_collection=closets_collection,
+        )
+
+    if inject_handles:
+        # Caller owns the client + exclusivity. Skipping the lock here is
+        # the whole point of the injection path (issue #261): opening a
+        # second PersistentClient against the same chroma path corrupts
+        # the log store, so the daemon needs to route mines through its
+        # existing handle without us second-guessing.
+        return _mine_impl(
+            project_dir,
+            palace_path,
+            wing_override=wing_override,
+            agent=agent,
+            limit=limit,
+            dry_run=dry_run,
+            respect_gitignore=respect_gitignore,
+            include_ignored=include_ignored,
+            files=files,
+            max_chunks_per_file=max_chunks_per_file,
+            collection=collection,
+            closets_collection=closets_collection,
         )
 
     # MineAlreadyRunning propagates so the CLI can render a clear holder-aware
@@ -1708,7 +1758,7 @@ def mine(
         )
 
 
-def _mine_impl(
+def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one tick over the pre-existing ceiling; see issue #261
     project_dir: str,
     palace_path: str,
     wing_override: str = None,
@@ -1719,8 +1769,13 @@ def _mine_impl(
     include_ignored: list = None,
     files: list = None,
     max_chunks_per_file: Optional[int] = None,
+    *,
+    collection=None,
+    closets_collection=None,
 ):
     from .config import MempalaceConfig
+
+    injected_collection = collection is not None
 
     project_path = Path(project_dir).expanduser().resolve()
     config = load_config(project_dir)
@@ -1762,8 +1817,13 @@ def _mine_impl(
     print(f"{'-' * 55}\n")
 
     if not dry_run:
-        collection = get_collection(palace_path)
-        closets_col = get_closets_collection(palace_path)
+        if collection is None:
+            collection = get_collection(palace_path)
+        closets_col = (
+            closets_collection
+            if closets_collection is not None
+            else get_closets_collection(palace_path)
+        )
     else:
         collection = None
         closets_col = None
@@ -1867,7 +1927,14 @@ def _mine_impl(
                     file=sys.stderr,
                 )
 
-            _validate_palace_fts5_after_mine(palace_path)
+            if not injected_collection:
+                # Skip when the caller owns the client (issue #261). The
+                # validator closes the chroma cache and reopens sqlite3
+                # read-only — which would slam shut the daemon's still-open
+                # PersistentClient and force a reopen. Callers that inject
+                # a collection are responsible for their own integrity
+                # checks on whatever schedule fits their lifecycle.
+                _validate_palace_fts5_after_mine(palace_path)
 
         print(f"\n{'=' * 55}")
         print("  Done.")

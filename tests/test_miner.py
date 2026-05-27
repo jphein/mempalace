@@ -1,3 +1,4 @@
+import contextlib as contextlib_module
 import os
 import shlex
 import shutil
@@ -63,6 +64,190 @@ def test_project_mining():
         assert col.count() > 0
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+class _StubCollection:
+    """Minimal collection stand-in that records every write call.
+
+    Implements the surface ``miner._mine_impl`` and its callees touch on
+    the drawers collection: ``get`` (used by ``file_already_mined``),
+    ``upsert`` (used by ``add_drawers``), ``delete`` (used by the
+    stale-drawer purge in ``process_file``), plus a ``query`` shim for
+    novelty-window peer fetches that returns an empty result.
+
+    ``upsert_calls`` accumulates ``(documents, ids, metadatas)`` triples
+    so tests can assert what was written.
+    """
+
+    def __init__(self):
+        self.upsert_calls = []
+        self.delete_calls = []
+        self.get_calls = []
+        self.query_calls = []
+
+    def get(self, **kwargs):
+        self.get_calls.append(kwargs)
+        # No prior drawers — every file looks unmined so the writer path
+        # exercises through to ``upsert``.
+        return {"ids": [], "metadatas": [], "documents": []}
+
+    def upsert(self, *, documents, ids, metadatas):
+        self.upsert_calls.append(
+            {"documents": list(documents), "ids": list(ids), "metadatas": list(metadatas)}
+        )
+
+    def delete(self, where=None, **_kwargs):
+        self.delete_calls.append(where)
+
+    def query(self, **kwargs):
+        self.query_calls.append(kwargs)
+        return {"ids": [[]], "metadatas": [[]], "documents": [[]], "distances": [[]]}
+
+    def count(self):
+        return sum(len(call["ids"]) for call in self.upsert_calls)
+
+
+def _make_mine_fixture(tmp_path: Path):
+    """Materialize a tiny mineable project on disk.
+
+    Returns the project root. Caller is responsible for cleanup (use a
+    ``tmp_path`` fixture or wrap in try/finally).
+    """
+    project_root = tmp_path.resolve()
+    (project_root / "backend").mkdir(parents=True, exist_ok=True)
+    write_file(
+        project_root / "backend" / "app.py",
+        "def main():\n    print('hello world')\n" * 20,
+    )
+    with open(project_root / "mempalace.yaml", "w") as f:
+        yaml.dump(
+            {
+                "wing": "test_injected",
+                "rooms": [{"name": "backend", "description": "Backend code"}],
+            },
+            f,
+        )
+    return project_root
+
+
+def test_mine_with_injected_collection_skips_lock_and_writes_through(monkeypatch, tmp_path):
+    """When ``collection=`` is provided, ``mine`` must:
+
+    1. NOT enter ``mine_palace_lock`` (caller guarantees exclusivity).
+    2. NOT call ``get_collection`` against ``palace_path`` (no second
+       PersistentClient — that is the whole point of the injection path).
+    3. Route every upsert through the injected stub.
+
+    This is the substrate change for issue #261 — palace-daemon needs
+    to mine through its already-open client to avoid chromadb log-store
+    corruption from a second client on the same path.
+    """
+    from mempalace import miner as miner_mod
+
+    lock_entered = {"value": False}
+
+    @contextlib_module.contextmanager
+    def spy_lock(palace_path):
+        lock_entered["value"] = True
+        yield
+
+    monkeypatch.setattr(miner_mod, "mine_palace_lock", spy_lock)
+
+    get_collection_calls = []
+
+    def stub_get_collection(*args, **kwargs):
+        get_collection_calls.append((args, kwargs))
+        raise AssertionError(
+            "get_collection must not be called when an injected collection is supplied"
+        )
+
+    monkeypatch.setattr(miner_mod, "get_collection", stub_get_collection)
+
+    # The closets handle is also a backend write path; with both injected
+    # we exercise the full skip-construction route. ``get_closets_collection``
+    # would otherwise re-enter ``get_collection`` indirectly.
+    def stub_get_closets_collection(*args, **kwargs):
+        raise AssertionError(
+            "get_closets_collection must not be called when "
+            "an injected closets_collection is supplied"
+        )
+
+    monkeypatch.setattr(miner_mod, "get_closets_collection", stub_get_closets_collection)
+
+    # The post-mine FTS5 validate slams the chroma cache shut and reopens
+    # sqlite read-only — exactly the dual-client behaviour the injection
+    # path exists to avoid. Assert it is not invoked.
+    def stub_validate(*args, **kwargs):
+        raise AssertionError(
+            "_validate_palace_fts5_after_mine must not run when a collection is injected"
+        )
+
+    monkeypatch.setattr(miner_mod, "_validate_palace_fts5_after_mine", stub_validate)
+
+    project_root = _make_mine_fixture(tmp_path)
+    palace_path = project_root / "palace"
+
+    stub_collection = _StubCollection()
+    stub_closets = _StubCollection()
+
+    mine(
+        str(project_root),
+        str(palace_path),
+        collection=stub_collection,
+        closets_collection=stub_closets,
+    )
+
+    assert lock_entered["value"] is False, (
+        "mine_palace_lock must NOT be acquired when a collection is injected — "
+        "the caller (e.g. palace-daemon) guarantees exclusivity around its own client"
+    )
+    assert get_collection_calls == [], "get_collection was unexpectedly invoked"
+    assert len(stub_collection.upsert_calls) >= 1, (
+        "writes must flow through the injected collection — got zero upsert calls"
+    )
+    # The fixture's single file produces enough non-trivial content to
+    # land at least one drawer through the injected handle.
+    total_written = sum(len(call["ids"]) for call in stub_collection.upsert_calls)
+    assert total_written > 0
+
+
+def test_mine_without_injection_still_acquires_lock_and_opens_collection(monkeypatch, tmp_path):
+    """The non-injected path must regress to today's behaviour:
+
+    - ``mine_palace_lock`` IS entered.
+    - ``get_collection`` IS called against the palace path.
+
+    Guards the back-compat half of issue #261 — every existing caller
+    omits the new kwargs and must see no change.
+    """
+    from mempalace import miner as miner_mod
+
+    lock_entered = {"value": False}
+
+    @contextlib_module.contextmanager
+    def spy_lock(palace_path):
+        lock_entered["value"] = True
+        # Defer to the real implementation so the underlying mine still
+        # works — we only need the entry signal.
+        from mempalace.palace import mine_palace_lock as real_lock
+
+        with real_lock(palace_path):
+            yield
+
+    monkeypatch.setattr(miner_mod, "mine_palace_lock", spy_lock)
+
+    project_root = _make_mine_fixture(tmp_path)
+    palace_path = project_root / "palace"
+
+    mine(str(project_root), str(palace_path))
+
+    assert lock_entered["value"] is True, (
+        "mine_palace_lock must still be acquired on the non-injected default path"
+    )
+    # Sanity: the real palace was built.
+    client = chromadb.PersistentClient(path=str(palace_path))
+    col = client.get_collection("mempalace_drawers")
+    assert col.count() > 0
 
 
 def test_mine_computes_hallways_for_wing_post_mine(monkeypatch):
