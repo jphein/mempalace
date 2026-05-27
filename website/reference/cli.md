@@ -69,6 +69,114 @@ mempalace search "query" --results 10
 | `--room` | all | Filter by room |
 | `--results` | `5` | Number of results |
 
+## `mempalace list`
+
+Browse drawers by wing/room metadata — no ranking, no embedding. A fast,
+direct-to-daemon read: it hits palace-daemon directly and skips the MCP/AI
+round-trip, so it returns immediately.
+
+```bash
+mempalace list
+mempalace list --wing myapp
+mempalace list --wing myapp --room auth
+mempalace list --limit 50 --offset 50
+mempalace list --format json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--wing` | all | Limit to one wing |
+| `--room` | all | Limit to one room |
+| `--limit` | `20` | Max drawers to return (max: 1000) |
+| `--offset` | `0` | Pagination offset |
+| `--format` | `table` | `table`, `compact` (one line per drawer), `full` (no truncation), or `json` |
+| `--json` | — | Shorthand for `--format json` |
+
+## `mempalace graph`
+
+Structural snapshot of the knowledge graph and palace — wings, rooms,
+tunnels, and KG entity/triple counts. Direct-to-daemon.
+
+```bash
+mempalace graph
+mempalace graph --limit 1000
+mempalace graph --format full
+mempalace graph --json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--limit` | `500` | Cap on KG entity count (max: 50000) |
+| `--format` | `table` | `table` (summary + top wings), `full` (every wing + sampled triples), or `json` |
+| `--json` | — | Shorthand for `--format json` |
+
+## `mempalace cypher`
+
+Run a read-only Cypher query against the Apache AGE knowledge graph. Write
+verbs are rejected server-side. Direct-to-daemon.
+
+```bash
+mempalace cypher "MATCH (n) RETURN count(n)"
+mempalace cypher "MATCH (n:Entity) RETURN n.name LIMIT 10"
+mempalace cypher "MATCH (n) RETURN n.name" --format csv
+mempalace cypher "MATCH (n) RETURN n" --json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `"query"` | — | Cypher query (`MATCH` / `RETURN`; write verbs are rejected) |
+| `--graph` | palace graph | AGE graph name |
+| `--limit` | — | Advisory cap (use `LIMIT` in the query for a hard cutoff) |
+| `--format` | `table` | `table` (aligned columns), `json`, or `csv` |
+| `--json` | — | Shorthand for `--format json` |
+
+## `mempalace move`
+
+Relocate a single drawer to a different wing and/or room — metadata only, the
+verbatim content is never touched. Direct-to-daemon. Omitting both `--wing` and
+`--room` is a no-op (nothing to change).
+
+```bash
+mempalace move <drawer_id> --wing myapp
+mempalace move <drawer_id> --wing myapp --room auth
+mempalace move <drawer_id> --room archive --format json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `drawer_id` | — | ID of the drawer to move (positional, required) |
+| `--wing` | unchanged | New wing (omit to leave unchanged) |
+| `--room` | unchanged | New room (omit to leave unchanged) |
+| `--format` | `table` | `table` (old→new confirmation) or `json` (daemon pass-through) |
+
+## `mempalace bulk-move`
+
+Relocate every drawer matching a source wing/room filter to a target wing/room
+— metadata only, content untouched. **Dry-run by default**: without `--apply`
+it previews the matched drawers and the destination, changing nothing. Each
+drawer is moved by an independent PATCH, so a single failure doesn't abort the
+batch. At least one source filter (`--wing`/`--room`) and one target
+(`--to-wing`/`--to-room`) are required.
+
+```bash
+# preview only (dry run)
+mempalace bulk-move --wing scratch --to-wing archive
+# execute, with interactive confirmation
+mempalace bulk-move --wing scratch --room old --to-wing archive --apply
+# execute non-interactively (CI / scripts)
+mempalace bulk-move --wing scratch --to-wing archive --apply --yes
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--wing` | — | Source: select drawers in this wing (at least one of `--wing`/`--room`) |
+| `--room` | — | Source: select drawers in this room (at least one of `--wing`/`--room`) |
+| `--to-wing` | — | Target wing (at least one of `--to-wing`/`--to-room`) |
+| `--to-room` | — | Target room (at least one of `--to-wing`/`--to-room`) |
+| `--apply` | — | Actually move the drawers (without it, preview only) |
+| `--yes`, `-y` | — | Skip the confirmation prompt (required to `--apply` non-interactively) |
+| `--format` | `table` | `table` (preview/summary) or `json` (machine-readable) |
+
 ## `mempalace split`
 
 Split concatenated transcript mega-files into per-session files.
@@ -124,6 +232,29 @@ Show what's been filed — drawer count, wing/room breakdown.
 mempalace status
 ```
 
+## `mempalace stats`
+
+Palace analytics dashboard — wings, rooms, knowledge graph, tunnels, and
+optionally tags. Direct-to-daemon (one `GET /stats` REST call), so it's
+faster than the equivalent MCP tool fan-out.
+
+```bash
+mempalace stats
+mempalace stats --section kg
+mempalace stats --section graph
+mempalace stats --tags
+mempalace stats --json
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--top` | `10` | Max rows per section (`0` shows all) |
+| `--tags` | — | Include the tag-count breakdown (extra daemon call) |
+| `--section` | `all` | `kg`, `graph`, `status`, or `all` |
+| `--no-relationship-types` | — | Suppress the (potentially long) relationship-types list |
+| `--format` | `table` | `table` or `json` |
+| `--json` | — | Shorthand for `--format json` |
+
 ## `mempalace repair`
 
 Rebuild palace vector index from stored data. Fixes segfaults after database corruption.
@@ -133,6 +264,24 @@ mempalace repair
 ```
 
 Creates a backup at `<palace_path>.backup` before rebuilding.
+
+## `mempalace prune`
+
+Delete drawers older than `--stale-days N`. Dry-run by default — reports a
+count without deleting unless you pass `--confirm`.
+
+```bash
+mempalace prune --stale-days 90              # dry-run: report only
+mempalace prune --stale-days 90 --confirm    # actually delete
+mempalace prune --stale-days 90 --wing scratch --confirm
+```
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--stale-days` | **required** | Prune drawers whose `filed_at` is older than this many days |
+| `--wing` | all | Limit prune to this wing |
+| `--room` | all | Limit prune to this room |
+| `--confirm` | — | Actually delete (without it, prune only reports a dry-run count) |
 
 ## `mempalace mcp`
 
