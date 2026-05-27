@@ -63,9 +63,19 @@ DEFAULT_TRIPLE_CONFIDENCE = 0.7
 # a row mid-flight, otherwise a slow-but-alive worker's batch could be stolen
 # and double-processed. Override via MEMPALACE_KG_CLAIM_LEASE_SECONDS.
 DEFAULT_CLAIM_LEASE_SECONDS = 900  # 15 min
-CLAIM_LEASE_SECONDS = int(
-    os.getenv("MEMPALACE_KG_CLAIM_LEASE_SECONDS", str(DEFAULT_CLAIM_LEASE_SECONDS))
-)
+try:
+    CLAIM_LEASE_SECONDS = int(
+        os.getenv("MEMPALACE_KG_CLAIM_LEASE_SECONDS", str(DEFAULT_CLAIM_LEASE_SECONDS))
+    )
+except ValueError:
+    # A bad value (empty, float, "15m") must not crash module import — fall
+    # back to the default, mirroring hook.py's PALACE_MCP_TIMEOUT handling.
+    logger.warning(
+        "MEMPALACE_KG_CLAIM_LEASE_SECONDS is not an integer; "
+        "falling back to default %ds",
+        DEFAULT_CLAIM_LEASE_SECONDS,
+    )
+    CLAIM_LEASE_SECONDS = DEFAULT_CLAIM_LEASE_SECONDS
 
 AGE_GRAPH_NAME = "mempalace_kg"
 # Same dollar-quote tag KnowledgeGraphAGE uses for its synchronous writes.
