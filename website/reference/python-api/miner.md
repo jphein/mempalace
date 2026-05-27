@@ -270,7 +270,7 @@ caller can tell why a directory looks empty after walking.
 ### `mine`
 
 ```python
-def mine(project_dir: str, palace_path: str, wing_override: str = None, agent: str = 'mempalace', limit: int = 0, dry_run: bool = False, respect_gitignore: bool = True, include_ignored: list = None, files: list = None, max_chunks_per_file: Optional[int] = None)
+def mine(project_dir: str, palace_path: str, wing_override: str = None, agent: str = 'mempalace', limit: int = 0, dry_run: bool = False, respect_gitignore: bool = True, include_ignored: list = None, files: list = None, max_chunks_per_file: Optional[int] = None, *, collection = None, closets_collection = None)
 ```
 
 Mine a project directory into the palace.
@@ -285,6 +285,28 @@ prompt) avoids walking the tree twice. When ``None`` (the default),
 :func:`_resolve_max_chunks_per_file`). ``None`` defers to
 ``MEMPALACE_MAX_CHUNKS_PER_FILE`` or ``MAX_CHUNKS_PER_FILE``; ``0``
 disables the cap entirely (#1455).
+
+``collection`` / ``closets_collection`` let a single-client host
+(e.g. palace-daemon) write through its own already-open backend handle
+instead of constructing a second one. When ``collection`` is supplied:
+
+  - the internal ``get_collection(palace_path)`` call is skipped;
+  - ``mine_palace_lock(palace_path)`` is NOT acquired (the caller
+    guarantees exclusivity around its own client);
+  - the post-mine FTS5 ``_validate_palace_fts5_after_mine`` step is
+    skipped because it would call ``_close_chroma_handles`` against
+    the caller's still-open client and reopen sqlite3 read-only —
+    the caller can run its own integrity check on its own schedule.
+
+If ``collection`` is supplied but ``closets_collection`` is not, the
+closet upserts use the same injected collection's backend the same
+way the non-injected path would (via ``get_closets_collection`` on
+the live palace path) — so callers that only have a drawers handle
+are still served correctly.
+
+Existing positional/keyword callers see no behaviour change: when
+both kwargs are omitted, ``mine`` walks exactly the original code
+path (construct client, acquire lock, validate at end).
 
 ### `status`
 
