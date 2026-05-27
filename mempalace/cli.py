@@ -2139,10 +2139,7 @@ def _bulk_move_confirm(args, matched, src_label, dst_label, want_json) -> bool:
     if bool(getattr(args, "yes", False)):
         return True
     if want_json or not sys.stdin.isatty():
-        msg = (
-            f"refusing to bulk-move {matched} drawers without --yes "
-            "in a non-interactive shell"
-        )
+        msg = f"refusing to bulk-move {matched} drawers without --yes in a non-interactive shell"
         if want_json:
             _emit_json({"error": "confirmation_required", "hint": msg, "matched": matched})
         else:

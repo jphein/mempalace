@@ -158,9 +158,7 @@ class TestBulkMoveDryRun:
 
         drawers = [_drawer(i) for i in range(3)]
         with patch.dict("os.environ", _env(), clear=True):
-            with patch(
-                "mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)
-            ):
+            with patch("mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)):
                 with patch("mempalace.cli._patch_daemon_rest") as pm:
                     cli.cmd_bulk_move(_args(wing="old", to_wing="new"))
         pm.assert_not_called()
@@ -174,9 +172,7 @@ class TestBulkMoveDryRun:
 
         drawers = [_drawer(0, wing="old", room="inbox")]
         with patch.dict("os.environ", _env(), clear=True):
-            with patch(
-                "mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)
-            ):
+            with patch("mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)):
                 with patch("mempalace.cli._patch_daemon_rest"):
                     cli.cmd_bulk_move(_args(wing="old", to_wing="new", to_room="archive"))
         out = capsys.readouterr().out
@@ -193,9 +189,7 @@ class TestBulkMoveApply:
         drawers = [_drawer(i) for i in range(3)]
         captured: list = []
         with patch.dict("os.environ", _env(), clear=True):
-            with patch(
-                "mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)
-            ):
+            with patch("mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)):
                 with patch(
                     "mempalace.cli._patch_daemon_rest",
                     side_effect=_patch_responder(capture=captured),
@@ -213,16 +207,12 @@ class TestBulkMoveApply:
         drawers = [_drawer(0)]
         captured: list = []
         with patch.dict("os.environ", _env(), clear=True):
-            with patch(
-                "mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)
-            ):
+            with patch("mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)):
                 with patch(
                     "mempalace.cli._patch_daemon_rest",
                     side_effect=_patch_responder(capture=captured),
                 ):
-                    cli.cmd_bulk_move(
-                        _args(wing="old", to_room="archive", apply=True, yes=True)
-                    )
+                    cli.cmd_bulk_move(_args(wing="old", to_room="archive", apply=True, yes=True))
         assert captured == [("drw-000", {"room": "archive"})]
 
     def test_apply_tty_prompt_accept(self, capsys):
@@ -291,17 +281,13 @@ class TestBulkMovePartialFailure:
         drawers = [_drawer(i) for i in range(3)]
         captured: list = []
         with patch.dict("os.environ", _env(), clear=True):
-            with patch(
-                "mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)
-            ):
+            with patch("mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)):
                 with patch(
                     "mempalace.cli._patch_daemon_rest",
                     side_effect=_patch_responder(fail_ids={"drw-001"}, capture=captured),
                 ):
                     with pytest.raises(SystemExit) as ex:
-                        cli.cmd_bulk_move(
-                            _args(wing="old", to_wing="new", apply=True, yes=True)
-                        )
+                        cli.cmd_bulk_move(_args(wing="old", to_wing="new", apply=True, yes=True))
         assert ex.value.code == 2
         # all three were attempted — batch did not abort on the failure
         assert [did for did, _ in captured] == ["drw-000", "drw-001", "drw-002"]
@@ -320,14 +306,10 @@ class TestBulkMovePartialFailure:
             return {"success": True}
 
         with patch.dict("os.environ", _env(), clear=True):
-            with patch(
-                "mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)
-            ):
+            with patch("mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)):
                 with patch("mempalace.cli._patch_daemon_rest", side_effect=boom_patch):
                     with pytest.raises(SystemExit) as ex:
-                        cli.cmd_bulk_move(
-                            _args(wing="old", to_wing="new", apply=True, yes=True)
-                        )
+                        cli.cmd_bulk_move(_args(wing="old", to_wing="new", apply=True, yes=True))
         assert ex.value.code == 2
         out = capsys.readouterr().out
         assert "moved 1, failed 1" in out
@@ -351,9 +333,7 @@ class TestBulkMovePagination:
                         "mempalace.cli._patch_daemon_rest",
                         side_effect=_patch_responder(capture=captured),
                     ):
-                        cli.cmd_bulk_move(
-                            _args(wing="old", to_wing="new", apply=True, yes=True)
-                        )
+                        cli.cmd_bulk_move(_args(wing="old", to_wing="new", apply=True, yes=True))
         # paginated across 3 calls, every id moved exactly once
         assert len(responder.calls) == 3
         assert [c[1]["offset"] for c in responder.calls] == [0, 2, 4]
@@ -407,9 +387,7 @@ class TestBulkMoveJson:
 
         drawers = [_drawer(i) for i in range(2)]
         with patch.dict("os.environ", _env(), clear=True):
-            with patch(
-                "mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)
-            ):
+            with patch("mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)):
                 with patch("mempalace.cli._patch_daemon_rest") as pm:
                     cli.cmd_bulk_move(_args(wing="old", to_wing="new", format="json"))
         pm.assert_not_called()
@@ -425,9 +403,7 @@ class TestBulkMoveJson:
 
         drawers = [_drawer(0), _drawer(1)]
         with patch.dict("os.environ", _env(), clear=True):
-            with patch(
-                "mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)
-            ):
+            with patch("mempalace.cli._call_daemon_rest", side_effect=_list_responder(drawers)):
                 with patch(
                     "mempalace.cli._patch_daemon_rest",
                     side_effect=_patch_responder(fail_ids={"drw-001"}),
@@ -479,9 +455,7 @@ class TestParserAcceptsBulkMove:
                 return mock.call_args.args[0] if mock.call_args else None
 
     def test_bulk_move_subcommand_parses(self):
-        ns = self._parse(
-            ["mempalace", "bulk-move", "--wing", "old", "--to-wing", "new"]
-        )
+        ns = self._parse(["mempalace", "bulk-move", "--wing", "old", "--to-wing", "new"])
         assert ns is not None
         assert ns.command == "bulk-move"
         assert ns.wing == "old"
