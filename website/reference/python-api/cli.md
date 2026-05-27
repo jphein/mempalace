@@ -159,6 +159,26 @@ bypassing the backend abstraction.
 Not idempotent — running purge twice on the same criteria prints
 "No drawers found" the second time.
 
+### `cmd_prune`
+
+```python
+def cmd_prune(args)
+```
+
+Delete drawers older than ``--stale-days N`` (dry-run by default).
+
+Age is the span between a drawer's ``filed_at`` timestamp and now. Unlike
+``purge``'s metadata-equality filter, the staleness predicate is a string
+timestamp that chromadb ``where=`` can't range-compare reliably, so we
+fetch candidate metadata and decide age in Python (``mempalace.recency``),
+then delete by explicit id list.
+
+Safety: this is the only command that destroys data on a *time* predicate
+rather than an explicit selection, so it is **dry-run by default**. Nothing
+is deleted unless ``--confirm`` is passed. A drawer with no parseable
+``filed_at`` is treated as ageless and is **never** pruned — we never
+delete a drawer we can't date.
+
 ### `cmd_rename_wing`
 
 ```python

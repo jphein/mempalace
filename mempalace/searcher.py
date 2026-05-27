@@ -20,6 +20,7 @@ from typing import Optional
 from .backends import CollectionNotInitializedError, PalaceNotFoundError
 from .palace import get_closets_collection, get_collection
 from .ratings import net_rating, rating_distance_adjustment
+from .recency import RECENCY_HALFLIFE_DAYS, recency_distance_adjustment
 
 # Closet pointer line format: "topic|entities|→drawer_id_a,drawer_id_b"
 # Multiple lines may join with newlines inside one closet document.
@@ -296,6 +297,32 @@ def _rating_boost_enabled() -> bool:
     a restart, mirroring the multi-encoder RRF gate.
     """
     return os.environ.get("PALACE_RATING_BOOST", "1").strip() != "0"
+
+
+def _recency_boost_enabled() -> bool:
+    """Whether the recency ranking signal (#158) is active.
+
+    Off by default — recency is an experimental tilt we A/B against our own
+    corpus before trusting it, so it ships dark. Set ``PALACE_RECENCY_BOOST=1``
+    to enable. Read live from the environment so the daemon picks it up
+    without a restart, mirroring the rating gate.
+    """
+    return os.environ.get("PALACE_RECENCY_BOOST", "0").strip() == "1"
+
+
+def _recency_halflife_days() -> float:
+    """Half-life (days) for the recency decay, from the environment.
+
+    Falls back to ``RECENCY_HALFLIFE_DAYS`` when unset or unparseable. A
+    non-positive value disables the signal in ``recency_distance_adjustment``.
+    """
+    raw = os.environ.get("PALACE_RECENCY_HALFLIFE_DAYS", "").strip()
+    if not raw:
+        return RECENCY_HALFLIFE_DAYS
+    try:
+        return float(raw)
+    except ValueError:
+        return RECENCY_HALFLIFE_DAYS
 
 
 def build_where_filter(
@@ -1967,12 +1994,22 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
         if _rating_boost_enabled():
             rating_adj = rating_distance_adjustment(meta)
 
+        # Recency adjustment (#158): newer drawers get a small upward nudge via
+        # exponential decay on age. Bounded and capped (mempalace.recency) so
+        # it reorders neighbors but never displaces a relevant drawer out of
+        # the result set — recall is preserved. Off by default; gated by
+        # PALACE_RECENCY_BOOST (set "1" to enable), half-life configurable via
+        # PALACE_RECENCY_HALFLIFE_DAYS.
+        recency_adj = 0.0
+        if _recency_boost_enabled():
+            recency_adj = recency_distance_adjustment(meta, halflife_days=_recency_halflife_days())
+
         # Clamp to the valid cosine-distance range [0, 2]. When a strong
         # closet boost (up to 0.40) exceeds the raw distance, the subtraction
         # can go negative — which (a) yields ``similarity > 1.0`` downstream
         # and (b) makes the sort key land *below* ordinary positive distances,
         # inverting the ranking so the best hybrid matches sort last.
-        effective_dist = max(0.0, min(2.0, dist - boost + rating_adj))
+        effective_dist = max(0.0, min(2.0, dist - boost + rating_adj + recency_adj))
         entry = {
             "drawer_id": drawer_id,
             "text": doc,
