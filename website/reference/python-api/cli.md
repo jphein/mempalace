@@ -275,17 +275,20 @@ diary entries, kg drawers, manually-added entries).
 def cmd_stats(args)
 ```
 
-Palace analytics dashboard (#191).
+Fast direct-to-daemon palace analytics CLI (#191).
 
-Composes ``mempalace_status`` + ``mempalace_kg_stats`` +
-``mempalace_graph_stats`` (and optionally ``mempalace_list_tags``)
-into a single read-only view of corpus health. Daemon-only — there is
-no local fallback today because the KG/graph data lives in the
-daemon's postgres + AGE store; surfacing a misleading partial view
-from a stale local chromadb would re-introduce the split-brain
-``status`` already warns against. When the daemon URL is unset, we
-abort with the same "set PALACE_DAEMON_URL" hint as the rest of the
-CLI's daemon-strict surfaces.
+Wraps ``GET /stats`` on the palace daemon, which returns a unified
+envelope of three blocks: ``kg`` (entities, triples, relationship
+types), ``graph`` (rooms, tunnels, edges), ``status`` (drawer counts,
+wings, rooms, protocol/AAAK text). Replaces the older multi-RPC
+fan-out — one network hit instead of four. ``--section`` narrows the
+table output to a single block; json mode always passes through the
+whole envelope so jq pipelines see the daemon contract unchanged.
+``--tags`` still triggers an extra ``mempalace_list_tags`` MCP call
+because /stats doesn't include the tag breakdown (tag counts can be
+100K+ entries and don't belong in the fast-path summary). Daemon
+unreachable → exit 1 (matches sibling cmd_list/cmd_graph/cmd_cypher);
+inner-error envelope → exit 2.
 
 ### `cmd_repair_status`
 
