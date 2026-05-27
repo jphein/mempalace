@@ -56,9 +56,7 @@ class TestRatingDistanceAdjustment:
     def test_zero_net_is_noop(self):
         assert ratings.rating_distance_adjustment({}) == 0.0
         assert (
-            ratings.rating_distance_adjustment(
-                {ratings.USEFUL_KEY: 2, ratings.NOT_USEFUL_KEY: 2}
-            )
+            ratings.rating_distance_adjustment({ratings.USEFUL_KEY: 2, ratings.NOT_USEFUL_KEY: 2})
             == 0.0
         )
 
@@ -199,9 +197,7 @@ class TestSearchRatingSignal:
         col.update(ids=["d1"], metadatas=[{"wing": "w", "room": "r", NOT_USEFUL_KEY: 50}])
 
         monkeypatch.setenv("PALACE_RATING_BOOST", "1")
-        result = searcher.search_memories(
-            "python asyncio", palace_path=palace_path, n_results=5
-        )
+        result = searcher.search_memories("python asyncio", palace_path=palace_path, n_results=5)
         ids = {h["drawer_id"] for h in result["results"]}
         assert "d1" in ids
 
@@ -212,9 +208,7 @@ class TestSearchRatingSignal:
         col = self._seed(palace_path)
         col.update(ids=["d2"], metadatas=[{"wing": "w", "room": "r", USEFUL_KEY: 4}])
 
-        result = searcher.search_memories(
-            "python asyncio", palace_path=palace_path, n_results=5
-        )
+        result = searcher.search_memories("python asyncio", palace_path=palace_path, n_results=5)
         by_id = {h["drawer_id"]: h for h in result["results"]}
         assert by_id["d2"]["rating_score"] == 4
         assert by_id["d1"]["rating_score"] == 0
@@ -227,9 +221,7 @@ class TestSearchRatingSignal:
         col.update(ids=["d3"], metadatas=[{"wing": "w", "room": "r", USEFUL_KEY: 10}])
 
         monkeypatch.setenv("PALACE_RATING_BOOST", "0")
-        result = searcher.search_memories(
-            "python asyncio", palace_path=palace_path, n_results=5
-        )
+        result = searcher.search_memories("python asyncio", palace_path=palace_path, n_results=5)
         # rating_score is still reported (transparency) but no drawer's
         # effective_distance moved below its raw distance from the rating.
         for h in result["results"]:
