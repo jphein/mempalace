@@ -41,8 +41,9 @@ After installing the plugin, run the init command to complete setup (installs th
 
 ## Hooks
 
-MemPalace registers two hooks that run automatically:
+MemPalace registers three hooks that run automatically:
 
+- **SessionStart** -- Surfaces recent palace context for the current project when a session begins.
 - **Stop** -- Saves conversation context every 15 messages.
 - **PreCompact** -- Preserves important memories before context compaction.
 
