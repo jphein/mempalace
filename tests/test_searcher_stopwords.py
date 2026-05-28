@@ -175,3 +175,54 @@ class TestGraphExpandCypherSafety:
             "conn.transaction() block as SET LOCAL statement_timeout, "
             "otherwise the timeout doesn't scope to the cypher call."
         )
+
+
+class TestGraphExpandDirectionalCypher:
+    """Regression guard for #291.
+
+    The graph-expand cypher must use directional ``-[r:RELATION]->`` (or
+    its inverse ``<-[r:RELATION]-``), NOT the bidirectional
+    ``-[r:RELATION]-``. AGE compiles the bidirectional form into an
+    OR-of-AND join filter that postgres can't hash, falling back to a
+    nested loop over (RELATION × all-vertex-labels) — 200s+ wedges on
+    the 1.76M-edge production graph. Directional cypher compiles to a
+    Parallel Hash Join (~2s wall-clock, ~100× speedup).
+
+    If a future projection genuinely needs both directions, it must be
+    expressed as two directional queries unioned in Python (see the
+    ``entity_cypher_outbound`` / ``entity_cypher_inbound`` pattern in
+    ``_graph_expand_from_seeds``) so each query stays hashable.
+    """
+
+    @staticmethod
+    def _code_only(fn) -> str:
+        """Return source with Python comment lines stripped so explanatory
+        text mentioning the forbidden shape doesn't trip the guard."""
+        import inspect
+
+        src = inspect.getsource(fn)
+        return "\n".join(line for line in src.splitlines() if not line.lstrip().startswith("#"))
+
+    def test_seeds_expand_uses_directional_cypher(self):
+        from mempalace.searcher import _graph_expand_from_seeds
+
+        code = self._code_only(_graph_expand_from_seeds)
+        # The bidirectional shape — both sides of the cypher edge without
+        # an arrow — must NOT appear in compiled cypher templates.
+        assert "RELATION]-(" not in code, (
+            "_graph_expand_from_seeds contains a bidirectional "
+            "`-[r:RELATION]-` cypher pattern. AGE compiles this to an "
+            "un-hashable OR join filter — production wedges at 200s+ "
+            "on the 1.76M-edge graph. Use directional `->` (and union "
+            "two queries if both directions are needed). See #291."
+        )
+
+    def test_entities_expand_uses_directional_cypher(self):
+        from mempalace.searcher import _graph_expand_from_entities
+
+        code = self._code_only(_graph_expand_from_entities)
+        assert "RELATION]-(" not in code, (
+            "_graph_expand_from_entities contains a bidirectional "
+            "`-[r:RELATION]-` cypher pattern. See #291 — this is the "
+            "specific shape that caused palace-daemon#80's latency."
+        )
