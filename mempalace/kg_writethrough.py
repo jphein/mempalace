@@ -339,7 +339,8 @@ def make_writethrough_from_env(kg: Optional[Any] = None, dsn: Optional[str] = No
 
     stages = []
 
-    mentions_on = os.environ.get("MEMPALACE_KG_WRITETHROUGH") in ("1", "true", "yes")
+    mentions_on_raw = os.environ.get("MEMPALACE_KG_WRITETHROUGH")
+    mentions_on = mentions_on_raw in ("1", "true", "yes")
     if mentions_on:
         if kg is None:
             raise ValueError("kg must be provided when MEMPALACE_KG_WRITETHROUGH is enabled")
@@ -352,15 +353,27 @@ def make_writethrough_from_env(kg: Optional[Any] = None, dsn: Optional[str] = No
             except ImportError:
                 extractor = _builtin_regex_extractor
             stages.append(make_age_writethrough(kg, extractor))
+            logger.info(
+                "kg_writethrough: MENTIONS stage attached "
+                "(MEMPALACE_KG_WRITETHROUGH=%s, MEMPALACE_KG_EXTRACTOR=%s)",
+                mentions_on_raw,
+                extractor_name,
+            )
         elif extractor_name == "null":
             stages.append(make_null_writethrough())
+            logger.info(
+                "kg_writethrough: MENTIONS stage attached "
+                "(MEMPALACE_KG_WRITETHROUGH=%s, MEMPALACE_KG_EXTRACTOR=null)",
+                mentions_on_raw,
+            )
         else:
             raise ValueError(
                 f"unknown MEMPALACE_KG_EXTRACTOR={extractor_name!r}; "
                 "supported: regex, null (spacy/llm pending)"
             )
 
-    queue_on = os.environ.get("MEMPALACE_KG_EXTRACTION_QUEUE") in ("1", "true", "yes")
+    queue_on_raw = os.environ.get("MEMPALACE_KG_EXTRACTION_QUEUE")
+    queue_on = queue_on_raw in ("1", "true", "yes")
     if queue_on:
         queue_dsn = dsn or os.environ.get("MEMPALACE_POSTGRES_DSN")
         if not queue_dsn:
@@ -369,6 +382,10 @@ def make_writethrough_from_env(kg: Optional[Any] = None, dsn: Optional[str] = No
                 "MEMPALACE_POSTGRES_DSN"
             )
         stages.append(make_extraction_enqueue_writethrough(queue_dsn))
+        logger.info(
+            "kg_writethrough: extraction-queue stage attached (MEMPALACE_KG_EXTRACTION_QUEUE=%s)",
+            queue_on_raw,
+        )
 
     return _chain_writethroughs(stages)
 

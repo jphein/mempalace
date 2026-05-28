@@ -243,3 +243,90 @@ def test_env_queue_on_requires_dsn(monkeypatch):
 
     with pytest.raises(ValueError, match="requires a dsn"):
         make_writethrough_from_env(kg=None, dsn=None)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Per-stage attachment logging — make silent-OFF visible (issue #286)
+# ──────────────────────────────────────────────────────────────────────
+
+
+def test_silent_off_extraction_queue_logs_only_mentions(monkeypatch, caplog):
+    """Writethrough on + extraction-queue env unset: only the MENTIONS log line fires.
+
+    Regression for techempower-org/mempalace#286 — on 2026-05-27 the
+    extraction-queue stage was silently OFF and ~12,300 drawers were
+    written without enqueueing. One INFO log line per stage attached
+    makes that condition observable at startup.
+    """
+    from mempalace.kg_writethrough import make_writethrough_from_env
+
+    monkeypatch.setenv("MEMPALACE_KG_WRITETHROUGH", "1")
+    monkeypatch.delenv("MEMPALACE_KG_EXTRACTION_QUEUE", raising=False)
+
+    caplog.set_level("INFO", logger="mempalace.kg_writethrough")
+    hook = make_writethrough_from_env(kg=MagicMock())
+    assert hook is not None
+
+    attach_records = [r for r in caplog.records if r.getMessage().startswith("kg_writethrough: ")]
+    assert len(attach_records) == 1, [r.getMessage() for r in attach_records]
+    msg = attach_records[0].getMessage()
+    assert "MENTIONS stage attached" in msg
+    assert "extraction-queue stage attached" not in msg
+
+
+def test_both_stages_log_independently(monkeypatch, caplog, fake_psycopg):
+    """Both env flags on: two INFO log lines, one per stage, each naming its flag."""
+    from mempalace.kg_writethrough import make_writethrough_from_env
+
+    monkeypatch.setenv("MEMPALACE_KG_WRITETHROUGH", "1")
+    monkeypatch.setenv("MEMPALACE_KG_EXTRACTOR", "regex")
+    monkeypatch.setenv("MEMPALACE_KG_EXTRACTION_QUEUE", "1")
+
+    caplog.set_level("INFO", logger="mempalace.kg_writethrough")
+    hook = make_writethrough_from_env(kg=MagicMock(), dsn="postgresql://fake/db")
+    assert hook is not None
+
+    messages = [
+        r.getMessage() for r in caplog.records if r.getMessage().startswith("kg_writethrough: ")
+    ]
+    assert len(messages) == 2, messages
+    assert any(
+        "MENTIONS stage attached" in m and "MEMPALACE_KG_WRITETHROUGH=1" in m for m in messages
+    )
+    assert any(
+        "extraction-queue stage attached" in m and "MEMPALACE_KG_EXTRACTION_QUEUE=1" in m
+        for m in messages
+    )
+
+
+def test_no_stages_no_attach_logs(monkeypatch, caplog):
+    """Both flags off: composer returns None and emits no attach logs."""
+    from mempalace.kg_writethrough import make_writethrough_from_env
+
+    monkeypatch.delenv("MEMPALACE_KG_WRITETHROUGH", raising=False)
+    monkeypatch.delenv("MEMPALACE_KG_EXTRACTION_QUEUE", raising=False)
+
+    caplog.set_level("INFO", logger="mempalace.kg_writethrough")
+    assert make_writethrough_from_env(kg=None, dsn=None) is None
+
+    attach_records = [r for r in caplog.records if r.getMessage().startswith("kg_writethrough: ")]
+    assert attach_records == []
+
+
+def test_silent_off_mentions_logs_only_extraction_queue(monkeypatch, caplog, fake_psycopg):
+    """Queue env on + writethrough unset: only the extraction-queue log line fires."""
+    from mempalace.kg_writethrough import make_writethrough_from_env
+
+    monkeypatch.delenv("MEMPALACE_KG_WRITETHROUGH", raising=False)
+    monkeypatch.setenv("MEMPALACE_KG_EXTRACTION_QUEUE", "1")
+    monkeypatch.setenv("MEMPALACE_POSTGRES_DSN", "postgresql://fake/db")
+
+    caplog.set_level("INFO", logger="mempalace.kg_writethrough")
+    hook = make_writethrough_from_env(kg=None)
+    assert hook is not None
+
+    attach_records = [r for r in caplog.records if r.getMessage().startswith("kg_writethrough: ")]
+    assert len(attach_records) == 1, [r.getMessage() for r in attach_records]
+    msg = attach_records[0].getMessage()
+    assert "extraction-queue stage attached" in msg
+    assert "MENTIONS stage attached" not in msg
