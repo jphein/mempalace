@@ -19,6 +19,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.convo_miner`](./convo_miner) — convo_miner.py — Mine conversations into the palace.
 - [`mempalace.convo_scanner`](./convo_scanner) — convo_scanner.py — Parse Claude Code conversation directories into ProjectInfo.
 - [`mempalace.corpus_origin`](./corpus_origin) — corpus_origin.py — Detect whether a corpus is an AI-dialogue record and,
+- [`mempalace.cross_encoder_rerank`](./cross_encoder_rerank) — Optional cross-encoder reranking for the retrieval path.
 - [`mempalace.dedup`](./dedup) — dedup.py — Detect and remove near-duplicate drawers
 - [`mempalace.dialect`](./dialect) — AAAK Dialect -- Structured Symbolic Summary Format
 - [`mempalace.diary_ingest`](./diary_ingest) — diary_ingest.py — Ingest daily summary files into the palace.

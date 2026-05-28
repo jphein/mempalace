@@ -108,6 +108,13 @@ coreml = ["onnxruntime>=1.16"]
 # Multilingual extra kept as a no-op alias for back-compat with
 # `pip install mempalace[multilingual]` — these deps now ship in core.
 multilingual = []
+# Optional cross-encoder reranking (techempower-org/mempalace#179). Pulls
+# sentence-transformers + torch (~2 GB) — heavy enough that it ships as an
+# opt-in extra rather than a core dependency. Enable at query time via
+# MEMPALACE_RERANK_CROSS_ENCODER=1 (env) or "cross_encoder_rerank": true
+# (config.json). Defaults to the 22M ms-marco-MiniLM-L-6-v2 model — runs on
+# CPU, captures most of the rerank value per the True Memory ablation.
+rerank = ["sentence-transformers>=2.7"]
 # Binary-format extraction for `mempalace mine --mode extract`. Per-format
 # transformer routing: striprtf for .rtf, MarkItDown for .pdf/.docx/.pptx/
 # .xlsx/.epub. MarkItDown requires Python ≥ 3.10; the env marker stays as a
