@@ -65,6 +65,51 @@ def test_open_collection_ignores_marker_for_non_default_path(tmp_path, monkeypat
     assert "Run: mempalace init" in joined
 
 
+def test_retired_banner_appends_current_daemon_url(tmp_path, monkeypatch, capsys):
+    """When PALACE_DAEMON_URL is set, the retired-banner appends the
+    current daemon URL below the (potentially stale) marker text — so
+    a marker frozen with an old URL can't mislead the user.
+    Regression test for techempower-org/mempalace#282.
+    """
+    from mempalace import palace
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".mempalace").mkdir(parents=True)
+    (fake_home / ".mempalace" / "RETIRED").write_text(
+        "Local mempalace palace retired on 2026-05-14.\n"
+        "PALACE_DAEMON_URL=http://OLD-HOST.example:8085\n"
+    )
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+    monkeypatch.setenv("PALACE_DAEMON_URL", "http://NEW-HOST.example:8085")
+
+    default_palace = str(fake_home / ".mempalace" / "palace")
+    out_lines: list[str] = []
+    palace._open_collection_or_explain(default_palace, out=out_lines.append)
+    joined = "\n".join(out_lines)
+    assert "http://OLD-HOST.example:8085" in joined  # marker text still shown
+    assert "http://NEW-HOST.example:8085" in joined  # current URL appended
+    assert "Current daemon URL" in joined
+
+
+def test_retired_banner_silent_when_no_daemon_url_configured(tmp_path, monkeypatch):
+    """No daemon URL configured → no "Current daemon URL" line appended.
+    The marker text alone is the message.
+    """
+    from mempalace import palace
+
+    fake_home = tmp_path / "home"
+    (fake_home / ".mempalace").mkdir(parents=True)
+    (fake_home / ".mempalace" / "RETIRED").write_text("retired — see ops docs")
+    monkeypatch.setattr(os.path, "expanduser", lambda p: p.replace("~", str(fake_home)))
+    monkeypatch.delenv("PALACE_DAEMON_URL", raising=False)
+
+    default_palace = str(fake_home / ".mempalace" / "palace")
+    out_lines: list[str] = []
+    palace._open_collection_or_explain(default_palace, out=out_lines.append)
+    joined = "\n".join(out_lines)
+    assert "Current daemon URL" not in joined
+
+
 def test_check_retired_palace_skipped_with_escape_hatch(tmp_path, monkeypatch):
     """MEMPALACE_ALLOW_RETIRED_PALACE=1 lets forensic reads through."""
     from mempalace.mcp_server import _check_local_palace_retired
