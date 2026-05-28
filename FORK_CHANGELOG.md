@@ -254,6 +254,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **kg_llm_extractor rewrites AGE dollar-quote tag in triples so drawers indexing palace source code don't fail at add_triple (#313)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  Drawers indexing palace-daemon / mempalace source code contain
+  ``mp_age_q`` verbatim (the AGE dollar-quote tag the cypher
+  wrapper uses to delimit its outer SQL literal). When the LLM
+  extracted triples about those drawers — e.g. subject="LINE 1",
+  predicate="select", object="* FROM cypher($1, $mp_age_q$" — the
+  triple's text carried the tag substring straight to
+  ``_cypher_literal``, which raised ``Cypher literal contains the
+  AGE dollar-quote tag 'mp_age_q'; reject upstream in the
+  sanitizer.`` The drawer's KG presence was incomplete and the
+  worker logged a warning per failed write.
+
+  The error message itself flagged the fix location ("reject
+  upstream in the sanitizer"). This change adds a substring
+  rewrite at ``_validate`` — the boundary where the LLM hands
+  triples back — replacing ``mp_age_q`` with ``MP_AGE_Q_LIT``.
+  The case-sensitive substring check in ``_cypher_literal`` no
+  longer fires on the rewritten value (Python's ``in`` operator
+  is case-sensitive). Predicate-normalization happens before the
+  rewrite, so the lowercased predicate's tag substring is the
+  one that gets caught and the final predicate ends up with the
+  upper-case placeholder — readable, KG-queryable, safe.
+
+  The roundtrip test (``test_validate_output_survives_cypher_literal``)
+  proves the end-to-end fix: a triple whose object is the verbatim
+  ``_AGE_DQ_TAG = "mp_age_q"`` source line now passes through
+  ``_cypher_literal`` for all three fields without raising.
+
+  *Tests:* 6 — tests/test_kg_extractor.py (rewrites subject + object + predicate, leaves clean triples unchanged, handles multiple occurrences, end-to-end roundtrip survives _cypher_literal)
+  *Files:* `mempalace/kg_llm_extractor.py`, `tests/test_kg_extractor.py`
+
+
 - **scripts/check-docs.sh finds pytest via main checkout when run from a worktree, fails hard instead of silently skipping test-count check (#311)** ([`1d19a8b`](https://github.com/techempower-org/mempalace/commit/1d19a8b))
   Working a fork-ahead PR in a worktree (the standard pattern per
   CLAUDE.md), ``bash scripts/check-docs.sh`` reported "docs clean"

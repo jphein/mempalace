@@ -185,6 +185,26 @@ def _parse_json_blob(raw: str) -> list[dict]:
     return [item for item in parsed if isinstance(item, dict)]
 
 
+# The AGE dollar-quote tag the cypher wrapper uses to delimit the outer
+# SQL literal (see mempalace.knowledge_graph_age._AGE_DQ_TAG). When a
+# triple's text contains this verbatim string — common for drawers that
+# index palace-daemon / mempalace source itself, where ``_AGE_DQ_TAG =
+# "mp_age_q"`` appears as a code literal — ``_cypher_literal`` would
+# reject it at write time as a defense-in-depth measure (#313). We
+# neutralize the collision here at the boundary where the LLM hands
+# triples back, replacing the substring with a marker that preserves
+# entity-name semantics while breaking the wrapper-boundary risk.
+_AGE_DQ_TAG_LITERAL = "mp_age_q"
+_AGE_DQ_TAG_PLACEHOLDER = "MP_AGE_Q_LIT"
+
+
+def _strip_age_dq_tag(value: str) -> str:
+    """Replace the AGE dollar-quote tag substring with a safe placeholder."""
+    if _AGE_DQ_TAG_LITERAL in value:
+        return value.replace(_AGE_DQ_TAG_LITERAL, _AGE_DQ_TAG_PLACEHOLDER)
+    return value
+
+
 def _validate(item: dict) -> Optional[Triple]:
     """Coerce a raw dict to a Triple, or return ``None`` if invalid."""
     subject = item.get("subject")
@@ -203,6 +223,14 @@ def _validate(item: dict) -> Optional[Triple]:
         return None
     if subject.lower() in STOPWORDS or object_.lower() in STOPWORDS:
         return None
+
+    # #313: triples indexing the palace's own source surface ``mp_age_q``
+    # as content. Left raw, ``_cypher_literal`` rejects them at the
+    # outer SQL boundary. Rewrite the substring here so the boundary
+    # cypher wrapping ($mp_age_q$ ... $mp_age_q$) stays unambiguous.
+    subject = _strip_age_dq_tag(subject)
+    predicate = _strip_age_dq_tag(predicate)
+    object_ = _strip_age_dq_tag(object_)
 
     valid_from = item.get("valid_from")
     if valid_from is not None and not isinstance(valid_from, str):
