@@ -24,6 +24,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **mempalace_search MCP input schema accepts fusion_mode (convex|rrf) and forwards to search_memories (#302)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  #162 / PR #295 added ``fusion_mode`` to ``search_memories()`` with
+  ``"convex"`` default and ``"rrf"`` opt-in, validated by the
+  ``_FUSION_RANKERS`` registry. palace-daemon#105 adds the same
+  parameter to its ``/search/hybrid`` HTTP surface so daemon-fronted
+  callers can A/B at production scale. But the MCP boundary in
+  ``mempalace/mcp_server.py`` whitelists callable arguments against
+  the declared ``input_schema`` ``properties`` — and ``fusion_mode``
+  wasn't in the list. Daemon-forwarded values were silently dropped
+  before reaching ``search_memories``, and the end-to-end A/B never
+  worked.
+
+  This change adds ``fusion_mode`` to the ``mempalace_search``
+  input schema (enum ``["convex", "rrf"]``, mirroring
+  ``candidate_strategy``'s shape), threads the parameter through
+  ``tool_search`` into the ``search_memories()`` call, and surfaces
+  it on the ``trace`` dict alongside ``candidate_strategy`` /
+  ``sources`` when ``include_trace=true``. The default stays
+  ``"convex"`` — same default as ``search_memories``' own signature,
+  so unmodified callers see no behavior change.
+
+  Three unit tests cover the kwarg path: ``fusion_mode`` reaches
+  ``search_memories`` with the default, the explicit value passes
+  through, and the MCP whitelist via ``handle_request`` accepts the
+  arg rather than returning ``-32602 Unknown parameter`` (the bug
+  this issue was filed to fix).
+
+  *Tests:* 3 — tests/test_mcp_server.py (fusion_mode forwarded to search_memories incl. convex default + rrf override, fusion_mode survives MCP whitelist via handle_request, schema advertises both modes in enum)
+  *Files:* `mempalace/mcp_server.py`, `tests/test_mcp_server.py`
+
+
+- **mempalace_search MCP input schema accepts fusion_mode (convex|rrf) and forwards to search_memories (#302)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  #162 / PR #295 added ``fusion_mode`` to ``search_memories()`` with
+  ``"convex"`` default and ``"rrf"`` opt-in, validated by the
+  ``_FUSION_RANKERS`` registry. palace-daemon#105 adds the same
+  parameter to its ``/search/hybrid`` HTTP surface so daemon-fronted
+  callers can A/B at production scale. But the MCP boundary in
+  ``mempalace/mcp_server.py`` whitelists callable arguments against
+  the declared ``input_schema`` ``properties`` — and ``fusion_mode``
+  wasn't in the list. Daemon-forwarded values were silently dropped
+  before reaching ``search_memories``, and the end-to-end A/B never
+  worked.
+
+  This change adds ``fusion_mode`` to the ``mempalace_search``
+  input schema (enum ``["convex", "rrf"]``, mirroring
+  ``candidate_strategy``'s shape), threads the parameter through
+  ``tool_search`` into the ``search_memories()`` call, and surfaces
+  it on the ``trace`` dict alongside ``candidate_strategy`` /
+  ``sources`` when ``include_trace=true``. The default stays
+  ``"convex"`` — same default as ``search_memories``' own signature,
+  so unmodified callers see no behavior change.
+
+  Three unit tests cover the kwarg path: ``fusion_mode`` reaches
+  ``search_memories`` with the default, the explicit value passes
+  through, and the MCP whitelist via ``handle_request`` accepts the
+  arg rather than returning ``-32602 Unknown parameter`` (the bug
+  this issue was filed to fix).
+
+  *Tests:* 3 — tests/test_mcp_server.py (fusion_mode forwarded to search_memories incl. convex default + rrf override, fusion_mode survives MCP whitelist via handle_request, schema advertises both modes in enum)
+  *Files:* `mempalace/mcp_server.py`, `tests/test_mcp_server.py`
+
+
 - **mempalace why + tunnels — explain a drawer + inventory cross-wing tunnels (slice of #191)** ([`fdcd0b4`](https://github.com/techempower-org/mempalace/commit/fdcd0b4))
   Two more verbs join the daemon-fast-path family started by
   ``tags`` / ``overlap`` / ``list`` / ``move`` / ``stats`` /
