@@ -254,7 +254,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **README.md + docs/ECOSYSTEM.md — soften 'engram-2 17% E2E QA' framing per the 2026-05-24 research doc's unsubstantiated finding (#319)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+- **README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  The verbatim-first landscape table in README.md cited MemPalace
+  upstream as "~23K stars" — stale since 2026-04. ``gh api
+  /repos/MemPalace/mempalace`` returns 52,993 stars / 6,995 forks
+  on 2026-05-28; refreshing to "~53K stars (upstream, 2026-05-28)"
+  with the explicit reading date so future drift is visible.
+
+  Other systems in the same landscape table also carry star counts
+  (89K claude-mem, 48K Mem0, 22.8K Zep, etc.); they're not refreshed
+  in this PR because each requires its own API call and verification
+  against the system's actual repo. A periodic refresh script would
+  be the principled fix — out of scope here.
+
+  *Files:* `README.md`
+
+
+- **README.md + docs/ECOSYSTEM.md — soften 'engram-2 17% E2E QA' framing per the 2026-05-24 research doc's unsubstantiated finding (#319)** ([`ddf00b4`](https://github.com/techempower-org/mempalace/commit/ddf00b4))
   Three docs referenced the engram-2 "17% E2E QA for MemPalace"
   attribution with inconsistent framing:
 
