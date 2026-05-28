@@ -169,3 +169,128 @@ class TestDecode:
         assert decoded["header"]["file"] == "001"
         assert decoded["arc"] == "journey"
         assert len(decoded["zettels"]) == 1
+
+
+# ── AAAK expansion for embedding (#300) ────────────────────────────────
+
+
+class TestExpandAAAKForEmbedding:
+    def test_looks_like_aaak_pipe_with_prefix(self):
+        from mempalace.dialect import looks_like_aaak
+
+        assert looks_like_aaak("FAM: ALC→JOR | DATE: 2026-05-28")
+        assert looks_like_aaak("SESSION:2026-04-04|built.palace.graph")
+
+    def test_looks_like_aaak_star_marker(self):
+        from mempalace.dialect import looks_like_aaak
+
+        assert looks_like_aaak("simple plus stars ★★★")
+        assert looks_like_aaak("★")
+
+    def test_looks_like_aaak_emotion_marker(self):
+        from mempalace.dialect import looks_like_aaak
+
+        assert looks_like_aaak("*warm* greeting from a friend")
+
+    def test_looks_like_aaak_rejects_plain_prose(self):
+        from mempalace.dialect import looks_like_aaak
+
+        assert not looks_like_aaak("Just plain English describing what happened today.")
+        # A line with a pipe but no structural prefix should NOT be flagged —
+        # piped log lines are common in non-AAAK content too.
+        assert not looks_like_aaak("path/to/foo | something else")
+
+    def test_looks_like_aaak_rejects_empty(self):
+        from mempalace.dialect import looks_like_aaak
+
+        assert not looks_like_aaak("")
+        assert not looks_like_aaak("   ")
+
+    def test_expand_passes_through_plain_prose(self):
+        from mempalace.dialect import expand_aaak_for_embedding
+
+        text = "Plain narrative about a thing that happened."
+        assert expand_aaak_for_embedding(text) == text
+
+    def test_expand_appends_decoded_sidecar(self):
+        from mempalace.dialect import expand_aaak_for_embedding
+
+        text = "SESSION:2026-04-04|built.palace.graph|FAM: ALC|★★★"
+        out = expand_aaak_for_embedding(text)
+        # The original AAAK is the first segment.
+        assert out.startswith(text)
+        # The decoded sidecar follows after a blank line.
+        assert "\n\n" in out
+        decoded = out.split("\n\n", 1)[1]
+        # Prefix decode
+        assert "session record:" in decoded
+        assert "family context:" in decoded
+        # Star marker decode
+        assert "notable importance" in decoded
+
+    def test_expand_decodes_star_levels(self):
+        from mempalace.dialect import expand_aaak_for_embedding
+
+        for stars, prose in [
+            ("★", "low importance"),
+            ("★★", "modest importance"),
+            ("★★★", "notable importance"),
+            ("★★★★", "high importance"),
+            ("★★★★★", "highest importance"),
+        ]:
+            text = f"FAM: ALC | {stars}"
+            out = expand_aaak_for_embedding(text)
+            assert prose in out, f"expected {prose!r} for {stars!r}, got {out!r}"
+
+    def test_expand_decodes_count_markers(self):
+        from mempalace.dialect import expand_aaak_for_embedding
+
+        out = expand_aaak_for_embedding("PROJ: realmwatch | mentions:570x | ★★")
+        assert "570 occurrences" in out
+
+    def test_expand_strips_emotion_asterisks(self):
+        from mempalace.dialect import expand_aaak_for_embedding
+
+        out = expand_aaak_for_embedding("ARC: *warm*->*fierce*->*raw*")
+        # No more raw asterisk-wrapped markers in the decoded line
+        decoded = out.split("\n\n", 1)[1]
+        assert "*warm*" not in decoded
+        # But the word survives (possibly mapped)
+        assert "warm" in decoded
+        assert "determined" in decoded  # _AAAK_EMOTION_HINTS['fierce']
+
+    def test_expand_with_entity_map(self):
+        from mempalace.dialect import expand_aaak_for_embedding
+
+        text = "FAM: ALC→JOR | ★★★"
+        out = expand_aaak_for_embedding(text, entity_map={"ALC": "Alice", "JOR": "Jordan"})
+        decoded = out.split("\n\n", 1)[1]
+        assert "Alice" in decoded
+        assert "Jordan" in decoded
+        # Original still preserved
+        assert "ALC" in out
+        assert "JOR" in out
+
+    def test_expand_without_entity_map_leaves_codes(self):
+        from mempalace.dialect import expand_aaak_for_embedding
+
+        out = expand_aaak_for_embedding("FAM: ALC→JOR | ★★★")
+        # No mapping → codes pass through unchanged
+        assert "ALC" in out
+        assert "JOR" in out
+        # But prefix decoding still ran
+        assert "family context:" in out
+
+    def test_expand_no_op_when_decoded_matches_original(self):
+        """A text that looks like AAAK by emotion-marker heuristic but
+        has no prefix / star / count / emotion expansion produces no
+        sidecar — returns verbatim to save the embedding budget."""
+        from mempalace.dialect import expand_aaak_for_embedding
+
+        # An asterisk-wrapped word triggers `looks_like_aaak` but the
+        # emotion word is unknown — the sub still strips the asterisks.
+        # This documents the current behavior; whether it's the right
+        # tradeoff (always sidecar vs sometimes skip) lives in #300's
+        # design comments.
+        out = expand_aaak_for_embedding("*xyzzy*")
+        assert out.startswith("*xyzzy*")

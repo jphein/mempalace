@@ -235,3 +235,45 @@ Get size comparison stats for a text->AAAK conversion.
 NOTE: AAAK is lossy summarization, not compression. The "ratio"
 reflects how much shorter the summary is, not a compression ratio
 in the traditional sense — information is lost.
+
+## Functions
+
+### `looks_like_aaak`
+
+```python
+def looks_like_aaak(text: str) -> bool
+```
+
+Heuristic — does ``text`` look like AAAK that would benefit from
+expansion before embedding?
+
+True when the text contains a pipe-separated field prefix
+(``FAM:`` / ``PROJ:`` / etc.) *or* star-importance markers *or*
+emotion-marker asterisks. Plain English prose hits none of these.
+Empty input returns False.
+
+### `expand_aaak_for_embedding`
+
+```python
+def expand_aaak_for_embedding(text: str, entity_map: Optional[dict] = None) -> str
+```
+
+Return ``text`` augmented with a decoded sidecar for embedding (#300).
+
+The output has shape ``"&lt;original AAAK>\n\n&lt;decoded prose>"`` —
+the embedder sees both, the verbatim line stays at the top.
+Plain-prose input (anything that fails ``looks_like_aaak``) is
+returned unchanged so the function is safe to call universally.
+
+The decoder is heuristic, not authoritative:
+- Pipe-separated field prefixes are spelled out (``FAM:`` → "family
+  context:").
+- Star markers translate to prose ("notable importance").
+- ``Nx`` count tags translate to "N occurrences".
+- Emotion markers ``*warm*`` translate to "warm".
+- 3–5-letter all-caps entity codes pass through unchanged unless
+  ``entity_map`` provides a longer name (``&#123;"ALC": "Alice"}``).
+
+Verbatim guarantee preserved at the call site by storing the raw
+AAAK in metadata; this function only produces the augmented embed
+text.

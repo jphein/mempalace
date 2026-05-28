@@ -983,6 +983,156 @@ class Dialect:
         }
 
 
+# === Expansion for embedding (#300) ==========================================
+#
+# AAAK is dense and structural — great for human/LLM eyeballing, weak as
+# embedding input because the encoder has to learn that ``ALC`` means
+# Alice, ``FAM:`` is a family-context prefix, ``★★★`` means "high
+# importance", and ``570x`` means "570 occurrences" — and that learning
+# never happens on a frozen sentence-transformer. We close that gap at
+# write time: the verbatim AAAK still lives in metadata for auditability,
+# but the embedding source is augmented with a sidecar of decoded prose.
+#
+# The expansion is deliberately conservative — it sidecars the decoded
+# form alongside the AAAK rather than replacing it, so any signal the
+# embedder *was* picking up from raw AAAK is preserved.
+
+_AAAK_PREFIX_TO_PROSE = {
+    "FAM": "family context",
+    "PROJ": "project context",
+    "SESSION": "session record",
+    "DATE": "date",
+    "ARC": "narrative arc",
+    "T": "tunnel",
+    "TAG": "tag",
+    "EVENT": "event",
+    "DECISION": "decision",
+    "DISCOVERY": "discovery",
+    "PREF": "preference",
+    "PREFERENCE": "preference",
+    "WARNING": "warning",
+    "⚠": "warning",
+}
+
+_AAAK_EMOTION_HINTS = {
+    "warm": "warm",
+    "fierce": "determined",
+    "raw": "vulnerable",
+    "bloom": "tender",
+    "joy": "joyful",
+    "tender": "tender",
+}
+
+_AAAK_STAR_TO_PROSE = {
+    1: "low importance",
+    2: "modest importance",
+    3: "notable importance",
+    4: "high importance",
+    5: "highest importance",
+}
+
+# Heuristic: AAAK lines typically carry one of these structural shapes.
+# Plain prose lacks all three.
+_AAAK_PREFIX_RE = re.compile(r"\b([A-Z]{2,12}|⚠):", flags=re.UNICODE)
+_AAAK_STAR_RE = re.compile(r"★{1,5}")
+_AAAK_COUNT_RE = re.compile(r"(\d{1,6})x\b")
+_AAAK_ENTITY_RE = re.compile(r"\b[A-Z]{3,5}\b")
+_AAAK_EMOTION_RE = re.compile(r"\*([A-Za-z]+)\*")
+
+
+def looks_like_aaak(text: str) -> bool:
+    """Heuristic — does ``text`` look like AAAK that would benefit from
+    expansion before embedding?
+
+    True when the text contains a pipe-separated field prefix
+    (``FAM:`` / ``PROJ:`` / etc.) *or* star-importance markers *or*
+    emotion-marker asterisks. Plain English prose hits none of these.
+    Empty input returns False.
+    """
+    if not text or not text.strip():
+        return False
+    if "|" in text and _AAAK_PREFIX_RE.search(text):
+        return True
+    if _AAAK_STAR_RE.search(text):
+        return True
+    if _AAAK_EMOTION_RE.search(text):
+        return True
+    return False
+
+
+def expand_aaak_for_embedding(text: str, entity_map: Optional[dict] = None) -> str:
+    """Return ``text`` augmented with a decoded sidecar for embedding (#300).
+
+    The output has shape ``"<original AAAK>\\n\\n<decoded prose>"`` —
+    the embedder sees both, the verbatim line stays at the top.
+    Plain-prose input (anything that fails ``looks_like_aaak``) is
+    returned unchanged so the function is safe to call universally.
+
+    The decoder is heuristic, not authoritative:
+    - Pipe-separated field prefixes are spelled out (``FAM:`` → "family
+      context:").
+    - Star markers translate to prose ("notable importance").
+    - ``Nx`` count tags translate to "N occurrences".
+    - Emotion markers ``*warm*`` translate to "warm".
+    - 3–5-letter all-caps entity codes pass through unchanged unless
+      ``entity_map`` provides a longer name (``{"ALC": "Alice"}``).
+
+    Verbatim guarantee preserved at the call site by storing the raw
+    AAAK in metadata; this function only produces the augmented embed
+    text.
+    """
+    if not looks_like_aaak(text):
+        return text
+
+    decoded = text
+
+    # 1. Prefix decoding — match at word boundary, replace prefix only,
+    #    keep the colon and trailing content untouched so structural
+    #    boundaries survive for downstream consumers.
+    def _prefix_sub(m):
+        key = m.group(1).upper()
+        prose = _AAAK_PREFIX_TO_PROSE.get(key)
+        return f"{prose}:" if prose else m.group(0)
+
+    decoded = _AAAK_PREFIX_RE.sub(_prefix_sub, decoded)
+
+    # 2. Star markers → prose
+    def _star_sub(m):
+        n = len(m.group(0))
+        return _AAAK_STAR_TO_PROSE.get(n, m.group(0))
+
+    decoded = _AAAK_STAR_RE.sub(_star_sub, decoded)
+
+    # 3. Count markers → "N occurrences"
+    decoded = _AAAK_COUNT_RE.sub(lambda m: f"{m.group(1)} occurrences", decoded)
+
+    # 4. Emotion markers → emotion word (no asterisks)
+    def _emotion_sub(m):
+        token = m.group(1).lower()
+        return _AAAK_EMOTION_HINTS.get(token, token)
+
+    decoded = _AAAK_EMOTION_RE.sub(_emotion_sub, decoded)
+
+    # 5. Optional entity-code expansion — only when an explicit map is
+    #    provided, otherwise leave codes untouched (the encoder will at
+    #    least see them as out-of-vocabulary tokens with consistent
+    #    context, which is preferable to a guessed expansion).
+    if entity_map:
+
+        def _entity_sub(m):
+            code = m.group(0)
+            return entity_map.get(code, code)
+
+        decoded = _AAAK_ENTITY_RE.sub(_entity_sub, decoded)
+
+    # Sidecar the decoded form below the verbatim AAAK.
+    if decoded.strip() == text.strip():
+        # No transformation actually fired; return verbatim to avoid
+        # doubling the embedding budget for free.
+        return text
+    return f"{text}\n\n{decoded}"
+
+
 # === CLI ===
 if __name__ == "__main__":
     import sys
