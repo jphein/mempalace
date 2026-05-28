@@ -162,6 +162,37 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/knowledge_graph_age.py`, `mempalace/kg_triple_worker.py`, `mempalace/mcp_server.py`, `tests/test_knowledge_graph_age.py`, `tests/test_kg_triple_worker.py`, `tests/test_mcp_server.py`
 
 
+### Fixed
+
+
+- **mempalace_kg_stats returns structured backend-unavailable envelope on transient psycopg failures (#299)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  Observed in production 2026-05-28 09:59 PDT (familiar): postgres
+  OOM-killed under writethrough load. The `mempalace_kg_stats` MCP
+  tool propagated the raw `psycopg.OperationalError` to the
+  envelope as `Tool error in mempalace_kg_stats` — an opaque
+  -32000 internal error to the caller, with no signal that
+  "retry in a moment" is the right response.
+
+  Wraps `tool_kg_stats` with a try/except that catches the two
+  psycopg families that fire on dropped connections
+  (`OperationalError`, `InterfaceError`) and returns
+  `{"error": "backend_unavailable", "detail": "...", "retryable": true}`.
+  Other exceptions (cypher syntax, value validation, schema
+  mismatch) still propagate — those are bugs, not transient
+  backend state, and "retryable" would mask them.
+
+  Transient-error classifier broken out as
+  `_is_transient_postgres_error()` so other MCP tools can adopt
+  the shape without re-implementing the family check. Broader
+  `_call_kg` refactor left as a follow-up — the smallest-blast-
+  radius fix is the right shape while
+  techempower-org/familiar.realm.watch#50 (raise postgres
+  MemoryMax cap) is being addressed.
+
+  *Tests:* 3 — tests/test_mcp_server.py (psycopg.OperationalError surfaces structured envelope, psycopg.InterfaceError same, non-transient ValueError propagates)
+  *Files:* `mempalace/mcp_server.py`, `tests/test_mcp_server.py`
+
+
 ## [2026-05-27]
 
 

@@ -1812,6 +1812,76 @@ class TestKGTools:
         result = tool_kg_stats()
         assert result["entities"] >= 4
 
+    # --- Transient backend failures return structured envelope (#299) ---
+
+    def test_kg_stats_returns_structured_envelope_on_postgres_operational_error(
+        self, monkeypatch, config, palace_path, seeded_kg
+    ):
+        """When postgres drops a connection mid-stats (OOM-kill, network
+        blip, statement_timeout), ``tool_kg_stats`` should return a
+        structured ``{"error": "backend_unavailable", "retryable": True}``
+        envelope instead of propagating the raw ``psycopg.OperationalError``
+        as a -32000 internal error. Regression for techempower-org/mempalace#299.
+        """
+        import pytest
+
+        psycopg = pytest.importorskip("psycopg")
+
+        _patch_mcp_server(monkeypatch, config, seeded_kg)
+        from mempalace import mcp_server
+
+        def _boom(kg):
+            raise psycopg.OperationalError("server closed the connection unexpectedly")
+
+        monkeypatch.setattr(mcp_server, "_call_kg", lambda op: _boom(None))
+
+        result = mcp_server.tool_kg_stats()
+        assert result["error"] == "backend_unavailable"
+        assert result["retryable"] is True
+        assert "server closed" in result["detail"]
+
+    def test_kg_stats_returns_structured_envelope_on_postgres_interface_error(
+        self, monkeypatch, config, palace_path, seeded_kg
+    ):
+        """``psycopg.InterfaceError`` ("the connection is closed") — the
+        sibling family fired by a pool returning a dead handle — also
+        gets the structured envelope. See #299."""
+        import pytest
+
+        psycopg = pytest.importorskip("psycopg")
+
+        _patch_mcp_server(monkeypatch, config, seeded_kg)
+        from mempalace import mcp_server
+
+        def _boom(kg):
+            raise psycopg.InterfaceError("the connection is closed")
+
+        monkeypatch.setattr(mcp_server, "_call_kg", lambda op: _boom(None))
+
+        result = mcp_server.tool_kg_stats()
+        assert result["error"] == "backend_unavailable"
+        assert result["retryable"] is True
+
+    def test_kg_stats_propagates_non_transient_errors(
+        self, monkeypatch, config, palace_path, seeded_kg
+    ):
+        """A ``ValueError`` (cypher syntax, value-validation, etc.) is a
+        bug, not a transient backend state. It should propagate so the
+        MCP caller sees a real error instead of "retryable backend
+        unavailable" — that would mask the bug. See #299."""
+        import pytest
+
+        _patch_mcp_server(monkeypatch, config, seeded_kg)
+        from mempalace import mcp_server
+
+        def _boom(kg):
+            raise ValueError("cypher syntax error: unexpected token at position 42")
+
+        monkeypatch.setattr(mcp_server, "_call_kg", lambda op: _boom(None))
+
+        with pytest.raises(ValueError, match="cypher syntax error"):
+            mcp_server.tool_kg_stats()
+
     # --- Date validation at the MCP boundary (issue #1164) ---
 
     def test_kg_add_rejects_invalid_valid_from(self, monkeypatch, config, palace_path, kg):
