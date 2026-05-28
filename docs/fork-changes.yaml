@@ -24,10 +24,45 @@
 
 entries:
 
-  - id: cli-wakeup-mined-daemon-route
+  - id: cli-rooms-daemon-route
     date: 2026-05-28
     bucket: Added
-    commit: HEAD
+    commit: f3b6738
+    area: CLI
+    summary: "cmd_rooms list/add/rename/remove route to daemon-native mempalace_rooms_* tools (closes #285)"
+    tests: "8 — tests/test_cli_daemon.py TestCmdRoomsDaemon (list routes to daemon, list empty path, add routes + forwards description, add reports 'updated' action, add rejects invalid name client-side before daemon call, rename routes + reports affected_drawers, remove routes when free, remove surfaces daemon's refusal with affected_drawers count)"
+    files:
+      - mempalace/cli.py
+      - tests/test_cli_daemon.py
+    body: |
+      Closes #285. The final CRUD slice of cmd_rooms / cmd_wake-up /
+      cmd_mined daemon-routing — completes what the read-only slice in
+      PR #323 left for follow-up. palace-daemon PR #96 shipped all four
+      ``mempalace_rooms_{list,add,rename,remove}`` tools; this PR is the
+      CLI consumer side.
+
+      Behavior parity with the local-postgres path:
+      ``list`` renders the same ``name / added_at / description`` table.
+      ``add`` validates ``name`` client-side (alphanumeric + underscore
+      only, lowercase snake_case) before contacting the daemon — saves a
+      round-trip for the most common error and produces the same error
+      message the local path emits. The daemon's ``action`` field
+      distinguishes "added" vs "updated description for" the same way
+      the local path's ``RETURNING (xmax = 0)`` does.
+      ``rename`` forwards ``{old, new}`` and prints the daemon's
+      ``affected_drawers`` count (the cascade-rename impact).
+      ``remove`` is the most interesting: the daemon refuses removes
+      whose rooms still have drawer references with a structured
+      ``-32602`` error whose message includes ``affected_drawers=N``.
+      The CLI surfaces that verbatim via the existing ``DaemonError``
+      path so operators see the same "cannot remove X — N drawers
+      still in this room" diagnostic they'd get locally.
+
+      The local-postgres fallback path is unchanged; it runs whenever
+      ``_daemon_strict()`` is false, so old workflows keep working.
+    date: 2026-05-28
+    bucket: Added
+    commit: f3b6738
     area: CLI
     summary: "cmd_wakeup + cmd_mined route to daemon-native mempalace_wakeup / mempalace_mined tools (slice of #285)"
     tests: "8 — tests/test_cli_daemon.py (cmd_wakeup: routes-to-daemon-when-strict, forwards-wing-argument, local-path-when-palace-arg-given, daemon-error-exits-nonzero; cmd_mined: routes-to-daemon-when-strict, forwards-wing-and-limit, json-passthrough, daemon-error-exits-nonzero)"

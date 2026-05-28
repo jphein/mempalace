@@ -761,3 +761,236 @@ class TestCmdMinedDaemon:
         assert ex.value.code == 2
         err = capsys.readouterr().err
         assert "ERROR" in err
+
+
+# ── cmd_rooms routing (#285, daemon PR #96) ────────────────────────────
+
+
+class TestCmdRoomsDaemon:
+    def test_list_routes_to_daemon(self, capsys):
+        from mempalace import cli
+
+        inner = [
+            {
+                "name": "architecture",
+                "description": "designs",
+                "added_at": "2026-05-14 16:57:00.602177+00:00",
+            },
+            {
+                "name": "decisions",
+                "description": "trade-offs",
+                "added_at": "2026-05-14 16:57:00.602177+00:00",
+            },
+        ]
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            },
+        ).encode()
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(rooms_cmd="list")
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_rooms(args)
+
+        assert captured["body"]["params"]["name"] == "mempalace_rooms_list"
+        out = capsys.readouterr().out
+        assert "architecture" in out
+        assert "designs" in out
+        assert "2026-05-14" in out
+
+    def test_list_empty(self, capsys):
+        from mempalace import cli
+
+        body = json.dumps(
+            {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": "[]"}]}},
+        ).encode()
+
+        def fake_urlopen(req, timeout=None):
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(rooms_cmd="list")
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_rooms(args)
+
+        assert "no canonical rooms registered" in capsys.readouterr().out
+
+    def test_add_routes_to_daemon(self, capsys):
+        from mempalace import cli
+
+        inner = {"action": "added", "name": "experiments"}
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            },
+        ).encode()
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(rooms_cmd="add", name="experiments", description="dragon-tests")
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_rooms(args)
+
+        assert captured["body"]["params"]["name"] == "mempalace_rooms_add"
+        assert captured["body"]["params"]["arguments"] == {
+            "name": "experiments",
+            "description": "dragon-tests",
+        }
+        out = capsys.readouterr().out
+        assert "added canonical room 'experiments'" in out
+
+    def test_add_reports_update_action(self, capsys):
+        """When the daemon returns action='updated', the CLI prints 'updated'."""
+        from mempalace import cli
+
+        inner = {"action": "updated", "name": "experiments"}
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            },
+        ).encode()
+
+        def fake_urlopen(req, timeout=None):
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(rooms_cmd="add", name="experiments", description="new desc")
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_rooms(args)
+
+        out = capsys.readouterr().out
+        assert "updated description for canonical room 'experiments'" in out
+
+    def test_add_rejects_invalid_name_locally(self, capsys):
+        """Client-side validation (alphanumeric/underscore only) short-circuits
+        before any daemon call — hyphens fail the `replace('_','').isalnum()`
+        check and exit with code 1 without contacting the daemon."""
+        from mempalace import cli
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(rooms_cmd="add", name="bad-name", description=None)
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen") as mock_urlopen:
+                with pytest.raises(SystemExit) as ex:
+                    cli.cmd_rooms(args)
+                mock_urlopen.assert_not_called()
+        assert ex.value.code == 1
+        assert "must be lowercase snake_case" in capsys.readouterr().out
+
+    def test_rename_routes_to_daemon(self, capsys):
+        from mempalace import cli
+
+        inner = {"old": "experiments", "new": "labs", "affected_drawers": 42}
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            },
+        ).encode()
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(rooms_cmd="rename", old="experiments", new="labs")
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_rooms(args)
+
+        assert captured["body"]["params"]["arguments"] == {"old": "experiments", "new": "labs"}
+        out = capsys.readouterr().out
+        assert "renamed canonical room 'experiments' → 'labs'" in out
+        assert "42 drawers" in out
+
+    def test_remove_routes_to_daemon(self, capsys):
+        from mempalace import cli
+
+        inner = {"name": "stale_room", "removed": True}
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            },
+        ).encode()
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(rooms_cmd="remove", name="stale_room")
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_rooms(args)
+
+        assert captured["body"]["params"]["arguments"] == {"name": "stale_room"}
+        out = capsys.readouterr().out
+        assert "removed canonical room 'stale_room'" in out
+
+    def test_remove_refused_when_drawers_still_reference(self, capsys):
+        """Daemon -32602 with 'affected_drawers=N' surfaces as exit 1 with
+        the daemon's error message."""
+        from mempalace import cli
+
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": {
+                    "code": -32602,
+                    "message": "cannot remove 'busy_room' — 17 drawers still reference it",
+                },
+            }
+        ).encode()
+
+        def fake_urlopen(req, timeout=None):
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(rooms_cmd="remove", name="busy_room")
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                with pytest.raises(SystemExit) as ex:
+                    cli.cmd_rooms(args)
+
+        assert ex.value.code == 1
+        err = capsys.readouterr().err
+        assert "busy_room" in err
+        assert "17 drawers" in err
