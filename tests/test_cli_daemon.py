@@ -304,6 +304,150 @@ class TestCmdSearchDaemon:
                     mock_search.assert_called_once()
 
 
+# ── cmd_search auto-with-fallback (techempower-org/mempalace#283) ──────
+
+
+class TestCmdSearchAutoFallback:
+    """``--mode=auto`` runs BM25-fast first, then falls back to hybrid
+    (vector + AGE graph) when BM25 under-shoots the requested limit —
+    so semantic-only / paraphrased queries don't silently return zero
+    hits. The fallback is signalled in the ``source`` field so the
+    ``[source]`` banner stays honest.
+    """
+
+    @staticmethod
+    def _args(query="q", results=5):
+        return argparse.Namespace(
+            query=query, wing=None, room=None, results=results, palace=None, mode="auto", tags=None
+        )
+
+    def test_falls_back_to_hybrid_on_zero_bm25_hits(self):
+        from mempalace import cli
+
+        fast_result = {"results": [], "query": "q", "source": "bm25-fast"}
+        hybrid_result = {
+            "results": [{"wing": "w", "room": "r", "source_file": "f", "text": "match"}],
+            "source": "hybrid",
+        }
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._daemon_search_fast", return_value=fast_result) as m_fast,
+            patch("mempalace.cli._daemon_search_hybrid", return_value=hybrid_result) as m_hyb,
+        ):
+            cli.cmd_search(self._args())
+
+        m_fast.assert_called_once()
+        m_hyb.assert_called_once()
+        assert hybrid_result["source"] == "hybrid (auto-fallback from bm25-fast)"
+
+    def test_falls_back_when_bm25_returns_fewer_than_limit(self):
+        from mempalace import cli
+
+        fast_result = {
+            "results": [{"text": "one"}],
+            "query": "q",
+            "source": "bm25-fast",
+        }
+        hybrid_result = {
+            "results": [{"text": "one"}, {"text": "two"}, {"text": "three"}],
+            "source": "hybrid",
+        }
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._daemon_search_fast", return_value=fast_result),
+            patch("mempalace.cli._daemon_search_hybrid", return_value=hybrid_result) as m_hyb,
+        ):
+            cli.cmd_search(self._args(results=5))
+
+        m_hyb.assert_called_once()
+        assert hybrid_result["source"] == "hybrid (auto-fallback from bm25-fast)"
+
+    def test_no_fallback_when_bm25_meets_limit(self):
+        from mempalace import cli
+
+        fast_result = {
+            "results": [{"text": "a"}, {"text": "b"}],
+            "query": "q",
+            "source": "bm25-fast",
+        }
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._daemon_search_fast", return_value=fast_result) as m_fast,
+            patch("mempalace.cli._daemon_search_hybrid") as m_hyb,
+        ):
+            cli.cmd_search(self._args(results=2))
+
+        m_fast.assert_called_once()
+        m_hyb.assert_not_called()
+        assert fast_result["source"] == "bm25-fast"
+
+    def test_keeps_bm25_when_hybrid_also_empty(self):
+        """When the fallback retry also returns nothing, keep BM25's empty
+        result rather than discarding it — the user gets the original
+        "No results" message instead of a hybrid-source ghost banner.
+        """
+        from mempalace import cli
+
+        fast_result = {"results": [], "query": "q", "source": "bm25-fast"}
+        hybrid_result = {"results": [], "source": "hybrid"}
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._daemon_search_fast", return_value=fast_result),
+            patch("mempalace.cli._daemon_search_hybrid", return_value=hybrid_result),
+        ):
+            cli.cmd_search(self._args())
+
+        # Source label stays the BM25 banner — no rescue happened.
+        assert fast_result["source"] == "bm25-fast"
+
+    def test_no_fallback_when_room_filter_set(self):
+        """The auto-fallback only fires on the unfiltered branch — the
+        ``not args.room and not tags`` gate above the fast call still
+        guards both BM25 and the fallback. With ``--room`` set, the call
+        falls through to ``mempalace_search`` (hybrid via MCP) unchanged.
+        """
+        from mempalace import cli
+
+        args = argparse.Namespace(
+            query="q",
+            wing=None,
+            room="memorypalace",
+            results=5,
+            palace=None,
+            mode="auto",
+            tags=None,
+        )
+
+        inner = {"results": [{"text": "from mcp"}], "warnings": []}
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            }
+        ).encode()
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._daemon_search_fast") as m_fast,
+            patch("mempalace.cli._daemon_search_hybrid") as m_hyb,
+            patch("urllib.request.urlopen", return_value=_FakeResp(body)),
+        ):
+            cli.cmd_search(args)
+
+        m_fast.assert_not_called()
+        m_hyb.assert_not_called()
+
+
 # ── cmd_mine routing ───────────────────────────────────────────────────
 
 
