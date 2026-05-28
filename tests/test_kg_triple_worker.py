@@ -338,9 +338,13 @@ class _FakeKG:
         valid_from=None,
         valid_to=None,
         confidence=kw.DEFAULT_TRIPLE_CONFIDENCE,
+        raw_relation_type=None,
     ):
         # ``relation_type`` key preserved for the test assertions; the
         # worker's call shape uses ``predicate`` positionally.
+        # ``raw_relation_type`` (mempalace #278) records the original
+        # predicate when the canonical mapper rewrote it; None means
+        # mapping was disabled or the predicate was already canonical.
         self.triples.append(
             {
                 "subject": subject,
@@ -349,6 +353,7 @@ class _FakeKG:
                 "source": source,
                 "valid_from": valid_from,
                 "confidence": confidence,
+                "raw_relation_type": raw_relation_type,
             }
         )
 
@@ -677,9 +682,138 @@ def test_run_worker_processes_drawer_end_to_end():
     assert kg.triples[0]["object"] == "Bob"
     assert kg.triples[0]["source"] == "drawer:d1"
     assert kg.triples[0]["confidence"] == kw.DEFAULT_TRIPLE_CONFIDENCE
+    # Default canonical-mapping state: pass-through, no raw retained (#278).
+    assert kg.triples[0]["raw_relation_type"] is None
 
     queue_row = db.queue["d1"]
     assert queue_row.completed_at is not None
+    assert queue_row.triples_extracted == 1
+    assert queue_row.error is None
+
+
+def test_add_triple_cypher_includes_raw_relation_type_when_provided():
+    """When the worker maps a predicate to a canonical, the raw is retained
+    as a relation property so the mapping is reversible (#278)."""
+    cypher = kw._add_triple_cypher(
+        "alice",
+        "works_with",
+        "bob",
+        source=None,
+        valid_from=None,
+        confidence=1.0,
+        raw_relation_type="works_alongside_of",
+    )
+    assert "raw_relation_type:" in cypher
+    assert "works_alongside_of" in cypher
+
+
+def test_add_triple_cypher_omits_raw_relation_type_when_none():
+    """Default (no canonical mapping applied): the Cypher shouldn't carry
+    a raw_relation_type key at all — keeps writes byte-equivalent to
+    pre-#278 behavior."""
+    cypher = kw._add_triple_cypher(
+        "alice",
+        "works_with",
+        "bob",
+        source=None,
+        valid_from=None,
+        confidence=1.0,
+    )
+    assert "raw_relation_type" not in cypher
+
+
+def test_run_worker_passes_canonical_relation_type_and_retains_raw(monkeypatch):
+    """End-to-end: when map_for_write returns a mapped result, the worker
+    writes the canonical relation_type and persists the raw as a separate
+    property — exactly the wiring #278 requires."""
+    monkeypatch.setattr(
+        kw,
+        "map_for_write",
+        lambda p: kw.MappedPredicate(
+            relation_type="canonical_works_with",
+            raw_relation_type=p,
+            dropped=False,
+            mapped=True,
+        ),
+    )
+
+    db = _FakeDB()
+    db.add_drawer("d1", document=_drawer_text("d1"))
+    db.enqueue("d1")
+    kg = _FakeKG()
+    http = _FakeHTTPClient(
+        triples_per_drawer={
+            "d1": [
+                {"subject": "Alice", "predicate": "is_partnered_with", "object": "Bob"},
+            ],
+        }
+    )
+
+    asyncio.run(
+        kw.run_worker(
+            dsn="dummy",
+            llm_endpoint="http://localhost:11436",
+            model="phi-4-mini",
+            batch_size=10,
+            poll_interval=1,
+            max_concurrency=2,
+            once=True,
+            **_make_factories(db, kg, http),
+        )
+    )
+
+    assert len(kg.triples) == 1
+    assert kg.triples[0]["relation_type"] == "canonical_works_with"
+    assert kg.triples[0]["raw_relation_type"] == "is_partnered_with"
+
+
+def test_run_worker_skips_dropped_triples(monkeypatch):
+    """When map_for_write reports dropped=True (junk / code-token predicate),
+    the worker skips the triple entirely — and the queue row still completes
+    with the extraction count reflecting only what landed."""
+    monkeypatch.setattr(
+        kw,
+        "map_for_write",
+        lambda p: kw.MappedPredicate(
+            relation_type=None,
+            raw_relation_type=p,
+            dropped=True,
+            mapped=True,
+        ),
+    )
+
+    db = _FakeDB()
+    db.add_drawer("d1", document=_drawer_text("d1"))
+    db.enqueue("d1")
+    kg = _FakeKG()
+    http = _FakeHTTPClient(
+        triples_per_drawer={
+            "d1": [
+                {"subject": "Alice", "predicate": "appendChild", "object": "Bob"},
+            ],
+        }
+    )
+
+    asyncio.run(
+        kw.run_worker(
+            dsn="dummy",
+            llm_endpoint="http://localhost:11436",
+            model="phi-4-mini",
+            batch_size=10,
+            poll_interval=1,
+            max_concurrency=2,
+            once=True,
+            **_make_factories(db, kg, http),
+        )
+    )
+
+    assert kg.triples == []
+    queue_row = db.queue["d1"]
+    assert queue_row.completed_at is not None
+    # `triples_extracted` counts what the LLM emitted, not what survived
+    # canonical-mapping dropping — that's the existing accounting semantic
+    # and #278 deliberately leaves it alone. The load-bearing assertion is
+    # `kg.triples == []` above: nothing was actually written to AGE.
     assert queue_row.triples_extracted == 1
     assert queue_row.error is None
 
