@@ -4258,6 +4258,413 @@ def cmd_overlap(args):
     _print_overlap_table(rows, wing_a=wing_a, wing_b=wing_b)
 
 
+# ── mempalace why ─────────────────────────────────────────────────────
+#
+# Slice of #191: explain a drawer — show *why* it would surface.
+# Composes three read-only daemon calls (no searcher.py changes):
+#   1. mempalace_get_drawer        → location + tags + content snippet
+#   2. /cypher (Drawer→Entity)     → top entities the drawer mentions
+#   3. mempalace_search            → drawers that surface alongside it
+# A debugging lens for "why does this drawer match X?" — answer is the
+# combination of where it lives, what entities it links to, and what
+# semantically-similar siblings exist.
+
+
+def _resolve_why_format(args) -> str:
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+_WHY_DEFAULT_NEIGHBORS = 5
+_WHY_MAX_NEIGHBORS = 50
+_WHY_DEFAULT_ENTITIES = 10
+_WHY_MAX_ENTITIES = 100
+_WHY_SNIPPET_CHARS = 240
+
+
+def _why_query_snippet(content: str) -> str:
+    """First non-blank paragraph (or first WHY_SNIPPET_CHARS chars), trimmed.
+
+    Used as the self-query for the neighbors hop — pick a representative
+    chunk of the drawer's own content so the vector search is anchored
+    on the drawer's actual semantics rather than its tag/wing metadata.
+    """
+    if not content:
+        return ""
+    for para in content.split("\n\n"):
+        stripped = para.strip()
+        if stripped:
+            return stripped[:_WHY_SNIPPET_CHARS]
+    return content.strip()[:_WHY_SNIPPET_CHARS]
+
+
+def _build_why_entities_cypher(drawer_id: str, limit: int) -> str:
+    """Return the inlined Cypher for the drawer→entities MENTIONS hop."""
+    from .config import sanitize_kg_value
+    from .knowledge_graph_age import _cypher_literal
+
+    did = _cypher_literal(sanitize_kg_value(drawer_id, "drawer_id"))
+    return (
+        f"MATCH (d:Drawer {{id: {did}}})-[m:MENTIONS]->(e:Entity) "
+        "RETURN e.name AS entity, m.count AS count, m.etype AS etype "
+        "ORDER BY m.count DESC "
+        f"LIMIT {int(limit)}"
+    )
+
+
+def _why_extract_neighbors(search_payload: dict, exclude_id: str) -> list[dict]:
+    """Pull the neighbor list out of mempalace_search response, dropping the
+    drawer itself if it appears (it will — self-similarity is 1.0).
+    """
+    results = (search_payload.get("results") if isinstance(search_payload, dict) else None) or []
+    neighbors = []
+    for r in results:
+        if not isinstance(r, dict):
+            continue
+        rid = r.get("id") or r.get("drawer_id")
+        if rid and rid == exclude_id:
+            continue
+        neighbors.append(
+            {
+                "id": rid,
+                "wing": r.get("wing") or "",
+                "room": r.get("room") or "",
+                "distance": r.get("distance"),
+                "matched_via": r.get("matched_via"),
+                "snippet": (r.get("content") or "")[:120],
+            }
+        )
+    return neighbors
+
+
+def _print_why_report(
+    drawer: dict,
+    entities: list[dict],
+    neighbors: list[dict],
+) -> None:
+    """Three-block table: WHERE / MENTIONS / NEIGHBORS."""
+    did = drawer.get("drawer_id", "?")
+    wing = drawer.get("wing") or "(no wing)"
+    room = drawer.get("room") or "(no room)"
+    tags = drawer.get("tags") or []
+    content = drawer.get("content") or ""
+    snippet = _why_query_snippet(content)
+
+    print(f"\n  WHY — drawer {did}")
+    print(f"  {'-' * 56}")
+    print(f"    location:  {wing} / {room}")
+    if tags:
+        print(f"    tags:      {', '.join(tags)}")
+    else:
+        print("    tags:      (none)")
+    if snippet:
+        first_line = snippet.replace("\n", " ")
+        if len(first_line) > 76:
+            first_line = first_line[:75] + "…"
+        print(f"    snippet:   {first_line}")
+
+    print(f"\n  MENTIONS — {len(entities)} entities (top by mention count)")
+    if entities:
+        name_w = max(6, max(len(str(e.get("entity") or "")) for e in entities))
+        name_w = min(name_w, 40)
+        for ent in entities:
+            name = str(ent.get("entity") or "")
+            if len(name) > name_w:
+                name = name[: name_w - 1] + "…"
+            cnt = int(ent.get("count") or 0)
+            etype = ent.get("etype") or ""
+            etype_str = f"  ({etype})" if etype and etype != "unknown" else ""
+            print(f"    {name:<{name_w}}  ×{cnt}{etype_str}")
+    else:
+        print("    (no MENTIONS edges — drawer not in KG or KG empty)")
+
+    print(f"\n  NEIGHBORS — {len(neighbors)} semantically similar drawers")
+    if neighbors:
+        id_w = max(8, max(len(str(n.get("id") or "")) for n in neighbors))
+        id_w = min(id_w, 36)
+        for n in neighbors:
+            nid = str(n.get("id") or "")
+            if len(nid) > id_w:
+                nid = nid[: id_w - 1] + "…"
+            loc = f"{n.get('wing') or '?'}/{n.get('room') or '?'}"
+            dist = n.get("distance")
+            dist_str = f"d={dist:.3f}" if isinstance(dist, (int, float)) else "d=?"
+            snip = (n.get("snippet") or "").replace("\n", " ")
+            if len(snip) > 40:
+                snip = snip[:39] + "…"
+            print(f"    {nid:<{id_w}}  {loc:<24}  {dist_str:<10}  {snip}")
+    else:
+        print("    (no neighbors returned — corpus may be small or daemon vector-disabled)")
+    print()
+
+
+def cmd_why(args):
+    """Explain a drawer — surface the signals that make it findable (slice of #191).
+
+    Composes three read-only daemon calls into one report:
+      * ``mempalace_get_drawer`` for wing/room/tags + content
+      * read-only Cypher for the drawer's :MENTIONS-Entity edges (top N)
+      * ``mempalace_search`` on the drawer's own first paragraph for the
+        nearest semantic neighbors (drawer itself filtered out)
+
+    Daemon unreachable → exit 1; missing drawer or inner-error envelope
+    → exit 2. No ``searcher.py`` writes; pure orchestration over existing
+    read paths.
+    """
+    fmt = _resolve_why_format(args)
+    want_json = fmt == "json"
+
+    drawer_id = getattr(args, "drawer_id", None)
+    if not drawer_id or not str(drawer_id).strip():
+        msg = "why requires a drawer ID (positional argument)"
+        if want_json:
+            _emit_json({"error": msg, "source": "cli"})
+        else:
+            print(f"error: {msg}", file=sys.stderr)
+        sys.exit(2)
+    drawer_id = str(drawer_id).strip()
+
+    if not _daemon_url():
+        msg = (
+            "why requires the palace-daemon. Set PALACE_DAEMON_URL "
+            "(or daemon_url in ~/.mempalace/config.json) and retry."
+        )
+        if want_json:
+            _emit_json({"error": "daemon_required", "hint": msg})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+    neighbors_limit = max(
+        1,
+        min(
+            int(getattr(args, "neighbors", _WHY_DEFAULT_NEIGHBORS) or _WHY_DEFAULT_NEIGHBORS),
+            _WHY_MAX_NEIGHBORS,
+        ),
+    )
+    entities_limit = max(
+        1,
+        min(
+            int(getattr(args, "entities", _WHY_DEFAULT_ENTITIES) or _WHY_DEFAULT_ENTITIES),
+            _WHY_MAX_ENTITIES,
+        ),
+    )
+
+    try:
+        drawer = _call_daemon_tool("mempalace_get_drawer", {"drawer_id": drawer_id})
+    except DaemonError as e:
+        if want_json:
+            _emit_json({"error": str(e), "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({e})",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if isinstance(drawer, dict) and "error" in drawer and "drawer_id" not in drawer:
+        if want_json:
+            _emit_json(drawer)
+        else:
+            print(f"\n  {drawer['error']}", file=sys.stderr)
+        sys.exit(2)
+
+    # Entities — best-effort. AGE may not be configured on every daemon
+    # (chroma-only backends), so a 404/503 here downgrades to "no entities"
+    # rather than failing the whole report.
+    entities: list[dict] = []
+    graph = getattr(args, "graph", None) or _CYPHER_DEFAULT_GRAPH
+    try:
+        cypher = _build_why_entities_cypher(drawer_id, entities_limit)
+        ent_data, ent_status = _post_cypher({"cypher": cypher, "graph": str(graph)})
+        if ent_status is None and ent_data is not None:
+            entities = _extract_cypher_rows(ent_data)
+    except DaemonError:
+        # Daemon went away between calls — surface on the search hop.
+        pass
+    except ValueError:
+        # sanitize_kg_value rejection — already validated drawer_id is
+        # non-empty above; this should be unreachable but defensively
+        # leaves the entities block empty.
+        pass
+
+    # Neighbors — use the drawer's first non-blank paragraph as the query.
+    neighbors: list[dict] = []
+    snippet = _why_query_snippet(drawer.get("content") or "")
+    if snippet:
+        # +1 because the drawer itself will land in its own self-search.
+        search_args = {"query": snippet, "limit": neighbors_limit + 1}
+        try:
+            search_payload = _call_daemon_tool("mempalace_search", search_args)
+        except DaemonError as e:
+            if want_json:
+                _emit_json({"error": str(e), "source": "daemon"})
+            else:
+                print(
+                    f"palace daemon unreachable at {_daemon_url()} — "
+                    f"see mempalace status for diagnostics ({e})",
+                    file=sys.stderr,
+                )
+            sys.exit(1)
+        if (
+            isinstance(search_payload, dict)
+            and "error" in search_payload
+            and "results" not in search_payload
+        ):
+            if want_json:
+                _emit_json(search_payload)
+            else:
+                print(f"\n  {search_payload['error']}", file=sys.stderr)
+            sys.exit(2)
+        neighbors = _why_extract_neighbors(search_payload or {}, exclude_id=drawer_id)[
+            :neighbors_limit
+        ]
+
+    if want_json:
+        out = {
+            "drawer_id": drawer_id,
+            "wing": drawer.get("wing") or "",
+            "room": drawer.get("room") or "",
+            "tags": drawer.get("tags") or [],
+            "snippet": snippet,
+            "entities": entities,
+            "neighbors": neighbors,
+        }
+        _emit_json(out)
+        return
+
+    _print_why_report(drawer, entities, neighbors)
+
+
+# ── mempalace tunnels ─────────────────────────────────────────────────
+#
+# Slice of #191: list cross-wing tunnels via a single
+# ``mempalace_list_tunnels`` MCP call. Tunnels are first-class palace
+# structure (explicit links wired in ``~/.mempalace/tunnels.json``, plus
+# passive overlap inferred from rooms appearing in 2+ wings), but the
+# CLI never exposed a way to inventory them. Mirrors ``cmd_tags`` shape.
+
+
+def _resolve_tunnels_format(args) -> str:
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def _tunnels_kind(entry: dict) -> str:
+    """Tunnel kind label — ``mempalace_list_tunnels`` tags entries with
+    ``kind: 'explicit'|'passive'`` (issue #75). Default 'explicit' for the
+    case where the daemon predates the explicit/passive merge.
+    """
+    return str(entry.get("kind") or "explicit")
+
+
+def _print_tunnels_table(bundle, scope_wing: str | None) -> None:
+    """Aligned tunnel rows — wing_a ↔ wing_b (room) [kind]."""
+    # ``mempalace_list_tunnels`` returns a bare list (not a dict envelope)
+    # — issue #75 documents the shape. Be defensive against future
+    # wrapping in case the daemon ever shifts to ``{"tunnels": [...]}``.
+    if isinstance(bundle, dict):
+        items = bundle.get("tunnels") or bundle.get("data") or []
+    else:
+        items = bundle or []
+
+    scope_label = f" — wing={scope_wing}" if scope_wing else ""
+    if not items:
+        print(f"\n  (no tunnels{scope_label})\n")
+        return
+
+    a_w = max(len("wing_a"), max(len(str(t.get("source_wing") or "")) for t in items))
+    b_w = max(len("wing_b"), max(len(str(t.get("target_wing") or "")) for t in items))
+    room_w = max(
+        len("room"), max(len(str(t.get("source_room") or t.get("room") or "")) for t in items)
+    )
+    a_w = min(a_w, 24)
+    b_w = min(b_w, 24)
+    room_w = min(room_w, 24)
+
+    print(f"\n  TUNNELS — {len(items)}{scope_label}")
+    print(f"  {'-' * (a_w + b_w + room_w + 24)}")
+    print(f"    {'wing_a':<{a_w}}  {'wing_b':<{b_w}}  {'room':<{room_w}}  {'kind':<9}")
+    for t in items:
+        a = str(t.get("source_wing") or "")
+        b = str(t.get("target_wing") or "")
+        room = str(t.get("source_room") or t.get("room") or "")
+        kind = _tunnels_kind(t)
+        if len(a) > a_w:
+            a = a[: a_w - 1] + "…"
+        if len(b) > b_w:
+            b = b[: b_w - 1] + "…"
+        if len(room) > room_w:
+            room = room[: room_w - 1] + "…"
+        print(f"    {a:<{a_w}}  {b:<{b_w}}  {room:<{room_w}}  {kind:<9}")
+    print()
+
+
+def cmd_tunnels(args):
+    """List cross-wing tunnels (slice of #191).
+
+    Wraps the daemon's ``mempalace_list_tunnels`` MCP tool. Default is
+    explicit-only (the agent-wired tunnels at ``~/.mempalace/tunnels.json``);
+    pass ``--passive`` to also include passive tunnels (rooms appearing
+    in 2+ wings, inferred from the palace graph — see issue #75).
+
+    Daemon unreachable → exit 1; inner-error envelope → exit 2.
+    """
+    fmt = _resolve_tunnels_format(args)
+    want_json = fmt == "json"
+
+    if not _daemon_url():
+        msg = (
+            "tunnels requires the palace-daemon. Set PALACE_DAEMON_URL "
+            "(or daemon_url in ~/.mempalace/config.json) and retry."
+        )
+        if want_json:
+            _emit_json({"error": "daemon_required", "hint": msg})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+    arguments: dict = {"include_passive": bool(getattr(args, "passive", False))}
+    wing = getattr(args, "wing", None)
+    if wing:
+        arguments["wing"] = wing
+
+    try:
+        data = _call_daemon_tool("mempalace_list_tunnels", arguments)
+    except DaemonError as e:
+        if want_json:
+            _emit_json({"error": str(e), "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({e})",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if isinstance(data, dict) and "error" in data and not (data.get("tunnels") or data.get("data")):
+        if want_json:
+            _emit_json(data)
+        else:
+            print(f"\n  {data['error']}", file=sys.stderr)
+        sys.exit(2)
+
+    if want_json:
+        _emit_json(data)
+        return
+
+    _print_tunnels_table(data, scope_wing=wing)
+
+
 def cmd_repair_status(args):
     """Read-only HNSW capacity health check (#1222)."""
     from .repair import status as repair_status
@@ -5567,6 +5974,66 @@ def main():
         ),
     )
 
+    # why — explain a drawer (slice of #191)
+    p_why = sub.add_parser(
+        "why",
+        help="Explain why a drawer would surface — location, tags, entities, neighbors",
+    )
+    p_why.add_argument("drawer_id", help="Drawer ID to explain")
+    p_why.add_argument(
+        "--neighbors",
+        type=_nonneg_int,
+        default=_WHY_DEFAULT_NEIGHBORS,
+        help=(
+            f"Semantic neighbor count (default {_WHY_DEFAULT_NEIGHBORS}, max {_WHY_MAX_NEIGHBORS})"
+        ),
+    )
+    p_why.add_argument(
+        "--entities",
+        type=_nonneg_int,
+        default=_WHY_DEFAULT_ENTITIES,
+        help=(
+            f"Top-N entities by mention count (default {_WHY_DEFAULT_ENTITIES}, "
+            f"max {_WHY_MAX_ENTITIES})"
+        ),
+    )
+    p_why.add_argument(
+        "--graph",
+        default=_CYPHER_DEFAULT_GRAPH,
+        help=f"AGE graph name for the MENTIONS query (default: {_CYPHER_DEFAULT_GRAPH})",
+    )
+    p_why.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, three-block report), "
+            "json (full structured payload; same as --json)"
+        ),
+    )
+
+    # tunnels — list cross-wing tunnels (slice of #191)
+    p_tunnels = sub.add_parser(
+        "tunnels",
+        help="List cross-wing tunnels (daemon mempalace_list_tunnels fast-path)",
+    )
+    p_tunnels.add_argument("--wing", default=None, help="Filter to tunnels touching one wing")
+    p_tunnels.add_argument(
+        "--passive",
+        action="store_true",
+        default=False,
+        help="Include passive tunnels (rooms appearing in 2+ wings) — default off",
+    )
+    p_tunnels.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, aligned columns), "
+            "json (daemon pass-through; same as --json)"
+        ),
+    )
+
     # ── Propagate --json/--quiet to every subparser (issue #44) ─────
     # argparse parses pre-subcommand flags into ``args.json`` /
     # ``args.quiet`` only if they appear BEFORE the subcommand. To let
@@ -5662,6 +6129,8 @@ def main():
         "stats": cmd_stats,
         "tags": cmd_tags,
         "overlap": cmd_overlap,
+        "why": cmd_why,
+        "tunnels": cmd_tunnels,
         "mined": cmd_mined,
         "replay": cmd_replay,
     }

@@ -356,6 +356,39 @@ Daemon unreachable / 401/404/403 → exit 1; 403 read-only write
 attempt cannot fire here (only MATCH/RETURN); inner-error envelope
 or sanitization failure → exit 2.
 
+### `cmd_why`
+
+```python
+def cmd_why(args)
+```
+
+Explain a drawer — surface the signals that make it findable (slice of #191).
+
+Composes three read-only daemon calls into one report:
+  * ``mempalace_get_drawer`` for wing/room/tags + content
+  * read-only Cypher for the drawer's :MENTIONS-Entity edges (top N)
+  * ``mempalace_search`` on the drawer's own first paragraph for the
+    nearest semantic neighbors (drawer itself filtered out)
+
+Daemon unreachable → exit 1; missing drawer or inner-error envelope
+→ exit 2. No ``searcher.py`` writes; pure orchestration over existing
+read paths.
+
+### `cmd_tunnels`
+
+```python
+def cmd_tunnels(args)
+```
+
+List cross-wing tunnels (slice of #191).
+
+Wraps the daemon's ``mempalace_list_tunnels`` MCP tool. Default is
+explicit-only (the agent-wired tunnels at ``~/.mempalace/tunnels.json``);
+pass ``--passive`` to also include passive tunnels (rooms appearing
+in 2+ wings, inferred from the palace graph — see issue #75).
+
+Daemon unreachable → exit 1; inner-error envelope → exit 2.
+
 ### `cmd_repair_status`
 
 ```python
