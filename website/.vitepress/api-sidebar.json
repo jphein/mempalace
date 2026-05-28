@@ -44,6 +44,10 @@
         "link": "/reference/python-api/corpus_origin"
       },
       {
+        "text": "mempalace.cross_encoder_rerank",
+        "link": "/reference/python-api/cross_encoder_rerank"
+      },
+      {
         "text": "mempalace.dedup",
         "link": "/reference/python-api/dedup"
       },

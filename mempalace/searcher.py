@@ -1813,6 +1813,31 @@ def _load_calibrator():
     return cal
 
 
+# ── optional cross-encoder rerank (techempower-org/mempalace#179) ────────────
+#
+# Off by default. When the operator sets ``MEMPALACE_RERANK_CROSS_ENCODER=1``
+# or ``"cross_encoder_rerank": true`` in config.json, the rerank stage fires
+# between fusion and result return. Resolves config at search time so the
+# daemon picks up toggles without a restart (mirrors the calibrator pattern).
+
+
+def _cross_encoder_rerank_config() -> "dict | None":
+    """Return ``{model, top_n}`` if cross-encoder rerank is enabled, else ``None``.
+
+    Resolved fresh on each call so the daemon picks up config or env
+    changes without a restart. The model itself is cached inside
+    ``mempalace.cross_encoder_rerank``, so a hot palace with rerank on
+    pays this resolution cost (microseconds) per query, not the model
+    load cost.
+    """
+    from .config import MempalaceConfig
+
+    cfg = MempalaceConfig()
+    if not cfg.cross_encoder_rerank:
+        return None
+    return {"model": cfg.cross_encoder_model, "top_n": cfg.cross_encoder_top_n}
+
+
 def search_memories(  # noqa: C901 — fork-only fallback orchestration; complexity above ceiling is the cost of the BM25-top-up + warnings + closet-boost branches
     query: str,
     palace_path: str,
@@ -2140,12 +2165,34 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
         max_distance=max_distance,
     )
 
-    # BM25 hybrid re-rank within the final candidate set, then trim back
-    # to the requested size. Without the trim, ``candidate_strategy="union"``
-    # would return up to 4× ``n_results`` (vector hits + BM25 union pool),
-    # breaking the existing ``search_memories`` size contract that the MCP
-    # ``limit`` parameter is built on.
-    hits = _FUSION_RANKERS[fusion_mode](hits, query)[:n_results]
+    # BM25 hybrid re-rank within the final candidate set. Without trimming
+    # here, ``candidate_strategy="union"`` would carry up to 4× ``n_results``
+    # (vector hits + BM25 union pool) into the optional cross-encoder
+    # rerank stage below. We keep the full fused pool until *after* the
+    # rerank so the rerank gets to see candidates the convex/RRF blend
+    # buried — that's the whole point of having a reranker. Trim happens
+    # below, after the rerank stage.
+    hits = _FUSION_RANKERS[fusion_mode](hits, query)
+
+    # Optional cross-encoder rerank (techempower-org/mempalace#179).
+    # Off by default — only fires when the operator has explicitly
+    # enabled it via env or config.json. Composes with every
+    # ``candidate_strategy`` and every ``fusion_mode`` because it
+    # reorders the already-fused candidate list, never replaces fusion.
+    _cer_cfg = _cross_encoder_rerank_config()
+    if _cer_cfg is not None:
+        from . import cross_encoder_rerank as _cer
+
+        hits = _cer.rerank(
+            query,
+            hits,
+            model_name=_cer_cfg["model"],
+            top_n=_cer_cfg["top_n"],
+        )
+
+    # Apply the result-size contract after every reordering stage has
+    # had a chance to influence the top of the list.
+    hits = hits[:n_results]
     for h in hits:
         h.pop("_sort_key", None)
         h.pop("_source_file_full", None)

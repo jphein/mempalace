@@ -18,6 +18,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-05-28]
+
+
+### Added
+
+
+- **optional cross-encoder rerank stage between hybrid fusion and result return (#179)** ([`b663fde`](https://github.com/techempower-org/mempalace/commit/b663fde))
+  Adds an opt-in cross-encoder rerank stage to ``search_memories``,
+  positioned **after** the existing hybrid fusion (convex / RRF) and
+  **before** the final ``n_results`` trim. The rerank composes with
+  every ``candidate_strategy`` (vector / union / hybrid) and every
+  ``fusion_mode`` (convex / rrf) — it reorders the already-fused
+  candidate list, never replaces fusion.
+
+  Default off. Per JP's no-model-at-query-time rule the rerank only
+  fires when the operator explicitly opts in via
+  ``MEMPALACE_RERANK_CROSS_ENCODER=1`` env or
+  ``"cross_encoder_rerank": true`` in ``config.json``. When disabled,
+  the module imports nothing heavy and adds zero query-time cost
+  (``sentence_transformers`` is lazy-imported behind the flag).
+
+  The default model is ``cross-encoder/ms-marco-MiniLM-L-6-v2`` (22M
+  parameters, CPU-friendly, ~90MB to load). The True Memory ablation
+  (``docs/research/2026-05-24-true-memory-comparison.md``) found this
+  cheap reranker captures most of the rerank value — upgrading to
+  ``ms-marco-MiniLM-L-12-v2`` (149M) only moves the needle 1.3pp.
+  Operators can override via ``MEMPALACE_RERANK_CROSS_ENCODER_MODEL``.
+  ``MEMPALACE_RERANK_TOP_N`` (default 25) bounds the rerank window
+  — rerank is a quality lift, not a recall floor, so the tail keeps
+  its fused position.
+
+  Critical change to the trim: ``search_memories`` previously trimmed
+  to ``n_results`` immediately after fusion. The trim now happens
+  after the rerank stage so the rerank can promote a candidate from
+  position 6 to position 1 when the rerank disagrees with fusion —
+  which is the whole point of having a reranker.
+
+  ``sentence-transformers>=2.7`` ships as the new ``[rerank]``
+  optional extra (``pip install mempalace[rerank]``); heavy enough
+  (~2GB with torch) that we don't want it in core.
+
+  The corpus-level A/B is **deferred** — running it now would steal
+  capacity from the in-flight KG backfill + #162 RRF-vs-hybrid A/B.
+  The harness (``scripts/eval_cross_encoder_rerank.py``) is in place
+  and gated by ``--i-know-the-corpus-is-stable`` so it can't
+  accidentally run mid-flight. See
+  ``docs/research/2026-05-28-cross-encoder-rerank.md`` for the
+  measurement plan.
+
+  *Tests:* 40 — tests/test_cross_encoder_rerank.py (env/file-config gating, model/top_n resolution, rerank reorders by score, attaches cross_encoder_score, no input mutation, top-N window honored, top_n<=0 noop, missing-text recall preservation, scorer-exception graceful degrade, stable tie ordering, scorer cache, lazy import) + tests/test_eval_cross_encoder_rerank.py (A/B orchestration, env restoration, refuses to run without --i-know-the-corpus-is-stable)
+  *Files:* `mempalace/cross_encoder_rerank.py`, `mempalace/searcher.py`, `mempalace/config.py`, `pyproject.toml`, `scripts/eval_cross_encoder_rerank.py`, `tests/test_cross_encoder_rerank.py`, `tests/test_eval_cross_encoder_rerank.py`, `docs/research/2026-05-28-cross-encoder-rerank.md`
+
+
 ## [2026-05-27]
 
 

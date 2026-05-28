@@ -397,6 +397,48 @@ class MempalaceConfig:
         return None
 
     @property
+    def cross_encoder_rerank(self) -> bool:
+        """Whether the optional cross-encoder rerank stage is enabled.
+
+        Off by default — preserves the zero-model-at-query-time default
+        (per JP's no-model-at-query-time rule from techempower-org/mempalace#179).
+        Opt in via ``MEMPALACE_RERANK_CROSS_ENCODER=1`` env or
+        ``"cross_encoder_rerank": true`` in config.json. Env wins.
+
+        See ``mempalace.cross_encoder_rerank`` for the rerank stage
+        itself and the related model / top-N knobs.
+        """
+        from . import cross_encoder_rerank as _cer
+
+        return _cer.is_enabled(self._file_config)
+
+    @property
+    def cross_encoder_model(self) -> str:
+        """Cross-encoder model name. Used only when ``cross_encoder_rerank``
+        is enabled. Defaults to ``cross-encoder/ms-marco-MiniLM-L-6-v2`` —
+        22M parameters, CPU-friendly, captures most of the rerank value
+        per the True Memory comparison (`docs/research/2026-05-24-true-memory-comparison.md`).
+        Override via ``MEMPALACE_RERANK_CROSS_ENCODER_MODEL`` env or
+        ``"cross_encoder_model"`` in config.json.
+        """
+        from . import cross_encoder_rerank as _cer
+
+        return _cer.get_model_name(self._file_config)
+
+    @property
+    def cross_encoder_top_n(self) -> int:
+        """How many top hits to rerank. Defaults to 25.
+
+        Override via ``MEMPALACE_RERANK_TOP_N`` env or
+        ``"cross_encoder_top_n"`` in config.json. Latency scales linearly
+        with this value; the rerank only reorders, so it's a quality/cost
+        knob, not a recall floor.
+        """
+        from . import cross_encoder_rerank as _cer
+
+        return _cer.get_top_n(self._file_config)
+
+    @property
     def calibration_path(self):
         """Optional path to a fitted confidence calibrator JSON.
 
