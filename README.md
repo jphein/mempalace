@@ -237,7 +237,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | mempalace why + tunnels — explain a drawer + inventory cross-wing tunnels (slice of #191) | — | [`PLACEHOLDER`](https://github.com/techempower-org/mempalace/commit/PLACEHOLDER) |
+| 1 | mempalace why + tunnels — explain a drawer + inventory cross-wing tunnels (slice of #191) | — | [`fdcd0b4`](https://github.com/techempower-org/mempalace/commit/fdcd0b4) |
 | 2 | RRF vs convex-blend rerank — A/B measurement on our corpus (#162) | — | [`ea5d567`](https://github.com/techempower-org/mempalace/commit/ea5d567) |
 | 3 | KG triples gain SPOC context slot + worker auto-derives valid_from from drawer metadata (#161) | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | 4 | mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191) | — | [`1ca544b`](https://github.com/techempower-org/mempalace/commit/1ca544b) |

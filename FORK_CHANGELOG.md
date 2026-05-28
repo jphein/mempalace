@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **mempalace why + tunnels — explain a drawer + inventory cross-wing tunnels (slice of #191)** ([`PLACEHOLDER`](https://github.com/techempower-org/mempalace/commit/PLACEHOLDER))
+- **mempalace why + tunnels — explain a drawer + inventory cross-wing tunnels (slice of #191)** ([`fdcd0b4`](https://github.com/techempower-org/mempalace/commit/fdcd0b4))
   Two more verbs join the daemon-fast-path family started by
   ``tags`` / ``overlap`` / ``list`` / ``move`` / ``stats`` /
   ``cypher`` / ``graph``. Same shape: daemon-only, ``--format=table``
