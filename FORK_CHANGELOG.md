@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **optional cross-encoder rerank stage between hybrid fusion and result return (#179)** ([`PLACEHOLDER`](https://github.com/techempower-org/mempalace/commit/PLACEHOLDER))
+- **optional cross-encoder rerank stage between hybrid fusion and result return (#179)** ([`b663fde`](https://github.com/techempower-org/mempalace/commit/b663fde))
   Adds an opt-in cross-encoder rerank stage to ``search_memories``,
   positioned **after** the existing hybrid fusion (convex / RRF) and
   **before** the final ``n_results`` trim. The rerank composes with

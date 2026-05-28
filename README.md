@@ -237,7 +237,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | optional cross-encoder rerank stage between hybrid fusion and result return (#179) | — | [`PLACEHOLDER`](https://github.com/techempower-org/mempalace/commit/PLACEHOLDER) |
+| 1 | optional cross-encoder rerank stage between hybrid fusion and result return (#179) | — | [`b663fde`](https://github.com/techempower-org/mempalace/commit/b663fde) |
 | 2 | mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191) | — | [`1ca544b`](https://github.com/techempower-org/mempalace/commit/1ca544b) |
 | 3 | mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191) | — | [`d007b6f`](https://github.com/techempower-org/mempalace/commit/d007b6f) |
 | 4 | mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191) | — | [`853bb25`](https://github.com/techempower-org/mempalace/commit/853bb25) |

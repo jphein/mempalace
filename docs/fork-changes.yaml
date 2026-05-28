@@ -27,7 +27,7 @@ entries:
   - id: cross-encoder-rerank-optin
     date: 2026-05-28
     bucket: Added
-    commit: PLACEHOLDER
+    commit: b663fde
     area: Search
     summary: "optional cross-encoder rerank stage between hybrid fusion and result return (#179)"
     tests: "40 — tests/test_cross_encoder_rerank.py (env/file-config gating, model/top_n resolution, rerank reorders by score, attaches cross_encoder_score, no input mutation, top-N window honored, top_n<=0 noop, missing-text recall preservation, scorer-exception graceful degrade, stable tie ordering, scorer cache, lazy import) + tests/test_eval_cross_encoder_rerank.py (A/B orchestration, env restoration, refuses to run without --i-know-the-corpus-is-stable)"
