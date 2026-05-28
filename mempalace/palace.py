@@ -64,6 +64,26 @@ SKIP_DIRS = {
 NORMALIZE_VERSION = 2
 
 
+def _emit_current_daemon_url(emit) -> None:
+    """Append the currently-configured daemon URL below a retired-palace
+    banner, so stale text inside ``~/.mempalace/RETIRED`` (which is
+    frozen at the time the local palace was retired) can't mislead a
+    user whose daemon has since moved. Silent no-op when no daemon URL
+    is configured. See techempower-org/mempalace#282.
+    """
+    try:
+        url = MempalaceConfig().daemon_url
+    except Exception:
+        return
+    if not url:
+        return
+    emit("")
+    emit(f"  Current daemon URL: {url}")
+    emit(
+        "  (from PALACE_DAEMON_URL or ~/.mempalace/config.json — may differ from marker text above)"
+    )
+
+
 def get_collection(
     palace_path: str,
     collection_name: Optional[str] = None,
@@ -221,6 +241,7 @@ def _open_collection_or_explain(
             emit(f"\n  Local palace at {default_path} is RETIRED.\n")
             for line in note.splitlines():
                 emit(f"  {line}")
+            _emit_current_daemon_url(emit)
             return
         emit(f"\n  No palace found at {palace_path}")
         emit("  Run: mempalace init <dir> then mempalace mine <dir>")

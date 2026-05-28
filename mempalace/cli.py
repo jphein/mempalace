@@ -119,6 +119,8 @@ def _print_retired_local_palace_or_default(palace_path: str) -> None:
     Falls through to the legacy "Run: mempalace init" message in every
     other case (palace literally absent on a fresh install, etc.).
     """
+    from .palace import _emit_current_daemon_url
+
     palace_root = os.path.expanduser("~/.mempalace")
     marker = os.path.join(palace_root, "RETIRED")
     default_path = os.path.join(palace_root, "palace")
@@ -132,6 +134,7 @@ def _print_retired_local_palace_or_default(palace_path: str) -> None:
         print(f"\n  Local palace at {default_path} is RETIRED.\n")
         for line in note.splitlines():
             print(f"  {line}")
+        _emit_current_daemon_url(print)
         return
     print(f"\n  No palace found at {palace_path}")
     print("  Run: mempalace init <dir> then mempalace mine <dir>")
