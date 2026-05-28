@@ -44,6 +44,34 @@ from typing import Any, Awaitable, Callable, Optional
 from .kg_llm_extractor import extract_triples
 from .knowledge_graph_age import _cypher_literal, _inline_cypher_params
 
+# Canonical predicate mapping (palace-daemon #72b / mempalace #278). The seam
+# is a pure, env-gated decision function owned by palace-daemon: when
+# PALACE_KG_CANONICAL_MAPPING is unset (default), map_for_write returns
+# pass-through, so importing it changes nothing until the flag is flipped.
+# Optional-import + identity fallback lets mempalace's tests (and any env
+# without palace-daemon on sys.path) keep working — production workers run in
+# the daemon venv where the import resolves.
+try:
+    from kg_canonical_writepass import MappedPredicate, map_for_write
+except ImportError:
+
+    @dataclass(frozen=True)
+    class MappedPredicate:
+        relation_type: Optional[str]
+        raw_relation_type: Optional[str]
+        dropped: bool
+        mapped: bool
+
+    def map_for_write(raw_predicate: str) -> "MappedPredicate":
+        """Identity fallback when palace-daemon's canonical mapper isn't importable."""
+        return MappedPredicate(
+            relation_type=raw_predicate,
+            raw_relation_type=None,
+            dropped=False,
+            mapped=False,
+        )
+
+
 logger = logging.getLogger("mempalace.kg_triple_worker")
 
 
@@ -429,6 +457,7 @@ def _add_triple_cypher(
     source: Optional[str],
     valid_from: Optional[str],
     confidence: float,
+    raw_relation_type: Optional[str] = None,
 ) -> str:
     """Render the inlined Cypher source for a single ``add_triple`` write.
 
@@ -459,6 +488,9 @@ def _add_triple_cypher(
     if valid_from is not None:
         prop_pairs.append("valid_from: $vf")
         params["vf"] = valid_from
+    if raw_relation_type is not None:
+        prop_pairs.append("raw_relation_type: $rrt")
+        params["rrt"] = raw_relation_type
 
     cypher = f"""
         MERGE (s:Entity {{name: $subj}})
@@ -492,6 +524,7 @@ class _KGHandle:
         source: str,
         valid_from: Optional[str] = None,
         confidence: float = DEFAULT_TRIPLE_CONFIDENCE,
+        raw_relation_type: Optional[str] = None,
     ) -> None:
         # Defense in depth: reject any value carrying the AGE outer
         # dollar-quote tag before the inlining step. ``_cypher_literal``
@@ -504,6 +537,8 @@ class _KGHandle:
             _cypher_literal(source)
         if valid_from is not None:
             _cypher_literal(valid_from)
+        if raw_relation_type is not None:
+            _cypher_literal(raw_relation_type)
 
         cypher_inlined = _add_triple_cypher(
             subject,
@@ -512,6 +547,7 @@ class _KGHandle:
             source=source,
             valid_from=valid_from,
             confidence=confidence,
+            raw_relation_type=raw_relation_type,
         )
         # AGE expects cypher() first arg as a single-quoted string literal
         # ("name constant"). psycopg3 binds %s as a server-side $1 param
@@ -606,13 +642,29 @@ async def _process_one(
         triples = await _extract_under_sem(http_client, endpoint, model, text, sem)
 
         for t in triples:
+            # Canonical mapping seam (mempalace #278). Default-OFF: the
+            # identity fallback / palace-daemon's disabled path return the raw
+            # predicate as relation_type with no raw_relation_type, so this is
+            # byte-equivalent to pre-#278 behavior unless
+            # PALACE_KG_CANONICAL_MAPPING is enabled.
+            mapped = map_for_write(t.predicate)
+            if mapped.dropped:
+                # Code token / junk per the canonical mapper. Skip without
+                # erroring so stats reflect only triples that actually landed.
+                continue
             try:
+                # Defense in depth: MappedPredicate.relation_type is typed
+                # Optional[str]; the daemon's mapper guarantees non-None when
+                # dropped=False, but a buggy mapper / future change could
+                # violate that and a bare NULL would crash the Cypher property
+                # map. Fall back to the raw predicate so a write still lands.
                 await kg.add_triple(
                     t.subject,
-                    t.predicate,
+                    mapped.relation_type or t.predicate,
                     t.object,
                     source=f"drawer:{drawer.drawer_id}",
                     valid_from=t.valid_from,
+                    raw_relation_type=mapped.raw_relation_type,
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning(
