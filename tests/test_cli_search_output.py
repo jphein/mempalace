@@ -449,7 +449,12 @@ class TestSearchLimit:
         env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
         with patch.dict("os.environ", env, clear=True):
             with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-                cli.cmd_search(_args(results=5, limit=12))
+                # mode="fast" pins to BM25-only so the auto-with-fallback
+                # path (techempower-org/mempalace#283) doesn't fire a
+                # second POST that would defeat this test's intent —
+                # checking that ``--limit`` lands in the request, not the
+                # mode-selection logic.
+                cli.cmd_search(_args(results=5, limit=12, mode="fast"))
 
         assert captured["arguments"]["limit"] == 12
 
@@ -471,7 +476,8 @@ class TestSearchLimit:
         env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
         with patch.dict("os.environ", env, clear=True):
             with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-                cli.cmd_search(_args(results=8))
+                # See sibling test above re: ``mode="fast"``.
+                cli.cmd_search(_args(results=8, mode="fast"))
 
         assert captured["arguments"]["limit"] == 8
 
