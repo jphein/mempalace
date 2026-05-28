@@ -37,7 +37,7 @@ entries:
       - docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.md
       - docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.json
     body: |
-      Closes the measurement promised by [#162][162] (the harness landed
+      Closes the measurement promised by #162 (the harness landed
       in #247 — this PR runs it). Adds a self-contained ``--mine-corpus``
       mode to ``scripts/eval_fusion_ab.py`` that mines the named
       directory into a fresh local ChromaDB palace and runs the

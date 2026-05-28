@@ -36,10 +36,10 @@ issue #162 named; this is the run that closes it.
 >
 > — issue #162
 
-No prior. We respect [`feedback_test_retrieval_against_our_corpus`][corpus] —
-no literature-trusted numbers, no synthetic queries; the A/B is run
-on the same probe set the multi-encoder eval used so the result is
-directly comparable to the 2026-05-15 finding.
+No prior. We respect the `feedback_test_retrieval_against_our_corpus`
+auto-memory rule — no literature-trusted numbers, no synthetic queries;
+the A/B is run on the same probe set the multi-encoder eval used so the
+result is directly comparable to the 2026-05-15 finding.
 
 ## Setup
 
@@ -226,6 +226,5 @@ Scoring math is pure and tested at the math layer — see
 
 [162]: https://github.com/techempower-org/mempalace/issues/162
 [82]: https://github.com/techempower-org/mempalace/issues/82
-[corpus]: # "feedback_test_retrieval_against_our_corpus — A/B on our corpus, not from literature"
 [rrf-82-doc]: 2026-05-15-multi-encoder-rrf.md
 [harness]: ../../scripts/eval_fusion_ab.py

@@ -25,7 +25,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 
 - **RRF vs convex-blend rerank — A/B measurement on our corpus (#162)** ([`ea5d567`](https://github.com/techempower-org/mempalace/commit/ea5d567))
-  Closes the measurement promised by [#162][162] (the harness landed
+  Closes the measurement promised by #162 (the harness landed
   in #247 — this PR runs it). Adds a self-contained ``--mine-corpus``
   mode to ``scripts/eval_fusion_ab.py`` that mines the named
   directory into a fresh local ChromaDB palace and runs the
