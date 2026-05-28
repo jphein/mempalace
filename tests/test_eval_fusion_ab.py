@@ -191,15 +191,74 @@ def test_run_ab_passes_fusion_mode_through():
     assert seen_modes == {"convex", "rrf"}
 
 
-def test_load_probes_rejects_non_list(tmp_path):
+def test_load_probes_accepts_legacy_list_shape(tmp_path):
+    p = tmp_path / "legacy.json"
+    p.write_text('[["q1", "f1.md", "w1"], ["q2", "f2.md", "w2"]]', encoding="utf-8")
+    out = ab._load_probes(str(p))
+    assert out == [["q1", "f1.md", "w1"], ["q2", "f2.md", "w2"]]
+
+
+def test_load_probes_accepts_v2_dict_shape(tmp_path):
+    """The on-disk shape used by ``scripts/probes_v2_git_derived.json``."""
+    p = tmp_path / "v2.json"
+    p.write_text(
+        '{"_meta": {"n_probes": 2}, '
+        '"probes": ['
+        '{"query": "q1", "expected": "f1.md", "why": "w1"}, '
+        '{"query": "q2", "expected": "f2.md", "why": "w2"}'
+        "]}",
+        encoding="utf-8",
+    )
+    out = ab._load_probes(str(p))
+    assert out == [["q1", "f1.md", "w1"], ["q2", "f2.md", "w2"]]
+
+
+def test_load_probes_v2_dict_treats_why_as_optional(tmp_path):
+    p = tmp_path / "v2_nowhy.json"
+    p.write_text(
+        '{"probes": [{"query": "q1", "expected": "f1.md"}]}',
+        encoding="utf-8",
+    )
+    out = ab._load_probes(str(p))
+    assert out == [["q1", "f1.md", ""]]
+
+
+def test_load_probes_rejects_dict_without_probes_list(tmp_path):
     p = tmp_path / "bad.json"
-    p.write_text('{"not": "a list"}', encoding="utf-8")
-    with pytest.raises(ValueError, match="must contain a JSON list"):
+    p.write_text('{"not": "a probe set"}', encoding="utf-8")
+    with pytest.raises(ValueError, match="must carry a 'probes' list"):
         ab._load_probes(str(p))
 
 
-def test_main_refuses_without_ack(capsys):
-    rc = ab.main(["--probes", "ignored.json"])
+def test_load_probes_rejects_scalar(tmp_path):
+    p = tmp_path / "bad.json"
+    p.write_text('"just a string"', encoding="utf-8")
+    with pytest.raises(ValueError, match="must be a JSON list of triples or a dict"):
+        ab._load_probes(str(p))
+
+
+def test_main_refuses_palace_path_without_ack(capsys, tmp_path):
+    probes = tmp_path / "p.json"
+    probes.write_text('[["q", "f.md", "w"]]', encoding="utf-8")
+    rc = ab.main(["--probes", str(probes), "--palace-path", "/dummy"])
     assert rc == 2
     err = capsys.readouterr().err
-    assert "deferred until the KG backfill completes" in err
+    assert "self-contained eval" in err or "i-know-the-backfill-is-done" in err
+
+
+def test_main_rejects_mine_and_palace_together(capsys, tmp_path):
+    probes = tmp_path / "p.json"
+    probes.write_text('[["q", "f.md", "w"]]', encoding="utf-8")
+    rc = ab.main(
+        [
+            "--probes",
+            str(probes),
+            "--mine-corpus",
+            str(tmp_path),
+            "--palace-path",
+            "/dummy",
+        ]
+    )
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "mutually exclusive" in err

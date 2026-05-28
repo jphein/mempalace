@@ -9,26 +9,48 @@ this harness measures the question that prior work left open: pure RRF over
 the vector + BM25 orderings vs the convex blend, on OUR corpus.
 
 Per ``feedback_test_retrieval_against_our_corpus`` — retrieval-stack changes
-are A/B'd on our own corpus, never trusted from literature. This script is
-the apparatus; the run itself is DEFERRED until the live KG backfill
-completes (running it hits daemon /search and steals GPU/daemon capacity).
+are A/B'd on our own corpus, never trusted from literature.
 
 The scoring math (``evaluate_ranking``, ``compare_runs``, ``rank_of_target``)
 is pure and unit-tested in ``tests/test_eval_fusion_ab.py`` so the harness
-logic is verified without touching the live corpus.
+logic is verified without touching any corpus.
 
-Probe-set format — JSON list of ``[query, expected_source_file, why]``
-triples, identical to ``scripts/eval_multi_encoder_rrf.py`` so the existing
-probe sets (``scripts/probes_v2_git_derived.json``) drop in unchanged.
+Probe-set format — accepts both the legacy list-of-lists shape and the v2
+dict shape used by ``scripts/probes_v2_git_derived.json``::
 
-Usage (DEFERRED — do not run against the live corpus mid-backfill)::
+    # v2 (preferred): {"_meta": {...}, "probes": [{query, expected, why}, ...]}
+    # legacy:         [[query, expected, why], ...]
 
+Matches ``scripts/eval_multi_encoder_rrf.py`` so the same probe files drop in.
+
+Two run modes:
+
+1. **``--mine-corpus PATH``** (self-contained, mempalace-internal): mine
+   ``PATH`` into a temp local chroma palace, run the A/B against it. No
+   daemon coupling; doesn't steal production GPU. Default mode for the
+   #162 measurement; mirrors ``scripts/eval_multi_encoder_rrf.py``.
+
+2. **``--palace-path PATH``** (live production palace via daemon): drives
+   the daemon-fronted palace. Hits ``/search`` and shares capacity with
+   real callers; gated behind ``--i-know-the-backfill-is-done``. Currently
+   limited — the daemon's ``/search/hybrid`` hard-codes the candidate
+   strategy and doesn't forward ``fusion_mode``, so this path can't yet
+   drive RRF remotely. Kept for future daemon-side wiring.
+
+Usage::
+
+    # Self-contained (the #162 measurement)
+    python scripts/eval_fusion_ab.py \\
+        --probes scripts/probes_v2_git_derived.json \\
+        --mine-corpus . \\
+        --n-results 10 \\
+        --out docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.json
+
+    # Live palace (deferred; needs daemon-side fusion_mode plumbing)
     python scripts/eval_fusion_ab.py \\
         --probes scripts/probes_v2_git_derived.json \\
         --palace-path "$MEMPALACE_PALACE_PATH" \\
-        --candidate-strategy hybrid \\
-        --n-results 10 \\
-        --out /tmp/fusion_ab.json
+        --i-know-the-backfill-is-done
 """
 
 from __future__ import annotations
@@ -254,67 +276,162 @@ def run_ab(
 
 
 def _load_probes(path: str) -> list[list[str]]:
+    """Load a probe set in either supported shape.
+
+    Returns a list of ``[query, expected, why]`` triples regardless of input
+    shape. Accepts:
+
+    * **v2 dict** — ``{"_meta": ..., "probes": [{query, expected, why}, ...]}``
+      (the shape ``scripts/probes_v2_git_derived.json`` ships in, identical to
+      ``eval_multi_encoder_rrf.py``'s loader).
+    * **legacy list** — ``[[query, expected, why], ...]``.
+    """
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(raw, list):
-        raise ValueError(f"probe file {path} must contain a JSON list")
-    return raw
+    if isinstance(raw, dict):
+        probes = raw.get("probes")
+        if not isinstance(probes, list):
+            raise ValueError(
+                f"probe file {path}: dict shape must carry a 'probes' list, "
+                f"got {type(probes).__name__}"
+            )
+        triples: list[list[str]] = []
+        for entry in probes:
+            if not isinstance(entry, dict):
+                raise ValueError(f"probe file {path}: probe entries must be dicts, got {entry!r}")
+            triples.append([entry["query"], entry["expected"], entry.get("why", "")])
+        return triples
+    if isinstance(raw, list):
+        return raw
+    raise ValueError(
+        f"probe file {path} must be a JSON list of triples or a dict with a 'probes' list"
+    )
+
+
+def _mine_corpus_to_temp(corpus_dir: str) -> tuple[str, int]:
+    """Mine ``corpus_dir`` into a fresh temp chroma palace, return (path, drawer count).
+
+    Self-contained: doesn't touch the configured production palace or daemon.
+    Mirrors ``scripts/eval_multi_encoder_rrf.py``'s ``_mine_corpus`` shape so
+    the two harnesses share retrieval semantics. Caller owns cleanup of the
+    returned path.
+    """
+    import os
+    import tempfile
+
+    from mempalace import miner
+
+    palace_dir = tempfile.mkdtemp(prefix="fusion_ab_palace_")
+    os.environ["MEMPALACE_PALACE_PATH"] = palace_dir
+    os.environ.setdefault("MEMPALACE_BACKEND", "chroma")
+    os.environ["MEMPALACE_DAEMON_STRICT"] = "0"
+    files = miner.scan_project(corpus_dir)
+    miner.mine(project_dir=corpus_dir, palace_path=palace_dir, files=files)
+
+    from mempalace.palace import get_collection
+
+    col = get_collection(palace_dir, create=False)
+    return palace_dir, col.count()
 
 
 def main(argv: Optional[list[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--probes", required=True, help="JSON probe set.")
     parser.add_argument(
+        "--mine-corpus",
+        default="",
+        help=(
+            "Directory to mine into a fresh temp chroma palace, then A/B "
+            "against. Self-contained, mempalace-internal — does NOT touch "
+            "the configured production palace or daemon. The #162 "
+            "measurement mode. Mutually exclusive with --palace-path."
+        ),
+    )
+    parser.add_argument(
         "--palace-path",
         default="",
-        help="Palace path / collection. Defaults to env MEMPALACE_PALACE_PATH.",
+        help=(
+            "Existing palace path / collection to drive directly. Falls back "
+            "to env MEMPALACE_PALACE_PATH. The production-palace mode; "
+            "currently limited because the daemon's /search/hybrid doesn't "
+            "forward fusion_mode."
+        ),
     )
     parser.add_argument("--candidate-strategy", default="hybrid")
     parser.add_argument("--n-results", type=int, default=10)
     parser.add_argument("--limit", type=int, default=0, help="Cap probes (0 = all).")
     parser.add_argument("--out", default="", help="Write JSON report here.")
     parser.add_argument(
+        "--keep-palace",
+        action="store_true",
+        help="In --mine-corpus mode, don't delete the temp palace after the run.",
+    )
+    parser.add_argument(
         "--i-know-the-backfill-is-done",
         action="store_true",
         help=(
-            "Required acknowledgement. This run hits daemon /search and "
-            "steals GPU/daemon capacity; #162 defers it until the KG "
-            "backfill completes. Pass only when it actually has."
+            "Required acknowledgement for --palace-path mode (which hits the "
+            "live daemon and shares GPU/daemon capacity with real callers). "
+            "Not required in --mine-corpus mode — that path is self-contained."
         ),
     )
     args = parser.parse_args(argv)
 
-    if not args.i_know_the_backfill_is_done:
-        print(
-            "Refusing to run: this A/B hits the live corpus. Per issue #162 "
-            "the comparison is deferred until the KG backfill completes. "
-            "Re-run with --i-know-the-backfill-is-done once it has.",
-            file=sys.stderr,
-        )
+    if args.mine_corpus and args.palace_path:
+        print("--mine-corpus and --palace-path are mutually exclusive", file=sys.stderr)
         return 2
 
     import os
-
-    palace_path = args.palace_path or os.environ.get("MEMPALACE_PALACE_PATH", "")
-    if not palace_path:
-        print("No --palace-path and MEMPALACE_PALACE_PATH unset.", file=sys.stderr)
-        return 2
+    import shutil
 
     probes = _load_probes(args.probes)
     if args.limit > 0:
         probes = probes[: args.limit]
 
-    report = run_ab(
-        probes,
-        palace_path,
-        candidate_strategy=args.candidate_strategy,
-        n_results=args.n_results,
-    )
-    text = json.dumps(report, indent=2, ensure_ascii=False)
-    if args.out:
-        Path(args.out).write_text(text, encoding="utf-8")
-        print(f"wrote {args.out}")
-    print(text)
-    return 0
+    if args.mine_corpus:
+        corpus_dir = os.path.abspath(args.mine_corpus)
+        if not os.path.isdir(corpus_dir):
+            print(f"--mine-corpus {corpus_dir!r} is not a directory", file=sys.stderr)
+            return 2
+        print(f"Mining {corpus_dir} into a fresh temp palace...", file=sys.stderr)
+        palace_path, drawer_count = _mine_corpus_to_temp(corpus_dir)
+        print(f"  palace: {palace_path}  drawers: {drawer_count}", file=sys.stderr)
+        cleanup_palace = not args.keep_palace
+    else:
+        if not args.i_know_the_backfill_is_done:
+            print(
+                "Refusing to run --palace-path mode: this A/B hits the live "
+                "corpus. Use --mine-corpus for the self-contained eval, or "
+                "pass --i-know-the-backfill-is-done to drive an existing "
+                "palace path.",
+                file=sys.stderr,
+            )
+            return 2
+        palace_path = args.palace_path or os.environ.get("MEMPALACE_PALACE_PATH", "")
+        if not palace_path:
+            print("No --palace-path and MEMPALACE_PALACE_PATH unset.", file=sys.stderr)
+            return 2
+        cleanup_palace = False
+
+    try:
+        report = run_ab(
+            probes,
+            palace_path,
+            candidate_strategy=args.candidate_strategy,
+            n_results=args.n_results,
+        )
+        report["palace_path"] = palace_path
+        if args.mine_corpus:
+            report["mined_corpus"] = os.path.abspath(args.mine_corpus)
+            report["drawer_count"] = drawer_count
+        text = json.dumps(report, indent=2, ensure_ascii=False)
+        if args.out:
+            Path(args.out).write_text(text, encoding="utf-8")
+            print(f"wrote {args.out}")
+        print(text)
+        return 0
+    finally:
+        if cleanup_palace and os.path.isdir(palace_path):
+            shutil.rmtree(palace_path, ignore_errors=True)
 
 
 if __name__ == "__main__":

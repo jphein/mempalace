@@ -1,0 +1,186 @@
+{
+  "label_a": "convex",
+  "label_b": "rrf",
+  "metrics_a": {
+    "n_probes": 200,
+    "mrr": 0.4075,
+    "recall_at_5": 0.47,
+    "recall_at_10": 0.52,
+    "found": 104
+  },
+  "metrics_b": {
+    "n_probes": 200,
+    "mrr": 0.3758,
+    "recall_at_5": 0.45,
+    "recall_at_10": 0.47,
+    "found": 94
+  },
+  "delta": {
+    "mrr": -0.0318,
+    "recall_at_5": -0.02,
+    "recall_at_10": -0.05
+  },
+  "improved": [
+    {
+      "query": "Plainto_tsquery + ILIKE fallback for underscore identifiers",
+      "rank_a": 2,
+      "rank_b": 1
+    },
+    {
+      "query": "Add --mode session for per-session manifest drawers",
+      "rank_a": 3,
+      "rank_b": 2
+    },
+    {
+      "query": "Quote ChromaBackend annotation for Python 3.9 compatibility",
+      "rank_a": null,
+      "rank_b": 9
+    },
+    {
+      "query": "Add hook_verbatim_mode toggle for transcript ingest",
+      "rank_a": null,
+      "rank_b": 5
+    },
+    {
+      "query": "Atomic write to prevent partial corruption on crash",
+      "rank_a": 5,
+      "rank_b": 3
+    },
+    {
+      "query": "Reconfigure stdio to UTF-8 on Windows",
+      "rank_a": 6,
+      "rank_b": 5
+    },
+    {
+      "query": "Avoid false hnsw divergence fallback",
+      "rank_a": 4,
+      "rank_b": 3
+    },
+    {
+      "query": "Harden HNSW startup preflight",
+      "rank_a": null,
+      "rank_b": 2
+    },
+    {
+      "query": "Add multi-agent support roadmap (Claude Code, OpenCode, Cursor, Aider, Gemini CLI, Codex CLI, Warp)",
+      "rank_a": 5,
+      "rank_b": 3
+    },
+    {
+      "query": "Paginate closet_llm col.get (#1073)",
+      "rank_a": null,
+      "rank_b": 6
+    }
+  ],
+  "regressed": [
+    {
+      "query": "Mempalace rooms subcommand + example config.yaml",
+      "rank_a": 10,
+      "rank_b": null
+    },
+    {
+      "query": "Emit only canonical rooms per hybrid-search-taxonomy spec",
+      "rank_a": 6,
+      "rank_b": null
+    },
+    {
+      "query": "Use pg_available_extensions.name (not extname) in preflight",
+      "rank_a": 1,
+      "rank_b": 2
+    },
+    {
+      "query": "MEMPALACE_KG_BACKEND routing — sqlite default, age opt-in (Phase 2.4)",
+      "rank_a": 1,
+      "rank_b": 2
+    },
+    {
+      "query": "Identify lock holder + exit non-zero on contention",
+      "rank_a": 6,
+      "rank_b": null
+    },
+    {
+      "query": "Retry tool_search once on Chroma \"Error finding id\" transient (#1315)",
+      "rank_a": 1,
+      "rank_b": null
+    },
+    {
+      "query": "Fix ruff bugbear and silent-except findings",
+      "rank_a": 7,
+      "rank_b": null
+    },
+    {
+      "query": "Clamp similarity to [0,1] to avoid negative values",
+      "rank_a": 10,
+      "rank_b": null
+    },
+    {
+      "query": "Handle null JSON-RPC request payloads safely",
+      "rank_a": 5,
+      "rank_b": null
+    },
+    {
+      "query": "Clamp effective_distance to valid cosine range [0, 2]",
+      "rank_a": 1,
+      "rank_b": null
+    },
+    {
+      "query": "Preflight SQLite integrity before rebuild",
+      "rank_a": 3,
+      "rank_b": 4
+    },
+    {
+      "query": "Verify write roundtrip before bailout",
+      "rank_a": 3,
+      "rank_b": null
+    },
+    {
+      "query": "Don't write chunking defaults in cfg.init()",
+      "rank_a": 3,
+      "rank_b": null
+    },
+    {
+      "query": "Extract Windows UTF-8 reconfigure into shared helper",
+      "rank_a": 1,
+      "rank_b": 2
+    },
+    {
+      "query": "Per-stream stdio errors policy on Windows",
+      "rank_a": 7,
+      "rank_b": null
+    },
+    {
+      "query": "Address Copilot review on #1306",
+      "rank_a": 1,
+      "rank_b": null
+    },
+    {
+      "query": "Basename source_file in tool_get_drawer responses",
+      "rank_a": 9,
+      "rank_b": null
+    },
+    {
+      "query": "Close active backend before rollback restore",
+      "rank_a": 1,
+      "rank_b": 2
+    },
+    {
+      "query": "Split get_or_create_collection on reopen (follow-up to #1262)",
+      "rank_a": 1,
+      "rank_b": null
+    },
+    {
+      "query": "Address release review feedback",
+      "rank_a": 1,
+      "rank_b": 2
+    }
+  ],
+  "candidate_strategy": "hybrid",
+  "n_results": 10,
+  "timing_secs": {
+    "convex": 32.21,
+    "rrf": 29.51
+  },
+  "palace_path": "/tmp/fusion_ab_palace_sqz0u5_f",
+  "mined_corpus": "/home/jp/Projects/memorypalace/.claude/worktrees/feat-162-hybrid-rrf-ab/mempalace",
+  "drawer_count": 3413
+}
