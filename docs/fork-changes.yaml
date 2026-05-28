@@ -24,7 +24,41 @@
 
 entries:
 
-  - id: readme-upstream-star-count-refresh
+  - id: cli-wakeup-mined-daemon-route
+    date: 2026-05-28
+    bucket: Added
+    commit: HEAD
+    area: CLI
+    summary: "cmd_wakeup + cmd_mined route to daemon-native mempalace_wakeup / mempalace_mined tools (slice of #285)"
+    tests: "8 — tests/test_cli_daemon.py (cmd_wakeup: routes-to-daemon-when-strict, forwards-wing-argument, local-path-when-palace-arg-given, daemon-error-exits-nonzero; cmd_mined: routes-to-daemon-when-strict, forwards-wing-and-limit, json-passthrough, daemon-error-exits-nonzero)"
+    files:
+      - mempalace/cli.py
+      - tests/test_cli_daemon.py
+    body: |
+      Two more CLI commands join the daemon-routing family started by
+      ``status`` (#181) and continued by the slices that landed
+      ``tags`` / ``overlap`` / ``stats`` / ``cypher`` / ``graph`` /
+      ``why`` / ``tunnels``. Both ``mempalace wake-up`` and
+      ``mempalace mined`` used to open a local ChromaDB / postgres
+      client unconditionally, which broke under daemon-strict mode
+      after the local palace was retired (the broader symptom #282
+      tracked).
+
+      palace-daemon's PR #96 shipped the daemon-side companion: six
+      new MCP tools including ``mempalace_wakeup`` (returns
+      ``{text, tokens, wing}``) and ``mempalace_mined`` (returns the
+      same ``{sources_by_wing, wing_filter, total_wings,
+      total_sources}`` shape ``cmd_mined --json`` produces locally).
+      This PR wires the CLI consumer side: same
+      ``_daemon_strict() and not args.palace`` gate that ``cmd_status``
+      uses, same ``DaemonError`` exit-code-2 pattern, and a new
+      ``_print_daemon_mined`` helper that mirrors the local pretty-print
+      block layout so consumers see no behavioral change.
+
+      ``--palace <path>`` still routes locally — for forensic reads of
+      archived palaces. ``cmd_rooms`` (the third command in #285) is
+      held for a follow-up PR because its CRUD subcommand surface is
+      bigger; this PR closes the read-only legs.
     date: 2026-05-28
     bucket: Changed
     commit: HEAD

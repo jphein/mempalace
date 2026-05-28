@@ -267,6 +267,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   against the system's actual repo. A periodic refresh script would
   be the principled fix — out of scope here.
 
+  *Tests:* 8 — tests/test_cli_daemon.py (cmd_wakeup: routes-to-daemon-when-strict, forwards-wing-argument, local-path-when-palace-arg-given, daemon-error-exits-nonzero; cmd_mined: routes-to-daemon-when-strict, forwards-wing-and-limit, json-passthrough, daemon-error-exits-nonzero)
   *Files:* `README.md`
 
 

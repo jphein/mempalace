@@ -384,6 +384,50 @@ def _print_daemon_status(data: dict) -> None:
     print(f"\n{'=' * 55}\n")
 
 
+def _print_daemon_mined(data: dict, *, want_json: bool, limit: int) -> None:
+    """Render ``mempalace_mined`` daemon tool output (palace-daemon #96).
+
+    Same payload shape as ``cmd_mined``'s local JSON path:
+    ``{sources_by_wing, wing_filter, total_wings, total_sources}`` with
+    each wing carrying ``{sources: [...], total_sources, total_drawers,
+    truncated}``. ``want_json`` pass-through emits the daemon's payload
+    verbatim; otherwise renders the same per-wing block layout the
+    local pretty-printer below produces.
+    """
+    if want_json:
+        _emit_json(data)
+        return
+
+    sources_by_wing = data.get("sources_by_wing") or {}
+    wing_filter = data.get("wing_filter")
+
+    if not sources_by_wing:
+        scope = f" in wing={wing_filter}" if wing_filter else ""
+        print(f"\n  No mined source files found{scope}.\n")
+        return
+
+    print(f"\n{'=' * 55}")
+    print("  MemPalace Mined — sources by wing")
+    print(f"  via palace-daemon @ {_daemon_url()}")
+    print(f"{'=' * 55}\n")
+    for wing in sorted(sources_by_wing):
+        block = sources_by_wing[wing] or {}
+        sources = block.get("sources") or []
+        total_sources = block.get("total_sources", len(sources))
+        total_drawers = block.get("total_drawers", sum(s.get("drawer_count", 0) for s in sources))
+        print(f"  WING: {wing}  ({total_sources} sources, {total_drawers} drawers)")
+        for entry in sources:
+            src = entry.get("source_file", "?")
+            count = entry.get("drawer_count", 0)
+            print(f"    {count:5}  {src}")
+        if block.get("truncated") and limit:
+            hidden = total_sources - len(sources)
+            if hidden > 0:
+                print(f"    ... {hidden} more (use --limit 0 to show all)")
+        print()
+    print(f"{'=' * 55}\n")
+
+
 # ── enhanced search output (#191) ──────────────────────────────────────
 # Three human-facing formats share a single hit shape from the daemon
 # (or from ``searcher.search`` on local fallback): ``wing``, ``room``,
@@ -2824,7 +2868,27 @@ def cmd_cypher(args):
 
 
 def cmd_wakeup(args):
-    """Show L0 (identity) + L1 (essential story) — the wake-up context."""
+    """Show L0 (identity) + L1 (essential story) — the wake-up context.
+
+    Daemon-routes when ``_daemon_strict()`` is on and the user didn't
+    pass ``--palace`` (#285). The daemon-native ``mempalace_wakeup``
+    tool (palace-daemon #96) returns ``{text, tokens, wing}``; we
+    print in the same shape as the local-path fallback below.
+    """
+    if _daemon_strict() and not args.palace:
+        try:
+            args_payload = {"wing": args.wing} if getattr(args, "wing", None) else {}
+            data = _call_daemon_tool("mempalace_wakeup", args_payload)
+        except DaemonError as e:
+            print(f"\n  ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
+        text = data.get("text", "")
+        tokens = data.get("tokens") or (len(text) // 4)
+        print(f"Wake-up text (~{tokens} tokens):")
+        print("=" * 50)
+        print(text)
+        return
+
     from .layers import MemoryStack
 
     palace_path = os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
@@ -3507,7 +3571,31 @@ def cmd_mined(args):
 
     Skips drawers without a ``source_file`` metadata key (typically
     diary entries, kg drawers, manually-added entries).
+
+    Daemon-routes when ``_daemon_strict()`` is on and ``--palace`` was
+    not given (#285). palace-daemon's ``mempalace_mined`` tool (PR #96)
+    returns the same ``{sources_by_wing, wing_filter, total_wings,
+    total_sources}`` shape the JSON path emits locally.
     """
+    want_json_early = getattr(args, "json", False)
+
+    if _daemon_strict() and not args.palace:
+        try:
+            payload: dict = {}
+            if getattr(args, "wing", None):
+                payload["wing"] = args.wing
+            if getattr(args, "limit", None) is not None:
+                payload["limit"] = args.limit
+            data = _call_daemon_tool("mempalace_mined", payload)
+        except DaemonError as e:
+            if want_json_early:
+                _emit_json({"error": str(e), "source": "daemon"})
+            else:
+                print(f"\n  ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
+        _print_daemon_mined(data, want_json=want_json_early, limit=args.limit)
+        return
+
     from collections import defaultdict
 
     from .backends.chroma import ChromaBackend
@@ -3516,8 +3604,6 @@ def cmd_mined(args):
     palace_path = os.path.abspath(
         os.path.expanduser(args.palace) if args.palace else MempalaceConfig().palace_path
     )
-
-    want_json_early = getattr(args, "json", False)
 
     if not os.path.isdir(palace_path) or not contains_palace_database(palace_path):
         if want_json_early:
