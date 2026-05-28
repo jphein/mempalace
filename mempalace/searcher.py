@@ -1199,8 +1199,24 @@ def _graph_expand_from_seeds(
         return []
     seeds_clause = "[" + ", ".join(f"'{_esc(s)}'" for s in seeds) + "]"
 
-    entity_cypher = f"""
-        MATCH (e:Entity)-[r:RELATION]-()
+    # Issue #291: AGE compiles bidirectional ``-[r:RELATION]-`` to an
+    # OR-of-AND join filter that postgres can't hash — falls back to a
+    # nested loop over (RELATION × all-vertex-labels), 200s+ on the
+    # production graph (1.76M edges). Splitting into two directional
+    # queries lets the planner use a Parallel Hash Join (~2s wall-clock,
+    # ~100× speedup). We union the entity names because the RELATION
+    # schema is (Entity)->(Entity); an entity can appear as subject OR
+    # object of a relation extracted from a seed drawer — both are
+    # valid hits and direction-collapsing would silently drop half of
+    # them.
+    entity_cypher_outbound = f"""
+        MATCH (e:Entity)-[r:RELATION]->()
+        WHERE r.source IN {seeds_clause}
+        RETURN DISTINCT e.name AS name
+        LIMIT {max_entities}
+    """
+    entity_cypher_inbound = f"""
+        MATCH ()-[r:RELATION]->(e:Entity)
         WHERE r.source IN {seeds_clause}
         RETURN DISTINCT e.name AS name
         LIMIT {max_entities}
@@ -1213,24 +1229,28 @@ def _graph_expand_from_seeds(
             with conn.cursor() as cur:
                 cur.execute("LOAD 'age'")
                 cur.execute('SET search_path = ag_catalog, "$user", public')
-                # Find entities mentioned in seed drawers
-                cur.execute(
-                    f"SELECT * FROM cypher('mempalace_kg', $${entity_cypher}$$) AS (name agtype)"
-                )
-                entities = []
-                for (name_agtype,) in cur.fetchall():
-                    # agtype renders strings as '"..."'; strip quotes
-                    raw = str(name_agtype)
-                    if raw.startswith('"') and raw.endswith('"'):
-                        raw = raw[1:-1]
-                    entities.append(raw)
+                # Find entities mentioned in seed drawers — subjects + objects
+                entities_set: set = set()
+                for cyp in (entity_cypher_outbound, entity_cypher_inbound):
+                    cur.execute(f"SELECT * FROM cypher('mempalace_kg', $${cyp}$$) AS (name agtype)")
+                    for (name_agtype,) in cur.fetchall():
+                        # agtype renders strings as '"..."'; strip quotes
+                        raw = str(name_agtype)
+                        if raw.startswith('"') and raw.endswith('"'):
+                            raw = raw[1:-1]
+                        entities_set.add(raw)
+                entities = list(entities_set)[:max_entities]
 
                 # For each entity, find drawers mentioning it (via their
-                # RELATION source ids)
+                # RELATION source ids). Direction-safe per #291: r.source
+                # is the drawer where the relation was extracted, identical
+                # for either endpoint of the edge — drawer attribution
+                # doesn't depend on whether this entity is the subject or
+                # the object.
                 for ent in entities:
                     ent_safe = _esc(ent)
                     expand_cypher = f"""
-                        MATCH (a:Entity {{name: '{ent_safe}'}})-[r:RELATION]-()
+                        MATCH (a:Entity {{name: '{ent_safe}'}})-[r:RELATION]->()
                         RETURN DISTINCT r.source AS source
                         LIMIT {max_drawers_per_entity}
                     """
@@ -1289,8 +1309,16 @@ def _graph_expand_from_entities(
                     # scans that wedged the daemon for tens of minutes per
                     # query. The fuzzy/case-insensitive variant is tracked
                     # for re-introduction via pg_trgm + functional index.
+                    #
+                    # Issue #291: directional ``->`` instead of bidirectional
+                    # ``-`` lets AGE compile to a Parallel Hash Join rather
+                    # than a nested loop on an un-hashable OR predicate
+                    # (~100× faster on the 1.76M-edge production graph).
+                    # Safe for this projection — ``r.source`` is the drawer
+                    # where the edge was extracted and doesn't depend on
+                    # which endpoint binds to ``a``.
                     expand_cypher = f"""
-                        MATCH (a:Entity)-[r:RELATION]-()
+                        MATCH (a:Entity)-[r:RELATION]->()
                         WHERE a.name = '{ent_safe}'
                         RETURN DISTINCT r.source AS source
                         LIMIT {max_drawers_per_entity}
