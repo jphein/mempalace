@@ -1662,3 +1662,165 @@ def test_run_worker_missing_timestamp_writes_open_valid_from():
     assert kg.triples[0]["valid_from"] is None
     # Context anchor still lands even without a timestamp.
     assert kg.triples[0]["context"] == "drawer:d_open"
+
+
+# ── _execute_with_retry (techempower-org/mempalace#298) ─────────────
+
+
+class _RetryPool:
+    """Fake async pool that raises ``raise_exc`` on the first
+    ``fail_first_n`` ``.conn().__aenter__()`` calls, then succeeds.
+
+    Used only by the retry tests below. The real ``_KGHandle.pool`` is
+    ``_AGEAsyncPool`` (psycopg-backed); this fake speaks the same shape
+    (``async with pool.conn() as conn: ...``) but tracks call counts so
+    tests can assert how many retries happened.
+    """
+
+    def __init__(self, raise_exc: BaseException, fail_first_n: int):
+        self._raise_exc = raise_exc
+        self._fail_first_n = fail_first_n
+        self.attempts = 0
+        self.executes: list[str] = []
+
+    from contextlib import asynccontextmanager as _acm
+
+    @_acm
+    async def conn(self):
+        self.attempts += 1
+        if self.attempts <= self._fail_first_n:
+            raise self._raise_exc
+
+        class _C:
+            def __init__(self, parent):
+                self._parent = parent
+
+            from contextlib import asynccontextmanager as _acm2
+
+            @_acm2
+            async def cursor(self):
+                parent = self._parent
+
+                class _Cur:
+                    async def execute(self, sql):
+                        parent.executes.append(sql)
+
+                yield _Cur()
+
+            async def commit(self):
+                pass
+
+        yield _C(self)
+
+
+def _op_error(msg="server closed the connection unexpectedly"):
+    """Build a psycopg.OperationalError-shape exception matching the live shape."""
+    psycopg = kw._load_psycopg2()
+    return psycopg.OperationalError(msg)
+
+
+def _iface_error(msg="the connection is closed"):
+    psycopg = kw._load_psycopg2()
+    return psycopg.InterfaceError(msg)
+
+
+def test_execute_with_retry_succeeds_first_attempt():
+    """Happy path: no exception, no retry, single execute."""
+    import pytest
+
+    pytest.importorskip("psycopg")
+    pool = _RetryPool(raise_exc=_op_error(), fail_first_n=0)
+    asyncio.run(kw._execute_with_retry(pool, "SELECT 1", drawer_hint="d1"))
+    assert pool.attempts == 1
+    assert pool.executes == ["SELECT 1"]
+
+
+def test_execute_with_retry_recovers_after_transient_operational_error():
+    """One transient OperationalError, then success — final state is one execute."""
+    import pytest
+
+    pytest.importorskip("psycopg")
+    pool = _RetryPool(raise_exc=_op_error(), fail_first_n=1)
+    asyncio.run(
+        kw._execute_with_retry(
+            pool,
+            "SELECT 1",
+            drawer_hint="d_transient",
+            backoffs_s=(0.0, 0.0, 0.0),  # speed up the test
+        )
+    )
+    assert pool.attempts == 2  # one failure + one success
+    assert pool.executes == ["SELECT 1"]
+
+
+def test_execute_with_retry_recovers_after_transient_interface_error():
+    """InterfaceError ('the connection is closed') is also retriable."""
+    import pytest
+
+    pytest.importorskip("psycopg")
+    pool = _RetryPool(raise_exc=_iface_error(), fail_first_n=1)
+    asyncio.run(
+        kw._execute_with_retry(
+            pool,
+            "SELECT 1",
+            drawer_hint="d_iface",
+            backoffs_s=(0.0, 0.0, 0.0),
+        )
+    )
+    assert pool.attempts == 2
+    assert pool.executes == ["SELECT 1"]
+
+
+def test_execute_with_retry_raises_after_max_attempts():
+    """Three consecutive transient failures with max_attempts=3 → raises the
+    final exception. Lease-reclaim is then the safety net per PR #277."""
+    import pytest
+
+    psycopg = pytest.importorskip("psycopg")
+    pool = _RetryPool(raise_exc=_op_error(), fail_first_n=5)  # always fail
+    with pytest.raises(psycopg.OperationalError):
+        asyncio.run(
+            kw._execute_with_retry(
+                pool,
+                "SELECT 1",
+                drawer_hint="d_dead",
+                max_attempts=3,
+                backoffs_s=(0.0, 0.0, 0.0),
+            )
+        )
+    assert pool.attempts == 3
+    assert pool.executes == []  # execute never ran
+
+
+def test_execute_with_retry_does_not_retry_non_transient_errors():
+    """A ValueError (or any non-psycopg exception) propagates on the first
+    attempt — retrying a cypher syntax error or a value-validation failure
+    would be wasteful and could mask bugs."""
+    import pytest
+
+    pytest.importorskip("psycopg")
+    pool = _RetryPool(raise_exc=ValueError("bad cypher"), fail_first_n=5)
+    with pytest.raises(ValueError, match="bad cypher"):
+        asyncio.run(
+            kw._execute_with_retry(
+                pool,
+                "SELECT 1",
+                drawer_hint="d_bad",
+                backoffs_s=(0.0, 0.0, 0.0),
+            )
+        )
+    assert pool.attempts == 1  # no retry
+
+
+def test_execute_with_retry_max_attempts_configurable_via_env(monkeypatch):
+    """``PALACE_KG_ADD_TRIPLE_MAX_ATTEMPTS`` overrides the default — used
+    when an operator wants a tighter or looser retry budget."""
+    monkeypatch.setenv("PALACE_KG_ADD_TRIPLE_MAX_ATTEMPTS", "5")
+    # Re-import constant by reloading the module — env is read at import time.
+    import importlib
+
+    importlib.reload(kw)
+    assert kw._ADD_TRIPLE_MAX_ATTEMPTS == 5
+    # Restore default for the rest of the suite.
+    monkeypatch.delenv("PALACE_KG_ADD_TRIPLE_MAX_ATTEMPTS")
+    importlib.reload(kw)

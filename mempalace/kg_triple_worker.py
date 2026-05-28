@@ -114,6 +114,16 @@ _AGE_DQ_OPEN = f"${_AGE_DQ_TAG}$"
 _AGE_DQ_CLOSE = f"${_AGE_DQ_TAG}$"
 
 
+# Retry knobs for transient psycopg failures during ``add_triple``. The
+# claim-lease (CLAIM_LEASE_SECONDS, default 900) only reclaims drawers
+# from dead workers — it's a 15-minute floor on recovery latency. A
+# connection blip (postgres OOM-restart, network glitch, statement
+# timeout) on a live worker shouldn't pay that cost; within-worker retry
+# closes the gap. See techempower-org/mempalace#298.
+_ADD_TRIPLE_MAX_ATTEMPTS = int(os.environ.get("PALACE_KG_ADD_TRIPLE_MAX_ATTEMPTS", "3"))
+_ADD_TRIPLE_RETRY_BACKOFFS_S = (2.0, 4.0, 6.0)
+
+
 # ── Postgres helpers ──────────────────────────────────────────────────
 
 
@@ -634,10 +644,69 @@ class _KGHandle:
             f"{_AGE_DQ_OPEN}{cypher_inlined}{_AGE_DQ_CLOSE}) "
             f"AS (ok agtype)"
         )
-        async with self.pool.conn() as conn:
-            async with conn.cursor() as cur:
-                await cur.execute(sql)
-            await conn.commit()
+        await _execute_with_retry(self.pool, sql, drawer_hint=source)
+
+
+async def _execute_with_retry(
+    pool: Any,
+    sql: str,
+    *,
+    drawer_hint: Optional[str] = None,
+    max_attempts: int = _ADD_TRIPLE_MAX_ATTEMPTS,
+    backoffs_s: tuple = _ADD_TRIPLE_RETRY_BACKOFFS_S,
+) -> None:
+    """Run ``sql`` against ``pool`` with retry on transient psycopg errors.
+
+    Catches :class:`psycopg.OperationalError` and :class:`psycopg.InterfaceError` —
+    the two error families that fire when the server drops a connection
+    mid-statement (network blip, postgres OOM-restart, statement_timeout). A
+    fresh pool connection is requested on each retry; the pool's
+    ``discarding closed connection`` warning is the expected sibling log
+    line. Other exceptions propagate immediately (cypher syntax, value
+    validation, ``psycopg.errors.DataError``, etc.) — those won't be
+    fixed by retrying.
+
+    Backoff is linear (2s, 4s, 6s by default — 12s upper bound) which is
+    much faster than the 15-minute claim-lease the worker falls back to
+    when a drawer is fully abandoned. See techempower-org/mempalace#298.
+
+    ``drawer_hint`` is forwarded into the retry log line so operators can
+    cross-reference which drawer's writes are bouncing.
+    """
+    psycopg = _load_psycopg2()
+    transient_errors = (psycopg.OperationalError, psycopg.InterfaceError)
+    last_exc: Optional[BaseException] = None
+    for attempt in range(max_attempts):
+        try:
+            async with pool.conn() as conn:
+                async with conn.cursor() as cur:
+                    await cur.execute(sql)
+                await conn.commit()
+            return
+        except transient_errors as e:
+            last_exc = e
+            if attempt == max_attempts - 1:
+                logger.warning(
+                    "add_triple transient failure (final attempt %d/%d) drawer=%s: %s",
+                    attempt + 1,
+                    max_attempts,
+                    drawer_hint,
+                    e,
+                )
+                raise
+            sleep_s = backoffs_s[min(attempt, len(backoffs_s) - 1)]
+            logger.warning(
+                "add_triple transient failure (attempt %d/%d) drawer=%s, retrying in %.1fs: %s",
+                attempt + 1,
+                max_attempts,
+                drawer_hint,
+                sleep_s,
+                e,
+            )
+            await asyncio.sleep(sleep_s)
+    # Unreachable — the loop either returns or raises.
+    if last_exc is not None:  # pragma: no cover
+        raise last_exc
 
 
 def _open_age_kg(dsn: str):
