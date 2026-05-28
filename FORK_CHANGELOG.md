@@ -24,6 +24,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **scripts/ship-prep.sh — one command bumps README test count and runs all three doc renderers (#312)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  Every fork-ahead PR has needed the same hand-driven dance after a
+  rebase: bump ``README.md``'s "<N> tests pass on ``main``" phrase,
+  run ``scripts/render-docs.py --target all``, run
+  ``scripts/render-llms-full.py``, run ``scripts/render-api-docs.py``,
+  then ``scripts/check-docs.sh`` to verify. Five steps, four scripts,
+  one ``sed``. ``scripts/ship-prep.sh`` bundles them.
+
+  The script's pytest-discovery follows the same fallback chain
+  ``scripts/check-docs.sh`` uses (#311 — repo venv, then main
+  checkout's venv via ``git rev-parse --git-common-dir``, then
+  PATH), so it works from a worktree without an activated
+  environment. The test-count bump is idempotent — no-op if the
+  number is already correct — so re-running after a follow-up
+  commit is safe.
+
+  ``--no-check`` skips the trailing ``check-docs.sh`` verification
+  for the case where you intentionally want to inspect the
+  regenerated diff before re-running checks.
+
+  *Files:* `scripts/ship-prep.sh`
+
+
 - **mempalace_search MCP input schema accepts fusion_mode (convex|rrf) and forwards to search_memories (#302)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
   #162 / PR #295 added ``fusion_mode`` to ``search_memories()`` with
   ``"convex"`` default and ``"rrf"`` opt-in, validated by the
