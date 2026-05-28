@@ -3941,6 +3941,323 @@ def cmd_stats(args):
     )
 
 
+# ── mempalace tags ────────────────────────────────────────────────────
+#
+# Slice of #191: surface the existing ``mempalace_list_tags`` MCP tool
+# as a daemon-strict CLI command. The tool is also reachable through
+# ``stats --tags``, but folding it into ``stats`` only renders alongside
+# the wings/rooms/kg blocks; ``tags`` as a standalone subcommand keeps
+# the output focused (and accepts ``--wing`` / ``--room`` filters that
+# ``stats`` doesn't expose).
+
+
+def _resolve_tags_format(args) -> str:
+    """``--format`` wins, then ``--json`` shorthand, default ``table``.
+
+    Matches the sibling fast-path commands.
+    """
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def _print_tags_table(bundle: dict, top: int) -> None:
+    """Aligned tag/count rows with a visual gauge — matches the stats --tags block."""
+    items = bundle.get("tags") or []
+    if not items:
+        print("\n  (no tags match the requested filter)\n")
+        return
+
+    max_count = items[0].get("count", 0) if items else 0
+    shown = items[:top] if top else items
+    filters = bundle.get("filters") or {}
+    wing = filters.get("wing")
+    room = filters.get("room")
+    min_count = filters.get("min_count", 1)
+    scope = []
+    if wing:
+        scope.append(f"wing={wing}")
+    if room:
+        scope.append(f"room={room}")
+    if min_count and min_count > 1:
+        scope.append(f"min_count={min_count}")
+    scope_label = (" — " + ", ".join(scope)) if scope else ""
+    total = bundle.get("total_unique_tags", len(items))
+
+    print(f"\n  TAGS — {total} unique{scope_label}")
+    print(f"  {'-' * 56}")
+    for entry in shown:
+        tag = entry.get("tag", "?")
+        count = entry.get("count", 0)
+        bar = _stats_bar(count, max_count, width=18)
+        print(f"    {tag:<28} {count:>5}  {bar}")
+    remaining = len(items) - len(shown)
+    if remaining > 0:
+        print(f"    ... {remaining} more tags (--top 0 shows all)")
+    print()
+
+
+def cmd_tags(args):
+    """Fast direct-to-daemon tag inventory (slice of #191).
+
+    Calls the daemon's ``mempalace_list_tags`` MCP tool — already a
+    first-class read path on the daemon, just not previously exposed
+    as a CLI verb. Supports ``--wing`` / ``--room`` scoping and a
+    ``--min-count`` floor; output formats match the sibling commands
+    (``--format=table`` default, ``--json``/``--format=json`` pass-through).
+
+    Daemon unreachable → exit 1; inner-error envelope → exit 2.
+    """
+    fmt = _resolve_tags_format(args)
+    want_json = fmt == "json"
+
+    if not _daemon_url():
+        msg = (
+            "tags requires the palace-daemon. Set PALACE_DAEMON_URL "
+            "(or daemon_url in ~/.mempalace/config.json) and retry."
+        )
+        if want_json:
+            _emit_json({"error": "daemon_required", "hint": msg})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+    min_count = max(1, int(getattr(args, "min_count", 1) or 1))
+    arguments: dict = {"min_count": min_count}
+    wing = getattr(args, "wing", None)
+    room = getattr(args, "room", None)
+    if wing:
+        arguments["wing"] = wing
+    if room:
+        arguments["room"] = room
+
+    try:
+        data = _call_daemon_tool("mempalace_list_tags", arguments)
+    except DaemonError as e:
+        if want_json:
+            _emit_json({"error": str(e), "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({e})",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if isinstance(data, dict) and "error" in data and not data.get("tags"):
+        if want_json:
+            _emit_json(data)
+        else:
+            print(f"\n  {data['error']}", file=sys.stderr)
+        sys.exit(2)
+
+    if want_json:
+        # Pass through the daemon envelope unchanged so jq pipelines see
+        # the same shape mempalace_list_tags emits everywhere else.
+        _emit_json(data)
+        return
+
+    top = max(0, int(getattr(args, "top", 20) or 0))
+    _print_tags_table(data, top=top)
+
+
+# ── mempalace overlap ─────────────────────────────────────────────────
+#
+# Slice of #191: cross-wing entity finder via a single ``/cypher`` POST.
+# Demonstrates KG usage at the CLI and answers "what entities does wing
+# A share with wing B?" — the natural follow-on question to ``graph``'s
+# tunnel summary, which counts shared rooms but not shared entities.
+#
+# Inline-substitutes the two wing names as Cypher literals (the daemon's
+# /cypher endpoint doesn't accept a separate ``params`` field — see
+# _cypher_literal in knowledge_graph_age.py).
+
+
+def _resolve_overlap_format(args) -> str:
+    """``--format`` wins, then ``--json`` shorthand, default ``table``."""
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+_OVERLAP_DEFAULT_LIMIT = 50
+_OVERLAP_MAX_LIMIT = 5000
+
+
+def _build_overlap_cypher(wing_a: str, wing_b: str, limit: int) -> str:
+    """Return the inlined Cypher source for the overlap query.
+
+    Two MATCH clauses bound to the same Entity node — one per wing —
+    forces AGE to intersect rather than union. ``count(DISTINCT d)``
+    on each side keeps the per-wing tally from double-counting drawers
+    that mention the same entity twice.
+    """
+    from .config import sanitize_kg_value
+    from .knowledge_graph_age import _cypher_literal
+
+    a_lit = _cypher_literal(sanitize_kg_value(wing_a, "wing_a"))
+    b_lit = _cypher_literal(sanitize_kg_value(wing_b, "wing_b"))
+    return (
+        f"MATCH (wa:Wing {{name: {a_lit}}})-[:CONTAINS]->(:Room)"
+        "-[:CONTAINS]->(da:Drawer)-[:RELATION]->(e:Entity) "
+        f"MATCH (wb:Wing {{name: {b_lit}}})-[:CONTAINS]->(:Room)"
+        "-[:CONTAINS]->(db:Drawer)-[:RELATION]->(e) "
+        "RETURN e.name AS entity, count(DISTINCT da) AS a_drawers, "
+        "count(DISTINCT db) AS b_drawers "
+        "ORDER BY a_drawers + b_drawers DESC "
+        f"LIMIT {int(limit)}"
+    )
+
+
+def _print_overlap_table(rows: list[dict], wing_a: str, wing_b: str) -> None:
+    """Aligned columns: entity | A drawers | B drawers | total."""
+    if not rows:
+        print(f"\n  No entity overlap between '{wing_a}' and '{wing_b}'.\n")
+        return
+
+    name_w = max(len("entity"), max(len(str(r.get("entity") or "")) for r in rows))
+    name_w = min(name_w, 48)
+    print(f"\n  OVERLAP — {wing_a}  ↔  {wing_b}  ({len(rows)} entities)")
+    print(f"  {'-' * (name_w + 26)}")
+    print(f"    {'entity':<{name_w}}  {'A':>6}  {'B':>6}  {'total':>6}")
+    for row in rows:
+        ent = str(row.get("entity") or "")
+        if len(ent) > name_w:
+            ent = ent[: name_w - 1] + "…"
+        a = int(row.get("a_drawers") or 0)
+        b = int(row.get("b_drawers") or 0)
+        print(f"    {ent:<{name_w}}  {a:>6}  {b:>6}  {a + b:>6}")
+    print()
+
+
+def cmd_overlap(args):
+    """Cross-wing entity overlap via a single read-only Cypher hop (slice of #191).
+
+    Answers "what entities appear in both wing A and wing B?". Uses the
+    daemon's ``POST /cypher`` (read-only by SQLSTATE 25006); the two
+    wing names are sanitized + inlined as Cypher literals because the
+    endpoint accepts only ``{cypher, graph}`` — no parameters.
+
+    Daemon unreachable / 401/404/403 → exit 1; 403 read-only write
+    attempt cannot fire here (only MATCH/RETURN); inner-error envelope
+    or sanitization failure → exit 2.
+    """
+    fmt = _resolve_overlap_format(args)
+    want_json = fmt == "json"
+
+    wing_a = getattr(args, "wing_a", None)
+    wing_b = getattr(args, "wing_b", None)
+    if not wing_a or not wing_b:
+        msg = "overlap requires two positional wing names (WING_A WING_B)"
+        if want_json:
+            _emit_json({"error": msg, "source": "cli"})
+        else:
+            print(f"error: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+    if wing_a == wing_b:
+        msg = "overlap requires two DIFFERENT wing names; got the same value twice"
+        if want_json:
+            _emit_json({"error": msg, "source": "cli"})
+        else:
+            print(f"error: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+    if not _daemon_url():
+        msg = (
+            "overlap requires the palace-daemon. Set PALACE_DAEMON_URL "
+            "(or daemon_url in ~/.mempalace/config.json) and retry."
+        )
+        if want_json:
+            _emit_json({"error": "daemon_required", "hint": msg})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+
+    limit_raw = int(getattr(args, "limit", _OVERLAP_DEFAULT_LIMIT) or _OVERLAP_DEFAULT_LIMIT)
+    limit = max(1, min(limit_raw, _OVERLAP_MAX_LIMIT))
+
+    try:
+        cypher = _build_overlap_cypher(wing_a, wing_b, limit)
+    except ValueError as e:
+        # sanitize_kg_value rejection — empty/over-length/null-bytes.
+        if want_json:
+            _emit_json({"error": str(e), "source": "cli"})
+        else:
+            print(f"error: {e}", file=sys.stderr)
+        sys.exit(2)
+
+    graph = getattr(args, "graph", None) or _CYPHER_DEFAULT_GRAPH
+    body = {"cypher": cypher, "graph": str(graph)}
+
+    try:
+        data, status = _post_cypher(body)
+    except DaemonError as e:
+        if want_json:
+            _emit_json({"error": str(e), "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({e})",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if status is not None:
+        # Any non-2xx from /cypher — older daemon (404), auth (401/403),
+        # or 503 if not on postgres backend. Same shape as cmd_cypher's
+        # fallthrough — exit 1, scripts treat all daemon-side failures
+        # uniformly.
+        if want_json:
+            _emit_json(
+                {
+                    "error": f"daemon /cypher returned {status}",
+                    "source": "daemon",
+                    "status": status,
+                }
+            )
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"/cypher returned {status} (see mempalace status for diagnostics)",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if data is not None and "error" in data and "rows" not in data and "data" not in data:
+        if want_json:
+            _emit_json(data)
+        else:
+            print(f"\n  {data['error']}", file=sys.stderr)
+        sys.exit(2)
+
+    rows = _extract_cypher_rows(data or {})
+
+    if want_json:
+        out = {
+            "rows": rows,
+            "count": len(rows),
+            "wing_a": wing_a,
+            "wing_b": wing_b,
+            "graph": graph,
+            "limit": limit,
+        }
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if k not in ("rows", "data", "count", "graph", "wing_a", "wing_b", "limit"):
+                    out[k] = v
+        _emit_json(out)
+        return
+
+    _print_overlap_table(rows, wing_a=wing_a, wing_b=wing_b)
+
+
 def cmd_repair_status(args):
     """Read-only HNSW capacity health check (#1222)."""
     from .repair import status as repair_status
@@ -5189,6 +5506,67 @@ def main():
         ),
     )
 
+    # tags — direct-to-daemon wrapper around mempalace_list_tags (slice of #191)
+    p_tags = sub.add_parser(
+        "tags",
+        help="List tags with drawer counts (daemon mempalace_list_tags fast-path)",
+    )
+    p_tags.add_argument("--wing", default=None, help="Scope tag counts to one wing")
+    p_tags.add_argument("--room", default=None, help="Scope tag counts to one room")
+    p_tags.add_argument(
+        "--min-count",
+        dest="min_count",
+        type=_nonneg_int,
+        default=1,
+        help="Drop tags below this drawer-count floor (default: 1)",
+    )
+    p_tags.add_argument(
+        "--top",
+        type=_nonneg_int,
+        default=20,
+        help="Show at most this many rows (default 20; 0 means show all)",
+    )
+    p_tags.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, count + gauge), "
+            "json (daemon pass-through; same as --json)"
+        ),
+    )
+
+    # overlap — cross-wing entity overlap via /cypher (slice of #191)
+    p_overlap = sub.add_parser(
+        "overlap",
+        help="Find entities that appear in BOTH of two wings (KG cross-wing query)",
+    )
+    p_overlap.add_argument("wing_a", help="First wing")
+    p_overlap.add_argument("wing_b", help="Second wing")
+    p_overlap.add_argument(
+        "--limit",
+        type=_nonneg_int,
+        default=_OVERLAP_DEFAULT_LIMIT,
+        help=(
+            f"Cap on returned entity count (default: {_OVERLAP_DEFAULT_LIMIT}, "
+            f"max: {_OVERLAP_MAX_LIMIT}). Daemon statement_timeout is the real ceiling."
+        ),
+    )
+    p_overlap.add_argument(
+        "--graph",
+        default=_CYPHER_DEFAULT_GRAPH,
+        help=f"AGE graph name (default: {_CYPHER_DEFAULT_GRAPH})",
+    )
+    p_overlap.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, aligned columns), "
+            "json (daemon envelope pass-through; same as --json)"
+        ),
+    )
+
     # ── Propagate --json/--quiet to every subparser (issue #44) ─────
     # argparse parses pre-subcommand flags into ``args.json`` /
     # ``args.quiet`` only if they appear BEFORE the subcommand. To let
@@ -5282,6 +5660,8 @@ def main():
         "rooms": cmd_rooms,
         "status": cmd_status,
         "stats": cmd_stats,
+        "tags": cmd_tags,
+        "overlap": cmd_overlap,
         "mined": cmd_mined,
         "replay": cmd_replay,
     }

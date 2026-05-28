@@ -24,8 +24,49 @@
 
 entries:
 
-  - id: rrf-vs-hybrid-rerank-ab-run
+  - id: cli-tags-and-overlap-fast-path
     date: 2026-05-28
+    bucket: Added
+    commit: PLACEHOLDER
+    area: CLI
+    summary: "mempalace tags + overlap — two more daemon-fast-path subcommands (slice of #191)"
+    tests: "38 — tests/test_cli_tags.py (table rendering with scope label + gauge, --top truncation, empty payload, json pass-through, --wing/--room/--min-count forwarding, daemon-down + inner-error exit codes, argparse wiring incl. --min-count negative rejection); tests/test_cli_overlap.py (table + json shapes, two-MATCH intersection on the same Entity node, --limit inlined into Cypher, --graph propagated, missing/same-wing rejection, sanitize_kg_value rejection on blank, daemon-down across unreachable/404/503/inner-error, argparse wiring incl. --limit negative rejection)"
+    files:
+      - mempalace/cli.py
+      - tests/test_cli_tags.py
+      - tests/test_cli_overlap.py
+    body: |
+      Two more verbs join the daemon-fast-path family that started with
+      ``list`` / ``move`` / ``bulk-move`` / ``stats`` / ``cypher`` /
+      ``graph``. Both follow the same shape: a single daemon hop, no
+      AGE locks held across the call, ``--format=table`` (default) or
+      ``--format=json``/``--json`` pass-through, sibling failure-mode
+      exit codes (1 for daemon-down or REST status fall-through, 2 for
+      input validation or inner-error envelopes).
+
+      ``mempalace tags [--wing W] [--room R] [--min-count N] [--top K]``
+      surfaces the existing ``mempalace_list_tags`` MCP tool as a
+      first-class CLI verb. ``stats --tags`` already triggered the same
+      call, but folded it into the multi-block dashboard. As a
+      standalone subcommand it gets the filter knobs (``--wing`` /
+      ``--room`` / ``--min-count``) that the bundled rendering doesn't
+      expose, and stays focused on a single table.
+
+      ``mempalace overlap <wing-A> <wing-B>`` is the cross-wing entity
+      finder — the natural follow-on question after ``graph``'s tunnel
+      summary, which counts shared *rooms* but not shared *entities*.
+      It POSTs one read-only Cypher query: two ``MATCH`` clauses bound
+      to the same ``:Entity`` node, with separate drawer aliases on
+      each side so ``count(DISTINCT d)`` reports the per-wing tally
+      without double-counting. Wing names are sanitized through
+      ``sanitize_kg_value`` and inlined as Cypher literals via
+      ``_cypher_literal`` because the daemon's ``/cypher`` endpoint
+      accepts only ``{cypher, graph}`` — there is no separate
+      parameter-binding channel. The READ ONLY SQL transaction the
+      daemon wraps around the query (SQLSTATE 25006 enforcement)
+      already forbids mutation, so the cypher-write 403 hint path
+      that ``cmd_cypher`` carries is unreachable here.
+
     bucket: Added
     commit: ea5d567
     area: Search
