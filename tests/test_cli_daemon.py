@@ -526,3 +526,238 @@ class TestCmdMineDaemon:
         assert ex.value.code == 0
         assert captured["body"]["mode"] == "convos"
         assert captured["body"]["wing"] == "myproj"
+
+
+# ── cmd_wakeup routing (#285) ──────────────────────────────────────────
+
+
+class TestCmdWakeupDaemon:
+    def test_routes_to_daemon_when_strict(self, capsys):
+        """cmd_wakeup must call the daemon's mempalace_wakeup tool when
+        daemon-strict; it must not import .layers.MemoryStack."""
+        from mempalace import cli
+
+        inner = {"text": "L0\nidentity here\n\nL1\nessential", "tokens": 42, "wing": None}
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            }
+        ).encode()
+
+        def fake_urlopen(req, timeout=None):
+            captured_body = json.loads(req.data.decode())
+            assert captured_body["params"]["name"] == "mempalace_wakeup"
+            assert captured_body["params"]["arguments"] == {}
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(palace=None, wing=None)
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_wakeup(args)
+
+        out = capsys.readouterr().out
+        assert "L0" in out
+        assert "identity here" in out
+        assert "Wake-up text (~42 tokens):" in out
+
+    def test_forwards_wing_argument(self):
+        from mempalace import cli
+
+        inner = {"text": "wing-scoped wake", "tokens": 8, "wing": "memorypalace"}
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            },
+        ).encode()
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(palace=None, wing="memorypalace")
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_wakeup(args)
+
+        assert captured["body"]["params"]["arguments"] == {"wing": "memorypalace"}
+
+    def test_local_path_when_palace_arg_given(self):
+        """--palace argument keeps the local fallback even when daemon-strict
+        is on — for forensic reads of archived palaces."""
+        from mempalace import cli
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(palace="/local/palace", wing=None)
+
+        mock_stack = MagicMock()
+        mock_stack.wake_up.return_value = "local wake text"
+        mock_layers = MagicMock()
+        mock_layers.MemoryStack.return_value = mock_stack
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch.dict("sys.modules", {"mempalace.layers": mock_layers}):
+                cli.cmd_wakeup(args)
+
+        # MemoryStack was constructed with the supplied palace path
+        mock_layers.MemoryStack.assert_called_once_with(palace_path="/local/palace")
+        mock_stack.wake_up.assert_called_once_with(wing=None)
+
+    def test_daemon_error_exits_nonzero(self, capsys):
+        from mempalace import cli
+
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.URLError("daemon unreachable")
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(palace=None, wing=None)
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                with pytest.raises(SystemExit) as ex:
+                    cli.cmd_wakeup(args)
+
+        assert ex.value.code == 2
+        err = capsys.readouterr().err
+        assert "ERROR" in err
+
+
+# ── cmd_mined routing (#285) ───────────────────────────────────────────
+
+
+class TestCmdMinedDaemon:
+    def test_routes_to_daemon_when_strict(self, capsys):
+        from mempalace import cli
+
+        inner = {
+            "sources_by_wing": {
+                "myproj": {
+                    "sources": [
+                        {"source_file": "/path/a.jsonl", "drawer_count": 12},
+                        {"source_file": "/path/b.jsonl", "drawer_count": 5},
+                    ],
+                    "total_sources": 2,
+                    "total_drawers": 17,
+                    "truncated": False,
+                }
+            },
+            "wing_filter": None,
+            "total_wings": 1,
+            "total_sources": 2,
+        }
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            },
+        ).encode()
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(palace=None, wing=None, limit=10, json=False)
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_mined(args)
+
+        assert captured["body"]["params"]["name"] == "mempalace_mined"
+        out = capsys.readouterr().out
+        assert "myproj" in out
+        assert "/path/a.jsonl" in out
+        assert "12" in out
+
+    def test_forwards_wing_and_limit(self):
+        from mempalace import cli
+
+        inner = {"sources_by_wing": {}, "wing_filter": "x", "total_wings": 0, "total_sources": 0}
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            },
+        ).encode()
+
+        captured = {}
+
+        def fake_urlopen(req, timeout=None):
+            captured["body"] = json.loads(req.data.decode())
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(palace=None, wing="x", limit=5, json=False)
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_mined(args)
+
+        assert captured["body"]["params"]["arguments"] == {"wing": "x", "limit": 5}
+
+    def test_json_passthrough(self, capsys):
+        """--json emits the daemon's payload verbatim without the human
+        block layout."""
+        from mempalace import cli
+
+        inner = {
+            "sources_by_wing": {"w": {"sources": [], "total_sources": 0, "total_drawers": 0}},
+            "wing_filter": None,
+            "total_wings": 1,
+            "total_sources": 0,
+        }
+        body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": {"content": [{"type": "text", "text": json.dumps(inner)}]},
+            },
+        ).encode()
+
+        def fake_urlopen(req, timeout=None):
+            return _FakeResp(body)
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(palace=None, wing=None, limit=10, json=True)
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                cli.cmd_mined(args)
+
+        out = capsys.readouterr().out
+        # JSON output starts with "{"
+        parsed = json.loads(out)
+        assert parsed["sources_by_wing"]["w"]["total_sources"] == 0
+        # And does NOT include the human header
+        assert "MemPalace Mined" not in out
+
+    def test_daemon_error_exits_nonzero(self, capsys):
+        from mempalace import cli
+
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.URLError("daemon unreachable")
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        args = argparse.Namespace(palace=None, wing=None, limit=10, json=False)
+
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                with pytest.raises(SystemExit) as ex:
+                    cli.cmd_mined(args)
+
+        assert ex.value.code == 2
+        err = capsys.readouterr().err
+        assert "ERROR" in err
