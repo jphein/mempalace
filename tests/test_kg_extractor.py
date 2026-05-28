@@ -210,6 +210,100 @@ def test_validate_drops_non_string_valid_from():
     assert triple.valid_from is None
 
 
+# ── #313: AGE dollar-quote tag sanitization ──────────────────────────
+
+
+def test_validate_rewrites_age_dq_tag_in_subject():
+    """A triple whose subject contains the AGE dollar-quote tag verbatim
+    (drawers indexing the palace's own source code do this) gets the
+    substring rewritten so _cypher_literal won't reject the write."""
+    triple = _validate(
+        {
+            "subject": "mempalace/kg_triple_worker.py contains mp_age_q",
+            "predicate": "documents",
+            "object": "the AGE wrapper",
+        }
+    )
+    assert triple is not None
+    assert "mp_age_q" not in triple.subject or "MP_AGE_Q_LIT" in triple.subject
+    assert "MP_AGE_Q_LIT" in triple.subject
+
+
+def test_validate_rewrites_age_dq_tag_in_object():
+    triple = _validate(
+        {
+            "subject": "the wrapper",
+            "predicate": "uses",
+            "object": "$mp_age_q$ as the outer delimiter",
+        }
+    )
+    assert triple is not None
+    assert "$MP_AGE_Q_LIT$ as the outer delimiter" == triple.object
+
+
+def test_validate_rewrites_age_dq_tag_in_predicate():
+    triple = _validate(
+        {
+            "subject": "code",
+            "predicate": "mp_age_q_uses",  # collides
+            "object": "tag",
+        }
+    )
+    assert triple is not None
+    # Predicate normalizer lower-cases + snake-cases first; the strip then
+    # rewrites the (lowercase) tag substring to the upper-case placeholder.
+    # The final predicate has the upper-case placeholder so the
+    # case-sensitive ``_cypher_literal`` check doesn't fire.
+    assert "mp_age_q" not in triple.predicate
+    assert "MP_AGE_Q_LIT" in triple.predicate
+
+
+def test_validate_leaves_clean_triples_unchanged():
+    triple = _validate(
+        {
+            "subject": "Alice",
+            "predicate": "loves",
+            "object": "memorypalace",
+        }
+    )
+    assert triple is not None
+    assert triple.subject == "Alice"
+    assert triple.predicate == "loves"
+    assert triple.object == "memorypalace"
+
+
+def test_validate_handles_multiple_age_dq_tag_occurrences():
+    triple = _validate(
+        {
+            "subject": "mp_age_q at start and mp_age_q in the middle",
+            "predicate": "contains",
+            "object": "two tags",
+        }
+    )
+    assert triple is not None
+    assert "mp_age_q" not in triple.subject or triple.subject.count("MP_AGE_Q_LIT") == 2
+
+
+def test_validate_output_survives_cypher_literal():
+    """End-to-end: the rewritten triple actually passes through
+    ``_cypher_literal`` without raising — the bug #313 was filed for."""
+    from mempalace.knowledge_graph_age import _cypher_literal
+
+    triple = _validate(
+        {
+            "subject": "mempalace/kg_triple_worker.py",
+            "predicate": "contains",
+            "object": '_AGE_DQ_TAG = "mp_age_q"',
+        }
+    )
+    assert triple is not None
+    # All three fields should round-trip through _cypher_literal without
+    # raising the dollar-quote-tag rejection.
+    _cypher_literal(triple.subject)
+    _cypher_literal(triple.predicate)
+    _cypher_literal(triple.object)
+
+
 # ── End-to-end extract_triples ───────────────────────────────────────
 
 
