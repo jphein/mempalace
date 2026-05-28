@@ -50,7 +50,7 @@ def tool_get_taxonomy()
 ### `tool_search`
 
 ```python
-def tool_search(query: str, limit: int = 5, wing: str = None, room: str = None, tags: list = None, max_distance: float = 1.5, min_similarity: float = None, context: str = None, candidate_strategy: str = 'hybrid', include_trace: bool = False)
+def tool_search(query: str, limit: int = 5, wing: str = None, room: str = None, tags: list = None, max_distance: float = 1.5, min_similarity: float = None, context: str = None, candidate_strategy: str = 'hybrid', fusion_mode: str = 'convex', include_trace: bool = False)
 ```
 
 ### `tool_check_duplicate`

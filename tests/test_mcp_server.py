@@ -976,6 +976,63 @@ class TestSearchTool:
         result = mcp_server.tool_search(query="JWT", room="../backend")
         assert "error" in result
 
+    def test_search_fusion_mode_forwarded_to_search_memories(self, monkeypatch, config, kg):
+        """fusion_mode reaches search_memories (#302). Default is 'convex'; explicit
+        values pass through unchanged."""
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace import mcp_server
+
+        captured = {}
+
+        def stub_search(*args, **kwargs):
+            captured["fusion_mode"] = kwargs.get("fusion_mode")
+            captured["candidate_strategy"] = kwargs.get("candidate_strategy")
+            return {"results": []}
+
+        monkeypatch.setattr(mcp_server, "search_memories", stub_search)
+
+        mcp_server.tool_search(query="anything")
+        assert captured["fusion_mode"] == "convex"
+
+        captured.clear()
+        mcp_server.tool_search(query="anything", fusion_mode="rrf")
+        assert captured["fusion_mode"] == "rrf"
+
+    def test_search_fusion_mode_survives_mcp_whitelist(self, monkeypatch, config, kg):
+        """The MCP handle_request whitelist must include fusion_mode now that
+        it's in the input_schema — otherwise a daemon forwarding it would have
+        the value silently dropped (the bug #302 was filed to fix)."""
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace import mcp_server
+
+        captured = {}
+
+        def stub_search(*args, **kwargs):
+            captured["fusion_mode"] = kwargs.get("fusion_mode")
+            return {"results": []}
+
+        monkeypatch.setattr(mcp_server, "search_memories", stub_search)
+
+        resp = mcp_server.handle_request(
+            {
+                "method": "tools/call",
+                "id": 1,
+                "params": {
+                    "name": "mempalace_search",
+                    "arguments": {"query": "anything", "fusion_mode": "rrf"},
+                },
+            }
+        )
+        assert "error" not in resp, resp
+        assert captured["fusion_mode"] == "rrf"
+
+    def test_search_fusion_mode_schema_advertises_both_modes(self):
+        from mempalace.mcp_server import TOOLS
+
+        schema = TOOLS["mempalace_search"]["input_schema"]["properties"]
+        assert "fusion_mode" in schema, "fusion_mode missing from mempalace_search schema"
+        assert set(schema["fusion_mode"]["enum"]) == {"convex", "rrf"}
+
     def test_search_retries_once_on_hnsw_flush_transient(self, monkeypatch, config, kg):
         """Issue #1315: post-bulk-mine 'Error finding id' is retried once."""
         _patch_mcp_server(monkeypatch, config, kg)
