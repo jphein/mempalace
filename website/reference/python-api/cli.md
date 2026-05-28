@@ -323,6 +323,39 @@ because /stats doesn't include the tag breakdown (tag counts can be
 unreachable → exit 1 (matches sibling cmd_list/cmd_graph/cmd_cypher);
 inner-error envelope → exit 2.
 
+### `cmd_tags`
+
+```python
+def cmd_tags(args)
+```
+
+Fast direct-to-daemon tag inventory (slice of #191).
+
+Calls the daemon's ``mempalace_list_tags`` MCP tool — already a
+first-class read path on the daemon, just not previously exposed
+as a CLI verb. Supports ``--wing`` / ``--room`` scoping and a
+``--min-count`` floor; output formats match the sibling commands
+(``--format=table`` default, ``--json``/``--format=json`` pass-through).
+
+Daemon unreachable → exit 1; inner-error envelope → exit 2.
+
+### `cmd_overlap`
+
+```python
+def cmd_overlap(args)
+```
+
+Cross-wing entity overlap via a single read-only Cypher hop (slice of #191).
+
+Answers "what entities appear in both wing A and wing B?". Uses the
+daemon's ``POST /cypher`` (read-only by SQLSTATE 25006); the two
+wing names are sanitized + inlined as Cypher literals because the
+endpoint accepts only ``&#123;cypher, graph}`` — no parameters.
+
+Daemon unreachable / 401/404/403 → exit 1; 403 read-only write
+attempt cannot fire here (only MATCH/RETURN); inner-error envelope
+or sanitization failure → exit 2.
+
 ### `cmd_repair_status`
 
 ```python
