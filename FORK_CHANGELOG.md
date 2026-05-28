@@ -251,10 +251,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/knowledge_graph_age.py`, `mempalace/kg_triple_worker.py`, `mempalace/mcp_server.py`, `tests/test_knowledge_graph_age.py`, `tests/test_kg_triple_worker.py`, `tests/test_mcp_server.py`
 
 
+### Changed
+
+
+- **README.md + docs/ECOSYSTEM.md — soften 'engram-2 17% E2E QA' framing per the 2026-05-24 research doc's unsubstantiated finding (#319)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  Three docs referenced the engram-2 "17% E2E QA for MemPalace"
+  attribution with inconsistent framing:
+
+  - ``README.md:163`` treated it as a critique we're answering.
+  - ``docs/ECOSYSTEM.md:45`` stated it as a factual claim engram-2
+    makes.
+  - ``docs/research/2026-05-24-memory-system-benchmarks.md:215``
+    documented that the 17% attribution to engram-2 is **not
+    substantiated** in their published materials — what engram-2
+    actually published is a ~17-point gap between their own LoCoMo
+    score (74.5%) and SOTA (91.7%), attributed to the answerer model.
+
+  The 2026-05-24 doc is the more recent and more carefully sourced;
+  README + ECOSYSTEM.md predated the fact-check. This PR adopts the
+  2026-05-24 doc as source-of-truth:
+
+  - ``README.md`` "Active investigations" reframes the entry as
+    "End-to-end QA measurement on the post-structural-fix palace" —
+    the corpus-shape pathology that prompted #168 is real and the
+    structural fix closed it on our corpus; the deliverable becomes
+    a positive measurement rather than a rebuttal.
+  - ``docs/ECOSYSTEM.md`` describes what engram-2 actually published
+    and cross-links the research doc for readers wanting more.
+
+  #168 itself stays open — the deliverable (publish E2E numbers at
+  ``notebook/data/cat9-postmigrate-e2e/REPORT.md``) is unchanged.
+  Only the framing of what the numbers are answering changes.
+
+  *Files:* `README.md`, `docs/ECOSYSTEM.md`
+
+
 ### Fixed
 
 
-- **kg_llm_extractor rewrites AGE dollar-quote tag in triples so drawers indexing palace source code don't fail at add_triple (#313)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+- **kg_llm_extractor rewrites AGE dollar-quote tag in triples so drawers indexing palace source code don't fail at add_triple (#313)** ([`3fb9428`](https://github.com/techempower-org/mempalace/commit/3fb9428))
   Drawers indexing palace-daemon / mempalace source code contain
   ``mp_age_q`` verbatim (the AGE dollar-quote tag the cypher
   wrapper uses to delimit its outer SQL literal). When the LLM
