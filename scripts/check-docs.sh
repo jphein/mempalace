@@ -53,11 +53,24 @@ if [ -z "$readme_count" ]; then
     warn "README has no '<N> tests pass on \`main\`' phrase — skipping"
 else
     # Prefer the repo venv's pytest so the check works without an
-    # activated environment. Falls back to whatever pytest is on PATH.
+    # activated environment. In a git worktree (`.claude/worktrees/...`)
+    # `REPO_ROOT` is the worktree dir which has no `.venv`; fall back to
+    # the main checkout's `.venv` via `git rev-parse --git-common-dir`
+    # so worktree shells get the same behavior as the main checkout.
+    # Final fallback is whatever pytest is on PATH; a missing pytest
+    # fails hard (#311) rather than silently skipping, because a
+    # silent skip lets stale README counts reach CI.
     pytest_bin="$REPO_ROOT/.venv/bin/pytest"
+    if [ ! -x "$pytest_bin" ]; then
+        common_dir="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || true)"
+        if [ -n "$common_dir" ]; then
+            main_root="$(dirname "$(realpath "$common_dir")")"
+            [ -x "$main_root/.venv/bin/pytest" ] && pytest_bin="$main_root/.venv/bin/pytest"
+        fi
+    fi
     [ -x "$pytest_bin" ] || pytest_bin="$(command -v pytest 2>/dev/null || true)"
-    if [ -z "$pytest_bin" ]; then
-        warn "no pytest available — skipping"
+    if [ -z "$pytest_bin" ] || [ ! -x "$pytest_bin" ]; then
+        fail "no pytest available — install with: uv venv && uv pip install -e '.[dev]'"
     else
         actual_count=$("$pytest_bin" --collect-only -q 2>/dev/null \
             | grep -E "[0-9]+/[0-9]+ tests collected" \
