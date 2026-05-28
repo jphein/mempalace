@@ -42,6 +42,7 @@ class _DrawerRow:
     wing: str
     room: str
     document: str
+    metadata: Optional[dict] = None
 
 
 class _FakeDB:
@@ -64,8 +65,21 @@ class _FakeDB:
                     drawer_id=drawer_id, wing=wing, room=room, queued_at=self.now()
                 )
 
-    def add_drawer(self, drawer_id: str, document: str, wing: str = "", room: str = ""):
-        self.drawers[drawer_id] = _DrawerRow(id=drawer_id, wing=wing, room=room, document=document)
+    def add_drawer(
+        self,
+        drawer_id: str,
+        document: str,
+        wing: str = "",
+        room: str = "",
+        metadata: Optional[dict] = None,
+    ):
+        self.drawers[drawer_id] = _DrawerRow(
+            id=drawer_id,
+            wing=wing,
+            room=room,
+            document=document,
+            metadata=metadata or {},
+        )
 
 
 class _NoopAwaitable:
@@ -194,7 +208,14 @@ class _FakeCursor:
                 self._results = rows
                 self.rowcount = len(rows)
             return
-        # Fetch drawer text
+        # Fetch drawer text + metadata (SPOC temporal scoping, #161)
+        if "SELECT document, metadata FROM mempalace_drawers" in s:
+            (drawer_id,) = params
+            d = db.drawers.get(drawer_id)
+            self._results = [(d.document, d.metadata or {})] if d else []
+            return
+        # Fetch drawer text (legacy path — kept for any caller that still
+        # uses the text-only fetch helper).
         if "SELECT document FROM mempalace_drawers" in s:
             (drawer_id,) = params
             d = db.drawers.get(drawer_id)
@@ -339,12 +360,15 @@ class _FakeKG:
         valid_to=None,
         confidence=kw.DEFAULT_TRIPLE_CONFIDENCE,
         raw_relation_type=None,
+        context=None,
     ):
         # ``relation_type`` key preserved for the test assertions; the
         # worker's call shape uses ``predicate`` positionally.
         # ``raw_relation_type`` (mempalace #278) records the original
         # predicate when the canonical mapper rewrote it; None means
         # mapping was disabled or the predicate was already canonical.
+        # ``context`` is the SPOC anchor (#161) set by the worker to
+        # ``drawer:{drawer_id}`` on every auto-extracted triple.
         self.triples.append(
             {
                 "subject": subject,
@@ -354,6 +378,7 @@ class _FakeKG:
                 "valid_from": valid_from,
                 "confidence": confidence,
                 "raw_relation_type": raw_relation_type,
+                "context": context,
             }
         )
 
@@ -1413,3 +1438,227 @@ def test_sem_narrowing_releases_llm_slot_before_db_write():
     mark_writes = [h for tag, h in observed_held if tag == "mark_completed"]
     assert kg_writes == [0], (observed_held,)  # sem released by KG-write phase
     assert mark_writes == [0], (observed_held,)  # and by mark-completed phase
+
+
+# ── SPOC temporal validity (#161) ────────────────────────────────────
+
+
+def test_derive_valid_from_picks_timestamp_first():
+    """The drawer's authored time (sweeper / convo_miner key) wins over
+    later candidates so the canonical metadata field is the source of
+    truth for ``valid_from``."""
+    assert (
+        kw._derive_valid_from(
+            {
+                "timestamp": "2026-05-28T12:00:00Z",
+                "filed_at": "2026-04-01",
+            }
+        )
+        == "2026-05-28T12:00:00Z"
+    )
+
+
+def test_derive_valid_from_falls_through_to_filed_at():
+    """When ``timestamp`` is absent or empty, the diary-era ``filed_at``
+    stamp acts as the next-best signal — matches the priority list in
+    ``_DRAWER_TIMESTAMP_KEYS``."""
+    assert kw._derive_valid_from({"filed_at": "2026-03-15"}) == "2026-03-15"
+    assert kw._derive_valid_from({"timestamp": "", "filed_at": "2026-03-15"}) == "2026-03-15"
+
+
+def test_derive_valid_from_returns_none_when_no_candidate():
+    """No timestamp keys → None, so the worker writes an open-ended
+    triple. Read paths treat NULL ``valid_from`` as "active since
+    forever" so the absence is safe."""
+    assert kw._derive_valid_from({}) is None
+    assert kw._derive_valid_from(None) is None
+    assert kw._derive_valid_from({"unrelated": "x"}) is None
+
+
+def test_derive_valid_from_ignores_non_string_values():
+    """Defensive: a numeric or list value at one of the candidate keys
+    must not be propagated as ``valid_from`` (would TypeError at the
+    sanitize_iso_temporal step)."""
+    assert kw._derive_valid_from({"timestamp": 1234567890}) is None
+    assert kw._derive_valid_from({"timestamp": ["2026-05-28"]}) is None
+
+
+def test_add_triple_cypher_includes_context_when_provided():
+    """The ``context`` SPOC slot lands as a relation property when set."""
+    cypher = kw._add_triple_cypher(
+        "Alice",
+        "works_with",
+        "Bob",
+        source=None,
+        valid_from=None,
+        confidence=0.7,
+        context="drawer:abc123",
+    )
+    assert "context: 'drawer:abc123'" in cypher
+    assert "NULL" not in cypher
+
+
+def test_add_triple_cypher_omits_context_when_none():
+    """When ``context`` is None the Cypher property map omits the key
+    entirely — same NULL-avoidance pattern as ``source`` / ``valid_from``."""
+    cypher = kw._add_triple_cypher(
+        "Alice",
+        "works_with",
+        "Bob",
+        source=None,
+        valid_from=None,
+        confidence=0.7,
+    )
+    assert "context" not in cypher
+
+
+def test_run_worker_anchors_triples_to_drawer_context():
+    """Every triple extracted from a drawer gets ``context=drawer:{id}``
+    so consumers can trace it back to its witnessing drawer."""
+    db = _FakeDB()
+    db.add_drawer("d_spoc", document=_drawer_text("d_spoc"))
+    db.enqueue("d_spoc")
+    kg = _FakeKG()
+    http = _FakeHTTPClient(
+        triples_per_drawer={
+            "d_spoc": [
+                {"subject": "Alice", "predicate": "knows", "object": "Bob"},
+                {"subject": "Alice", "predicate": "works_on", "object": "mempalace"},
+            ],
+        }
+    )
+
+    asyncio.run(
+        kw.run_worker(
+            dsn="dummy",
+            llm_endpoint="http://localhost:11436",
+            model="phi-4-mini",
+            batch_size=10,
+            poll_interval=1,
+            max_concurrency=2,
+            once=True,
+            **_make_factories(db, kg, http),
+        )
+    )
+
+    assert len(kg.triples) == 2
+    for triple in kg.triples:
+        assert triple["context"] == "drawer:d_spoc"
+        # ``source`` and ``context`` carry the same anchor today; SPOC keeps
+        # them split so source can later diverge for human-curated edits.
+        assert triple["source"] == "drawer:d_spoc"
+
+
+def test_run_worker_derives_valid_from_from_drawer_metadata():
+    """When the LLM extractor doesn't supply ``valid_from``, the worker
+    falls back to the drawer metadata's ``timestamp`` so auto-extracted
+    facts inherit the drawer's authored time."""
+    db = _FakeDB()
+    db.add_drawer(
+        "d_auto",
+        document=_drawer_text("d_auto"),
+        metadata={"timestamp": "2026-04-15T08:30:00Z"},
+    )
+    db.enqueue("d_auto")
+    kg = _FakeKG()
+    http = _FakeHTTPClient(
+        triples_per_drawer={
+            "d_auto": [
+                {"subject": "Alice", "predicate": "knows", "object": "Bob"},
+            ],
+        }
+    )
+
+    asyncio.run(
+        kw.run_worker(
+            dsn="dummy",
+            llm_endpoint="http://localhost:11436",
+            model="phi-4-mini",
+            batch_size=10,
+            poll_interval=1,
+            max_concurrency=2,
+            once=True,
+            **_make_factories(db, kg, http),
+        )
+    )
+
+    assert len(kg.triples) == 1
+    assert kg.triples[0]["valid_from"] == "2026-04-15T08:30:00Z"
+
+
+def test_run_worker_extractor_valid_from_wins_over_drawer_timestamp():
+    """When the LLM extracts an explicit ``valid_from`` (e.g. parsed a
+    date out of the prose like "starting May 2025"), that wins over the
+    drawer's authored time — the prose claim is more specific than the
+    when-it-was-recorded fallback."""
+    db = _FakeDB()
+    db.add_drawer(
+        "d_pref",
+        document=_drawer_text("d_pref"),
+        metadata={"timestamp": "2026-05-28T12:00:00Z"},
+    )
+    db.enqueue("d_pref")
+    kg = _FakeKG()
+    http = _FakeHTTPClient(
+        triples_per_drawer={
+            "d_pref": [
+                {
+                    "subject": "Alice",
+                    "predicate": "started_school",
+                    "object": "Year_7",
+                    "valid_from": "2025-09-01",
+                },
+            ],
+        }
+    )
+
+    asyncio.run(
+        kw.run_worker(
+            dsn="dummy",
+            llm_endpoint="http://localhost:11436",
+            model="phi-4-mini",
+            batch_size=10,
+            poll_interval=1,
+            max_concurrency=2,
+            once=True,
+            **_make_factories(db, kg, http),
+        )
+    )
+
+    assert len(kg.triples) == 1
+    assert kg.triples[0]["valid_from"] == "2025-09-01"
+
+
+def test_run_worker_missing_timestamp_writes_open_valid_from():
+    """A drawer with no recognized timestamp key writes a triple with
+    ``valid_from=None`` — the AGE read path treats that as an open
+    interval ("active since forever") so the absence is safe."""
+    db = _FakeDB()
+    db.add_drawer("d_open", document=_drawer_text("d_open"), metadata={"wing": "test"})
+    db.enqueue("d_open")
+    kg = _FakeKG()
+    http = _FakeHTTPClient(
+        triples_per_drawer={
+            "d_open": [
+                {"subject": "Alice", "predicate": "knows", "object": "Bob"},
+            ],
+        }
+    )
+
+    asyncio.run(
+        kw.run_worker(
+            dsn="dummy",
+            llm_endpoint="http://localhost:11436",
+            model="phi-4-mini",
+            batch_size=10,
+            poll_interval=1,
+            max_concurrency=2,
+            once=True,
+            **_make_factories(db, kg, http),
+        )
+    )
+
+    assert len(kg.triples) == 1
+    assert kg.triples[0]["valid_from"] is None
+    # Context anchor still lands even without a timestamp.
+    assert kg.triples[0]["context"] == "drawer:d_open"

@@ -449,6 +449,164 @@ def test_age_stats_falls_back_when_fast_path_raises(monkeypatch):
         kg.close()
 
 
+# ── SPOC context slot + temporal integration (#161) ──────────────────
+
+
+@pgmark
+def test_age_add_triple_persists_context_slot():
+    """``context`` is stored on the RELATION edge and surfaces in reads."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple(
+            subject="JP",
+            relation_type="works_on",
+            object_="mempalace",
+            valid_from="2026-04-21",
+            context="drawer:abc123",
+        )
+        triples = kg.query_triples(subject="JP")
+        assert len(triples) == 1
+        assert triples[0]["context"] == "drawer:abc123"
+    finally:
+        kg.close()
+
+
+@pgmark
+def test_age_context_slot_optional_and_omitted():
+    """A triple written without ``context`` reads back with ``context=None``
+    so callers can distinguish set from unset without a missing-key check."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple(subject="JP", relation_type="uses", object_="git")
+        triples = kg.query_triples(subject="JP")
+        assert len(triples) == 1
+        assert triples[0]["context"] is None
+    finally:
+        kg.close()
+
+
+@pgmark
+def test_age_query_entity_returns_context():
+    """``query_entity`` surfaces ``context`` on every result row."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple(
+            subject="Alice",
+            relation_type="knows",
+            object_="Bob",
+            context="drawer:d1",
+        )
+        facts = kg.query_entity("Alice")
+        assert len(facts) == 1
+        assert facts[0]["context"] == "drawer:d1"
+    finally:
+        kg.close()
+
+
+@pgmark
+def test_age_timeline_with_as_of_filter():
+    """``timeline(as_of=...)`` returns only triples whose interval contains
+    the date — same as_of semantics as ``query_triples``."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple(
+            "JP",
+            "works_on",
+            "old_project",
+            valid_from="2024-01-01",
+            valid_to="2025-12-31",
+        )
+        kg.add_triple(
+            "JP",
+            "works_on",
+            "mempalace",
+            valid_from="2026-04-21",
+            valid_to=None,
+        )
+
+        # Full timeline returns both.
+        all_facts = kg.timeline("JP")
+        assert len(all_facts) == 2
+
+        # As of mid-2025, only old_project was active.
+        old = kg.timeline("JP", as_of="2025-06-01")
+        assert len(old) == 1
+        assert old[0]["object"] == "old_project"
+
+        # As of 2026-05-01, only mempalace is active.
+        active = kg.timeline("JP", as_of="2026-05-01")
+        assert len(active) == 1
+        assert active[0]["object"] == "mempalace"
+    finally:
+        kg.close()
+
+
+@pgmark
+def test_age_timeline_without_entity_filter_respects_as_of():
+    """The full-graph branch of ``timeline()`` (no entity_name) honors
+    ``as_of`` too. Guards the alternate Cypher template added in #161."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple(
+            "A",
+            "was",
+            "B",
+            valid_from="2020-01-01",
+            valid_to="2021-01-01",
+        )
+        kg.add_triple(
+            "C",
+            "is",
+            "D",
+            valid_from="2026-01-01",
+        )
+        # No entity filter, no as_of — both rows return.
+        assert len(kg.timeline()) == 2
+        # As-of inside the older interval — only A→B.
+        old_only = kg.timeline(as_of="2020-06-01")
+        assert len(old_only) == 1
+        assert old_only[0]["object"] == "B"
+        # As-of in the current period — only C→D.
+        current = kg.timeline(as_of="2026-05-01")
+        assert len(current) == 1
+        assert current[0]["object"] == "D"
+    finally:
+        kg.close()
+
+
+@pgmark
+def test_age_timeline_returns_context_field():
+    """Every timeline row carries the ``context`` slot — even when None."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()
+        kg.add_triple("X", "is", "Y", context="drawer:dx")
+        kg.add_triple("X", "uses", "Z")  # no context
+        rows = kg.timeline("X")
+        contexts = {(r["object"], r["context"]) for r in rows}
+        assert ("Y", "drawer:dx") in contexts
+        assert ("Z", None) in contexts
+    finally:
+        kg.close()
+
+
 @pgmark
 def test_age_stats_per_field_cypher_helpers_match_canonical():
     """The per-field Cypher helpers used by the fast-path savepoint

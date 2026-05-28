@@ -1928,6 +1928,57 @@ class TestKGTools:
         assert result["count"] == 1
         assert result["facts"][0]["object"] == "Acme"
 
+    # --- SPOC temporal validity (#161): kg_timeline as_of + kg_add context ---
+
+    def test_kg_timeline_rejects_invalid_as_of(self, monkeypatch, config, palace_path, seeded_kg):
+        """``as_of`` must pass the same ISO-8601 gate as ``kg_query``;
+        partial or human dates surface a clear error instead of silently
+        excluding facts."""
+        _patch_mcp_server(monkeypatch, config, seeded_kg)
+        from mempalace.mcp_server import tool_kg_timeline
+
+        result = tool_kg_timeline(entity="Alice", as_of="March 2026")
+        assert "error" in result
+        assert "as_of" in result["error"]
+
+    def test_kg_timeline_includes_as_of_in_response(
+        self, monkeypatch, config, palace_path, seeded_kg
+    ):
+        """The accepted ``as_of`` round-trips back to the caller so clients
+        can echo what window the timeline was sliced for."""
+        _patch_mcp_server(monkeypatch, config, seeded_kg)
+        from mempalace.mcp_server import tool_kg_timeline
+
+        result = tool_kg_timeline(entity="Alice", as_of="2026-05-01")
+        assert "error" not in result
+        assert result["as_of"] == "2026-05-01"
+
+    def test_kg_timeline_default_omits_as_of(self, monkeypatch, config, palace_path, seeded_kg):
+        """Without ``as_of`` the response carries ``None`` — preserves the
+        full-timeline default and makes the boundary observable."""
+        _patch_mcp_server(monkeypatch, config, seeded_kg)
+        from mempalace.mcp_server import tool_kg_timeline
+
+        result = tool_kg_timeline(entity="Alice")
+        assert result["as_of"] is None
+
+    def test_kg_add_rejects_context_with_null_bytes(self, monkeypatch, config, palace_path, kg):
+        """The ``context`` slot passes through ``sanitize_kg_value`` so
+        null bytes reject at the boundary — same defense as subject /
+        object. (Newlines and other punctuation are intentionally
+        permitted; only null bytes and over-length strings fail.)"""
+        _patch_mcp_server(monkeypatch, config, kg)
+        from mempalace.mcp_server import tool_kg_add
+
+        result = tool_kg_add(
+            subject="Alice",
+            predicate="knows",
+            object="Bob",
+            context="drawer\x00:bad",
+        )
+        assert result["success"] is False
+        assert "context" in result["error"]
+
     def test_kg_invalidate_accepts_datetime_ended(self, monkeypatch, config, palace_path, kg):
         _patch_mcp_server(monkeypatch, config, kg)
 

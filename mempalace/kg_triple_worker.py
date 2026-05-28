@@ -197,6 +197,40 @@ async def _fetch_drawer_text_async(conn, drawer_id: str) -> Optional[str]:
     return row[0] if row else None
 
 
+async def _fetch_drawer_text_and_metadata_async(
+    conn, drawer_id: str
+) -> tuple[Optional[str], Optional[dict]]:
+    """Return (document, metadata) for ``drawer_id`` or (None, None) if missing.
+
+    Companion to ``_fetch_drawer_text_async`` used by the SPOC temporal
+    pipeline (techempower-org/mempalace#161): the metadata blob carries the
+    drawer's ``timestamp`` / ``filed_at`` from the upstream mining or
+    conversation stage, which we map to ``valid_from`` on every extracted
+    triple. A drawer without those keys still extracts cleanly — the worker
+    just omits the auto-derived ``valid_from``.
+    """
+    async with conn.cursor() as cur:
+        await cur.execute(
+            "SELECT document, metadata FROM mempalace_drawers WHERE id = %s LIMIT 1",
+            (drawer_id,),
+        )
+        row = await cur.fetchone()
+    if not row:
+        return None, None
+    document = row[0]
+    metadata = row[1]
+    if isinstance(metadata, str):
+        # psycopg occasionally returns jsonb as text depending on type cast;
+        # tolerate both so downstream code can use a dict consistently.
+        try:
+            import json as _json
+
+            metadata = _json.loads(metadata) if metadata else {}
+        except (ValueError, TypeError):
+            metadata = {}
+    return document, metadata if isinstance(metadata, dict) else {}
+
+
 def _fetch_drawer_text(conn, drawer_id: str) -> Optional[str]:
     """Return the ``document`` column for ``drawer_id``, or None if absent."""
     with conn.cursor() as cur:
@@ -206,6 +240,35 @@ def _fetch_drawer_text(conn, drawer_id: str) -> Optional[str]:
         )
         row = cur.fetchone()
     return row[0] if row else None
+
+
+# Metadata keys, in priority order, that the worker maps to a triple's
+# ``valid_from`` when the LLM extractor didn't supply one. ``timestamp``
+# is the standard sweeper / convo_miner field; ``filed_at`` is the older
+# diary stamp; ``session_created_at`` covers opencode adapters. First
+# non-empty wins. Centralized so a future format change has one edit
+# point. See techempower-org/mempalace#161 for the SPOC rollout.
+_DRAWER_TIMESTAMP_KEYS = ("timestamp", "filed_at", "session_created_at")
+
+
+def _derive_valid_from(metadata: Optional[dict]) -> Optional[str]:
+    """Pull the drawer's authored time from metadata for SPOC valid_from.
+
+    Returns the first non-empty string value found at one of
+    ``_DRAWER_TIMESTAMP_KEYS``. Returns ``None`` when no candidate key is
+    populated — in that case the triple is written with an open
+    ``valid_from`` (NULL), which read paths already treat as "active
+    since forever" (see ``KnowledgeGraphAGE.query_triples`` as_of
+    semantics). Sanitization happens at the AGE layer
+    (``sanitize_iso_temporal``); this helper only selects the candidate.
+    """
+    if not isinstance(metadata, dict):
+        return None
+    for key in _DRAWER_TIMESTAMP_KEYS:
+        value = metadata.get(key)
+        if isinstance(value, str) and value.strip():
+            return value
+    return None
 
 
 async def _mark_completed_async(conn, drawer_id: str, triple_count: int) -> None:
@@ -459,6 +522,7 @@ def _add_triple_cypher(
     valid_from: Optional[str],
     confidence: float,
     raw_relation_type: Optional[str] = None,
+    context: Optional[str] = None,
 ) -> str:
     """Render the inlined Cypher source for a single ``add_triple`` write.
 
@@ -467,6 +531,10 @@ def _add_triple_cypher(
     Upstream callers (``extract_triples``) already strip nothing extra,
     so a hostile LLM output that happens to embed ``$mp_age_q$`` will
     fail loudly here rather than escape the SQL boundary.
+
+    ``context`` is the SPOC anchor (techempower-org/mempalace#161) — set
+    by the worker to ``drawer:{drawer_id}`` on every auto-extracted
+    triple so consumers can trace a fact back to its witnessing drawer.
     """
     # Build the property map keys dynamically — a Cypher property map
     # rejects bare ``NULL`` as a value (``SyntaxError: a name constant is
@@ -492,6 +560,9 @@ def _add_triple_cypher(
     if raw_relation_type is not None:
         prop_pairs.append("raw_relation_type: $rrt")
         params["rrt"] = raw_relation_type
+    if context is not None:
+        prop_pairs.append("context: $ctx")
+        params["ctx"] = context
 
     cypher = f"""
         MERGE (s:Entity {{name: $subj}})
@@ -526,6 +597,7 @@ class _KGHandle:
         valid_from: Optional[str] = None,
         confidence: float = DEFAULT_TRIPLE_CONFIDENCE,
         raw_relation_type: Optional[str] = None,
+        context: Optional[str] = None,
     ) -> None:
         # Defense in depth: reject any value carrying the AGE outer
         # dollar-quote tag before the inlining step. ``_cypher_literal``
@@ -540,6 +612,8 @@ class _KGHandle:
             _cypher_literal(valid_from)
         if raw_relation_type is not None:
             _cypher_literal(raw_relation_type)
+        if context is not None:
+            _cypher_literal(context)
 
         cypher_inlined = _add_triple_cypher(
             subject,
@@ -549,6 +623,7 @@ class _KGHandle:
             valid_from=valid_from,
             confidence=confidence,
             raw_relation_type=raw_relation_type,
+            context=context,
         )
         # AGE expects cypher() first arg as a single-quoted string literal
         # ("name constant"). psycopg3 binds %s as a server-side $1 param
@@ -633,12 +708,21 @@ async def _process_one(
     """
     try:
         async with pool.conn() as conn:
-            text = await _fetch_drawer_text_async(conn, drawer.drawer_id)
+            text, drawer_metadata = await _fetch_drawer_text_and_metadata_async(
+                conn, drawer.drawer_id
+            )
         if not text:
             async with pool.conn() as conn:
                 await _mark_completed_async(conn, drawer.drawer_id, 0)
             stats.drawers_processed += 1
             return
+
+        # SPOC temporal scoping (#161): if the LLM extractor doesn't supply
+        # a valid_from on a triple, fall back to the drawer's authored
+        # time. This anchors auto-extracted facts to when they were
+        # witnessed even when the LLM doesn't infer a date from the prose.
+        derived_valid_from = _derive_valid_from(drawer_metadata)
+        drawer_context = f"drawer:{drawer.drawer_id}"
 
         triples = await _extract_under_sem(http_client, endpoint, model, text, sem)
 
@@ -663,9 +747,10 @@ async def _process_one(
                     t.subject,
                     mapped.relation_type or t.predicate,
                     t.object,
-                    source=f"drawer:{drawer.drawer_id}",
-                    valid_from=t.valid_from,
+                    source=drawer_context,
+                    valid_from=t.valid_from or derived_valid_from,
                     raw_relation_type=mapped.raw_relation_type,
+                    context=drawer_context,
                 )
             except Exception as e:  # noqa: BLE001
                 logger.warning(

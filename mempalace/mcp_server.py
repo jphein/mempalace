@@ -2410,6 +2410,7 @@ def tool_kg_add(
     source_closet: str = None,
     source_file: str = None,
     source_drawer_id: str = None,
+    context: str = None,
 ):
     """Add a relationship to the knowledge graph.
 
@@ -2419,6 +2420,14 @@ def tool_kg_add(
 
     Temporal values accept either ``YYYY-MM-DD`` or canonical UTC datetimes in
     the form ``YYYY-MM-DDTHH:MM:SSZ``.
+
+    ``context`` is the SPOC fourth-axis (techempower-org/mempalace#161):
+    a free-form anchor naming where the fact was witnessed (e.g.
+    ``drawer:abc123``, ``conversation:2026-05-28``). The AGE backend
+    stores it on the RELATION edge and surfaces it through every read
+    path; the SQLite backend silently accepts and ignores it (storage
+    schema doesn't yet have a column for it) so callers don't need to
+    branch on backend.
     """
     try:
         subject = sanitize_kg_value(subject, "subject")
@@ -2426,6 +2435,8 @@ def tool_kg_add(
         object = sanitize_kg_value(object, "object")
         valid_from = sanitize_iso_temporal(valid_from, "valid_from")
         valid_to = sanitize_iso_temporal(valid_to, "valid_to")
+        if context is not None:
+            context = sanitize_kg_value(context, "context")
     except ValueError as e:
         return {"success": False, "error": str(e)}
 
@@ -2440,11 +2451,29 @@ def tool_kg_add(
             "source_closet": source_closet,
             "source_file": source_file,
             "source_drawer_id": source_drawer_id,
+            "context": context,
         },
     )
 
-    triple_id = _call_kg(
-        lambda kg: kg.add_triple(
+    def _add(kg):
+        # SQLite KG accepts source_* kwargs; AGE KG accepts ``context``
+        # (and a ``source`` string). Build kwargs per backend so each
+        # gets only what its signature understands. Backend detection is
+        # cheap (a class check) and avoids the TypeError-on-kwarg drift
+        # that ``MEMPALACE_KG_BACKEND=age`` would otherwise hit.
+        from .knowledge_graph_age import KnowledgeGraphAGE
+
+        if isinstance(kg, KnowledgeGraphAGE):
+            return kg.add_triple(
+                subject,
+                predicate,
+                object,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                source=source_drawer_id or source_file or source_closet,
+                context=context,
+            )
+        return kg.add_triple(
             subject,
             predicate,
             object,
@@ -2454,7 +2483,8 @@ def tool_kg_add(
             source_file=source_file,
             source_drawer_id=source_drawer_id,
         )
-    )
+
+    triple_id = _call_kg(_add)
     return {"success": True, "triple_id": triple_id, "fact": f"{subject} → {predicate} → {object}"}
 
 
@@ -2496,15 +2526,42 @@ def tool_kg_invalidate(subject: str, predicate: str, object: str, ended: str = N
     }
 
 
-def tool_kg_timeline(entity: str = None):
-    """Get chronological timeline of facts, optionally for one entity."""
+def tool_kg_timeline(entity: str = None, as_of: str = None):
+    """Get chronological timeline of facts, optionally for one entity.
+
+    ``as_of`` (techempower-org/mempalace#161) filters to facts whose
+    temporal interval contains the given date/datetime; NULL ends are
+    treated as open intervals (same semantics as ``mempalace_kg_query``).
+    Omit ``as_of`` to see the full timeline including expired facts.
+    """
     if entity is not None:
         try:
             entity = sanitize_kg_value(entity, "entity")
         except ValueError as e:
             return {"error": str(e)}
-    results = _call_kg(lambda kg: kg.timeline(entity))
-    return {"entity": entity or "all", "timeline": results, "count": len(results)}
+    if as_of is not None:
+        try:
+            as_of = sanitize_iso_temporal(as_of, "as_of")
+        except ValueError as e:
+            return {"error": str(e)}
+
+    def _timeline(kg):
+        # AGE backend grew an ``as_of`` parameter (#161); the SQLite
+        # backend's ``timeline()`` accepts only ``entity_name``. Pass the
+        # extra kwarg conditionally so SQLite callers don't TypeError.
+        from .knowledge_graph_age import KnowledgeGraphAGE
+
+        if isinstance(kg, KnowledgeGraphAGE):
+            return kg.timeline(entity, as_of=as_of)
+        return kg.timeline(entity)
+
+    results = _call_kg(_timeline)
+    return {
+        "entity": entity or "all",
+        "as_of": as_of,
+        "timeline": results,
+        "count": len(results),
+    }
 
 
 def tool_kg_stats():
@@ -2989,7 +3046,7 @@ TOOLS = {
         "handler": tool_kg_query,
     },
     "mempalace_kg_add": {
-        "description": "Add a fact to the knowledge graph. Subject → predicate → object with optional time window. E.g. ('Max', 'started_school', 'Year 7', valid_from='2026-09-01'). Pass valid_to to backfill an already-ended historical fact in a single call.",
+        "description": "Add a fact to the knowledge graph. Subject → predicate → object with optional time window. E.g. ('Max', 'started_school', 'Year 7', valid_from='2026-09-01'). Pass valid_to to backfill an already-ended historical fact in a single call. Pass context to anchor the fact to a witnessing drawer/conversation (SPOC).",
         "input_schema": {
             "type": "object",
             "properties": {
@@ -3019,6 +3076,10 @@ TOOLS = {
                     "type": "string",
                     "description": "Drawer ID the fact was extracted from (optional, RFC 002 provenance)",
                 },
+                "context": {
+                    "type": "string",
+                    "description": "SPOC anchor — where this fact was witnessed (e.g. 'drawer:abc123', 'conversation:2026-05-28'). AGE backend only; SQLite ignores. Optional.",
+                },
             },
             "required": ["subject", "predicate", "object"],
         },
@@ -3042,13 +3103,17 @@ TOOLS = {
         "handler": tool_kg_invalidate,
     },
     "mempalace_kg_timeline": {
-        "description": "Chronological timeline of facts. Shows the story of an entity (or everything) in order.",
+        "description": "Chronological timeline of facts. Shows the story of an entity (or everything) in order. Filter by date with as_of to see what was true at a point in time.",
         "input_schema": {
             "type": "object",
             "properties": {
                 "entity": {
                     "type": "string",
                     "description": "Entity to get timeline for (optional — omit for full timeline)",
+                },
+                "as_of": {
+                    "type": "string",
+                    "description": "Date/datetime filter — only facts valid at this time (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, optional). AGE backend only.",
                 },
             },
         },
