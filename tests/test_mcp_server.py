@@ -2461,6 +2461,56 @@ class TestDiaryTools:
             f"chunk_index must be 0..N-1 contiguous; got {indices}"
         )
 
+    def test_diary_write_aaak_entry_stores_raw_in_metadata(
+        self, monkeypatch, config, palace_path, kg
+    ):
+        """#300: AAAK-shape entries get expanded for embedding but the raw
+        AAAK lives in `aaak_source` metadata so diary_read / search hits
+        can surface the verbatim line."""
+        _patch_mcp_server(monkeypatch, config, kg)
+        _client, _col = _get_collection(palace_path, create=True)
+        del _client
+        from mempalace.mcp_server import tool_diary_write
+
+        aaak_entry = "SESSION:2026-05-28|shipped.aaak.expand.fix|FAM: ALC|★★★"
+        r = tool_diary_write(agent_name="TestAgent", entry=aaak_entry, topic="status")
+        assert r["success"] is True
+
+        _client2, col = _get_collection(palace_path)
+        del _client2
+        stored = col.get()
+        metas = stored["metadatas"]
+        docs = stored["documents"]
+        assert len(metas) == 1
+        # Raw AAAK preserved in metadata
+        assert metas[0].get("aaak_source") == aaak_entry
+        # Embedded doc starts with the AAAK and adds a decoded sidecar
+        assert docs[0].startswith(aaak_entry)
+        decoded_tail = docs[0][len(aaak_entry) :]
+        assert "session record:" in decoded_tail
+        assert "notable importance" in decoded_tail
+
+    def test_diary_write_plain_prose_no_aaak_metadata(self, monkeypatch, config, palace_path, kg):
+        """Plain-prose entries are stored verbatim — no `aaak_source` key
+        in metadata, embedding doc identical to entry."""
+        _patch_mcp_server(monkeypatch, config, kg)
+        _client, _col = _get_collection(palace_path, create=True)
+        del _client
+        from mempalace.mcp_server import tool_diary_write
+
+        prose = "Today I shipped the AAAK expand-before-embed change."
+        r = tool_diary_write(agent_name="TestAgent", entry=prose, topic="status")
+        assert r["success"] is True
+
+        _client2, col = _get_collection(palace_path)
+        del _client2
+        stored = col.get()
+        metas = stored["metadatas"]
+        docs = stored["documents"]
+        assert len(metas) == 1
+        assert "aaak_source" not in metas[0]
+        assert docs[0] == prose
+
 
 # ── Cache Invalidation (inode/mtime) ──────────────────────────────────
 

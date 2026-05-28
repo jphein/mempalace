@@ -2701,10 +2701,16 @@ def tool_diary_write(
     )
 
     try:
-        # TODO: Future versions should expand AAAK before embedding to improve
-        # semantic search quality. For now, store raw AAAK in metadata so it's
-        # preserved, and keep the document as-is for embedding (even though
-        # compressed AAAK degrades embedding quality).
+        # #300: AAAK is dense and structural; a frozen sentence-transformer
+        # can't decode entity codes / pipe-prefixed fields / star markers,
+        # so embedding raw AAAK loses signal. ``expand_aaak_for_embedding``
+        # detects AAAK-shape input and sidecars a decoded-prose pass below
+        # the verbatim line. Plain prose is returned untouched.
+        from .dialect import expand_aaak_for_embedding, looks_like_aaak
+
+        embed_text = expand_aaak_for_embedding(entry)
+        entry_was_aaak = looks_like_aaak(entry) and embed_text != entry
+
         base_metadata = {
             "wing": wing,
             "room": room,
@@ -2717,12 +2723,17 @@ def tool_diary_write(
         }
         if session_id:
             base_metadata["session_id"] = session_id
+        # Verbatim guarantee: preserve the raw AAAK source whenever the
+        # embed text was augmented so ``diary_read`` and search hits can
+        # surface the original line, not the decoded sidecar.
+        if entry_was_aaak:
+            base_metadata["aaak_source"] = entry
 
         chunk_size = _config.chunk_size
         if len(entry) <= chunk_size:
             col.add(
                 ids=[entry_id],
-                documents=[entry],
+                documents=[embed_text],
                 metadatas=[{**base_metadata, "chunk_index": 0}],
             )
             logger.info(f"Diary entry: {entry_id} → {wing}/diary/{topic}")

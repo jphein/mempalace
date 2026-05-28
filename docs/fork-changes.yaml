@@ -24,7 +24,46 @@
 
 entries:
 
-  - id: cli-rooms-daemon-route
+  - id: dialect-expand-aaak-for-embedding
+    date: 2026-05-28
+    bucket: Fixed
+    commit: HEAD
+    area: KG
+    summary: "mempalace_diary_write expands AAAK before embedding so dense entries gain semantic-search recall (closes #300)"
+    tests: "15 — tests/test_dialect.py TestExpandAAAKForEmbedding (5× looks_like_aaak detection paths incl. pipe-prefix / star / emotion / plain prose / empty, 8× expand_aaak_for_embedding behaviors incl. plain-pass-through / sidecar shape / star levels / count markers / emotion-asterisk stripping / entity-map / entity-map-absent / no-op when no transformation fired); tests/test_mcp_server.py (2× tool_diary_write — AAAK entry stores aaak_source in metadata + sidecar in embed doc; plain prose stays untouched)"
+    files:
+      - mempalace/dialect.py
+      - mempalace/mcp_server.py
+      - tests/test_dialect.py
+      - tests/test_mcp_server.py
+    body: |
+      AAAK is dense and structural — great for human/LLM eyeballing,
+      weak as embedding input because a frozen sentence-transformer
+      can't decode entity codes (``ALC`` → Alice), pipe-prefixed fields
+      (``FAM:`` → family context), star markers (``★★★`` → notable
+      importance), or count markers (``570x`` → 570 occurrences). The
+      embedding for an AAAK diary entry was thus much weaker than for
+      the same content as prose — recall on diary search was degraded
+      by an unknown but non-trivial amount.
+
+      The TODO that flagged this lived at ``mempalace/mcp_server.py:2704``
+      since ~2026-04 and is now closed. ``tool_diary_write`` calls a
+      new ``mempalace.dialect.expand_aaak_for_embedding`` at the
+      embedding boundary; the function detects AAAK shape and sidecars
+      a decoded-prose rendering below the verbatim line so the embedder
+      sees both. Plain-prose entries pass through untouched.
+
+      The verbatim guarantee is preserved end-to-end: when the entry is
+      AAAK, the raw line is stored unchanged in ``base_metadata["aaak_source"]``
+      so ``diary_read`` and search hits surface the original (not the
+      sidecar). The embedding doc is augmented but never replaced.
+
+      The decoder is heuristic, not authoritative — prefixes, star
+      counts, count markers, and emotion asterisks are mapped to prose;
+      3–5-letter entity codes pass through unchanged unless an explicit
+      ``entity_map`` is provided. This is deliberately conservative: a
+      wrong guess about an entity name would corrupt the embedding more
+      than leaving the code in place would.
     date: 2026-05-28
     bucket: Added
     commit: f3b6738
