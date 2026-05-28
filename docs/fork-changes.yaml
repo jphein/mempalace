@@ -27,7 +27,7 @@ entries:
   - id: rrf-vs-hybrid-rerank-ab-run
     date: 2026-05-28
     bucket: Added
-    commit: TBD
+    commit: ea5d567
     area: Search
     summary: "RRF vs convex-blend rerank — A/B measurement on our corpus (#162)"
     tests: "29 — tests/test_eval_fusion_ab.py (probe-loader accepts v2 dict + legacy list shapes, rejects scalars and dicts-without-probes-list; main rejects --mine-corpus + --palace-path together; main refuses --palace-path without --i-know-the-backfill-is-done; pre-existing run-orchestration + scoring-math tests retained)"

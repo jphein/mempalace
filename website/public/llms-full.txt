@@ -256,7 +256,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | RRF vs convex-blend rerank — A/B measurement on our corpus (#162) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
+| 1 | RRF vs convex-blend rerank — A/B measurement on our corpus (#162) | — | [`ea5d567`](https://github.com/techempower-org/mempalace/commit/ea5d567) |
 | 2 | mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191) | — | [`1ca544b`](https://github.com/techempower-org/mempalace/commit/1ca544b) |
 | 3 | mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191) | — | [`d007b6f`](https://github.com/techempower-org/mempalace/commit/d007b6f) |
 | 4 | mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191) | — | [`853bb25`](https://github.com/techempower-org/mempalace/commit/853bb25) |
