@@ -24,6 +24,50 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
+- **RRF vs convex-blend rerank — A/B measurement on our corpus (#162)** ([`ea5d567`](https://github.com/techempower-org/mempalace/commit/ea5d567))
+  Closes the measurement promised by #162 (the harness landed
+  in #247 — this PR runs it). Adds a self-contained ``--mine-corpus``
+  mode to ``scripts/eval_fusion_ab.py`` that mines the named
+  directory into a fresh local ChromaDB palace and runs the
+  convex-vs-RRF A/B against it. Doesn't touch the production daemon
+  or share GPU capacity with real callers; the prior
+  ``--i-know-the-backfill-is-done`` gate stays on the
+  ``--palace-path`` mode for future daemon-side wiring.
+
+  The probe-set loader now accepts both the v2 dict shape
+  (``{"_meta": ..., "probes": [{query, expected, why}, ...]}``,
+  which the only checked-in probe file ``scripts/probes_v2_git_derived.json``
+  uses) and the legacy list-of-lists shape. This matches the
+  multi-encoder eval harness's loader so probe sets are
+  interchangeable between the two.
+
+  Findings + per-probe data in
+  ``docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.md``
+  (the human-readable summary) and the companion ``.json`` (raw
+  ranks + deltas for follow-up analysis). **One-line:** RRF
+  underperforms the convex blend on this corpus — MRR 0.4075 →
+  0.3758 (−0.0318), Recall@10 52% → 47% (−5 pp), 20 regressions
+  to 10 improvements. The convex blend's vector-heavy weighting
+  (0.6/0.4) is doing real work; RRF's score-scale-agnostic
+  treatment loses strong vector signal in the rank-1-under-convex
+  cases. Convex stays the default; ``fusion_mode="rrf"`` stays
+  shipping as the explicit opt-in for callers who want it.
+
+  Not in scope:
+
+  * Running against the production palace. The daemon's
+    ``/search/hybrid`` hard-codes ``candidate_strategy="hybrid"``
+    and doesn't forward a ``fusion_mode`` body field, so RRF can't
+    be driven remotely today. Filed forward as a palace-daemon
+    change if the A/B result motivates it.
+  * Sweeping the RRF ``k`` smoothing constant. Default 60 (Cormack
+    2009); a sweep is a follow-up if RRF is competitive enough to
+    be worth refining.
+
+  *Tests:* 29 — tests/test_eval_fusion_ab.py (probe-loader accepts v2 dict + legacy list shapes, rejects scalars and dicts-without-probes-list; main rejects --mine-corpus + --palace-path together; main refuses --palace-path without --i-know-the-backfill-is-done; pre-existing run-orchestration + scoring-math tests retained)
+  *Files:* `scripts/eval_fusion_ab.py`, `tests/test_eval_fusion_ab.py`, `docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.md`, `docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.json`
+
+
 - **KG triples gain SPOC context slot + worker auto-derives valid_from from drawer metadata (#161)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
   KG triples now carry a fourth axis — ``context`` — that anchors a
   fact to where it was witnessed (e.g. ``drawer:abc123``,
@@ -64,7 +108,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   additional property on existing edges. Triples written before this
   change continue to read back cleanly with ``context=None``.
 
-  *Tests:* 20 — tests/test_kg_triple_worker.py (context-cypher inclusion/omission, _derive_valid_from priority/None paths, worker anchors context=drawer:id, derives valid_from from metadata timestamp, extractor valid_from wins over drawer timestamp, missing timestamp writes open valid_from); tests/test_knowledge_graph_age.py (add_triple persists context, optional/omitted, query_entity returns context, timeline with as_of, timeline without entity respects as_of, timeline returns context field); tests/test_mcp_server.py (kg_timeline rejects invalid as_of, includes as_of in response, default omits as_of, kg_add rejects context with null bytes)
+  *Tests:* 20 — tests/test_kg_triple_worker.py (context-cypher inclusion/omission, `_derive_valid_from` priority/None paths, worker anchors context=drawer:id, derives valid_from from metadata timestamp, extractor valid_from wins over drawer timestamp, missing timestamp writes open valid_from); tests/test_knowledge_graph_age.py (add_triple persists context, optional/omitted, query_entity returns context, timeline with as_of, timeline without entity respects as_of, timeline returns context field); tests/test_mcp_server.py (kg_timeline rejects invalid as_of, includes as_of in response, default omits as_of, kg_add rejects context with null bytes)
   *Files:* `mempalace/knowledge_graph_age.py`, `mempalace/kg_triple_worker.py`, `mempalace/mcp_server.py`, `tests/test_knowledge_graph_age.py`, `tests/test_kg_triple_worker.py`, `tests/test_mcp_server.py`
 
 
