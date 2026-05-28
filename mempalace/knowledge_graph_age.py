@@ -287,6 +287,7 @@ class KnowledgeGraphAGE:
         valid_from: Optional[str] = None,
         valid_to: Optional[str] = None,
         confidence: float = 1.0,
+        context: Optional[str] = None,
     ) -> None:
         """Write a triple ``(subject)-[relation_type]->(object_)`` to AGE.
 
@@ -299,6 +300,14 @@ class KnowledgeGraphAGE:
         the relation itself is always CREATE'd so multiple temporally-
         distinct facts between the same entities co-exist as parallel
         edges (matches the SQLite KG semantics — see knowledge_graph.py).
+
+        ``context`` is the SPOC fourth-axis: a free-form anchor naming
+        where this fact was witnessed (e.g. ``drawer:abc123``,
+        ``conversation:2026-05-28``). Distinct from ``source`` (which
+        carries provenance for human-curated edits) in that ``context`` is
+        meant to be set by the extraction pipeline on every auto-derived
+        triple. Stored as an optional property and surfaced through every
+        read path. See techempower-org/mempalace#161.
         """
         subject = sanitize_kg_value(subject, "subject")
         relation_type = sanitize_kg_value(relation_type, "relation_type")
@@ -309,6 +318,8 @@ class KnowledgeGraphAGE:
             valid_to = sanitize_iso_temporal(valid_to, "valid_to")
         if valid_from and valid_to and valid_to < valid_from:
             raise ValueError(f"valid_to ({valid_to}) cannot precede valid_from ({valid_from})")
+        if context is not None:
+            context = sanitize_kg_value(context, "context")
 
         # Build the property map keys dynamically — a Cypher property map
         # rejects bare ``NULL`` as a value (``SyntaxError: a name constant
@@ -335,6 +346,9 @@ class KnowledgeGraphAGE:
         if valid_to is not None:
             prop_pairs.append("valid_to: $vt")
             params["vt"] = valid_to
+        if context is not None:
+            prop_pairs.append("context: $ctx")
+            params["ctx"] = context
 
         cypher = f"""
             MERGE (s:Entity {{name: $subj}})
@@ -360,7 +374,9 @@ class KnowledgeGraphAGE:
 
         Empty list when no match. Each triple is a dict with keys:
         ``subject, relation_type, object, source, valid_from, valid_to,
-        confidence``.
+        confidence, context``. ``context`` is the SPOC anchor (see
+        ``add_triple``); ``None`` for triples written before the slot was
+        introduced.
         """
         where_parts = []
         params: dict = {}
@@ -379,7 +395,7 @@ class KnowledgeGraphAGE:
             RETURN s.name AS subject, r.relation_type AS relation_type,
                    o.name AS object, r.source AS source,
                    r.valid_from AS valid_from, r.valid_to AS valid_to,
-                   r.confidence AS confidence
+                   r.confidence AS confidence, r.context AS context
         """
         rows = self._run_cypher(cypher, params, fetch=True)
         return [
@@ -391,6 +407,7 @@ class KnowledgeGraphAGE:
                 "valid_from": self._unwrap_agtype(r[4]),
                 "valid_to": self._unwrap_agtype(r[5]),
                 "confidence": self._unwrap_agtype(r[6]),
+                "context": self._unwrap_agtype(r[7]),
             }
             for r in rows
         ]
@@ -527,7 +544,8 @@ class KnowledgeGraphAGE:
                 RETURN s.name AS subject, r.relation_type AS predicate,
                        o.name AS object,
                        r.valid_from AS valid_from, r.valid_to AS valid_to,
-                       r.confidence AS confidence, r.source AS source
+                       r.confidence AS confidence, r.source AS source,
+                       r.context AS context
                 """,
                 {"name": name, **temporal_params},
                 fetch=True,
@@ -544,6 +562,7 @@ class KnowledgeGraphAGE:
                         "valid_to": vt,
                         "confidence": self._unwrap_agtype(r[5]),
                         "source_closet": self._unwrap_agtype(r[6]),
+                        "context": self._unwrap_agtype(r[7]),
                         "current": vt is None,
                     }
                 )
@@ -556,7 +575,8 @@ class KnowledgeGraphAGE:
                 RETURN s.name AS subject, r.relation_type AS predicate,
                        o.name AS object,
                        r.valid_from AS valid_from, r.valid_to AS valid_to,
-                       r.confidence AS confidence, r.source AS source
+                       r.confidence AS confidence, r.source AS source,
+                       r.context AS context
                 """,
                 {"name": name, **temporal_params},
                 fetch=True,
@@ -573,6 +593,7 @@ class KnowledgeGraphAGE:
                         "valid_to": vt,
                         "confidence": self._unwrap_agtype(r[5]),
                         "source_closet": self._unwrap_agtype(r[6]),
+                        "context": self._unwrap_agtype(r[7]),
                         "current": vt is None,
                     }
                 )
@@ -603,7 +624,8 @@ class KnowledgeGraphAGE:
             WHERE r.relation_type = $pred {temporal_where}
             RETURN s.name AS subject, r.relation_type AS predicate,
                    o.name AS object,
-                   r.valid_from AS valid_from, r.valid_to AS valid_to
+                   r.valid_from AS valid_from, r.valid_to AS valid_to,
+                   r.context AS context
             """,
             params,
             fetch=True,
@@ -615,44 +637,70 @@ class KnowledgeGraphAGE:
                 "object": self._unwrap_agtype(r[2]),
                 "valid_from": self._unwrap_agtype(r[3]),
                 "valid_to": self._unwrap_agtype(r[4]),
+                "context": self._unwrap_agtype(r[5]),
                 "current": self._unwrap_agtype(r[4]) is None,
             }
             for r in rows
         ]
 
-    def timeline(self, entity_name: Optional[str] = None, limit: int = 100) -> list:
+    def timeline(
+        self,
+        entity_name: Optional[str] = None,
+        limit: int = 100,
+        as_of: Optional[str] = None,
+    ) -> list:
         """Return triples in chronological order, optionally filtered by entity.
 
         Mirrors SQLite ``KnowledgeGraph.timeline``. Limit defaults to 100
         for parity. AGE ``ORDER BY ... LIMIT`` works inside cypher() so no
         workaround needed.
+
+        ``as_of`` (P5 / #161) filters to triples whose temporal interval
+        contains the given date; NULL ends are treated as open intervals
+        (same semantics as ``query_triples``). Default (None) returns the
+        full timeline including expired facts.
         """
+        if as_of is not None:
+            as_of = sanitize_iso_temporal(as_of, "as_of")
+        temporal_where = ""
+        temporal_params: dict = {}
+        if as_of is not None:
+            temporal_where = (
+                " AND (r.valid_from IS NULL OR r.valid_from <= $as_of)"
+                " AND (r.valid_to IS NULL OR r.valid_to >= $as_of)"
+            )
+            temporal_params["as_of"] = as_of
+
         if entity_name is not None:
             entity_name = sanitize_kg_value(entity_name, "entity_name")
             rows = self._run_cypher(
-                """
+                f"""
                 MATCH (s:Entity)-[r:RELATION]->(o:Entity)
-                WHERE s.name = $name OR o.name = $name
+                WHERE (s.name = $name OR o.name = $name) {temporal_where}
                 RETURN s.name AS subject, r.relation_type AS predicate,
                        o.name AS object,
-                       r.valid_from AS valid_from, r.valid_to AS valid_to
+                       r.valid_from AS valid_from, r.valid_to AS valid_to,
+                       r.context AS context
                 ORDER BY r.valid_from
                 LIMIT $limit
                 """,
-                {"name": entity_name, "limit": limit},
+                {"name": entity_name, "limit": limit, **temporal_params},
                 fetch=True,
             )
         else:
+            where_clause = f"WHERE 1=1 {temporal_where}".rstrip() if temporal_where else ""
             rows = self._run_cypher(
-                """
+                f"""
                 MATCH (s:Entity)-[r:RELATION]->(o:Entity)
+                {where_clause}
                 RETURN s.name AS subject, r.relation_type AS predicate,
                        o.name AS object,
-                       r.valid_from AS valid_from, r.valid_to AS valid_to
+                       r.valid_from AS valid_from, r.valid_to AS valid_to,
+                       r.context AS context
                 ORDER BY r.valid_from
                 LIMIT $limit
                 """,
-                {"limit": limit},
+                {"limit": limit, **temporal_params},
                 fetch=True,
             )
         return [
@@ -662,6 +710,7 @@ class KnowledgeGraphAGE:
                 "object": self._unwrap_agtype(r[2]),
                 "valid_from": self._unwrap_agtype(r[3]),
                 "valid_to": self._unwrap_agtype(r[4]),
+                "context": self._unwrap_agtype(r[5]),
                 "current": self._unwrap_agtype(r[4]) is None,
             }
             for r in rows

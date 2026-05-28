@@ -24,48 +24,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **RRF vs convex-blend rerank — A/B measurement on our corpus (#162)** ([`ea5d567`](https://github.com/techempower-org/mempalace/commit/ea5d567))
-  Closes the measurement promised by #162 (the harness landed
-  in #247 — this PR runs it). Adds a self-contained ``--mine-corpus``
-  mode to ``scripts/eval_fusion_ab.py`` that mines the named
-  directory into a fresh local ChromaDB palace and runs the
-  convex-vs-RRF A/B against it. Doesn't touch the production daemon
-  or share GPU capacity with real callers; the prior
-  ``--i-know-the-backfill-is-done`` gate stays on the
-  ``--palace-path`` mode for future daemon-side wiring.
+- **KG triples gain SPOC context slot + worker auto-derives valid_from from drawer metadata (#161)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  KG triples now carry a fourth axis — ``context`` — that anchors a
+  fact to where it was witnessed (e.g. ``drawer:abc123``,
+  ``conversation:2026-05-28``). The ``add_triple`` write path on the
+  AGE backend stores it as a property on the ``RELATION`` edge; every
+  read path (``query_triples``, ``query_entity``, ``query_relationship``,
+  ``timeline``) surfaces it in the result dict. Triples written
+  before this slot existed read back with ``context=None``, so
+  consumers don't need a missing-key check.
 
-  The probe-set loader now accepts both the v2 dict shape
-  (``{"_meta": ..., "probes": [{query, expected, why}, ...]}``,
-  which the only checked-in probe file ``scripts/probes_v2_git_derived.json``
-  uses) and the legacy list-of-lists shape. This matches the
-  multi-encoder eval harness's loader so probe sets are
-  interchangeable between the two.
+  The async KG-extraction worker (``kg_triple_worker.py``) now:
 
-  Findings + per-probe data in
-  ``docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.md``
-  (the human-readable summary) and the companion ``.json`` (raw
-  ranks + deltas for follow-up analysis). **One-line:** RRF
-  underperforms the convex blend on this corpus — MRR 0.4075 →
-  0.3758 (−0.0318), Recall@10 52% → 47% (−5 pp), 20 regressions
-  to 10 improvements. The convex blend's vector-heavy weighting
-  (0.6/0.4) is doing real work; RRF's score-scale-agnostic
-  treatment loses strong vector signal in the rank-1-under-convex
-  cases. Convex stays the default; ``fusion_mode="rrf"`` stays
-  shipping as the explicit opt-in for callers who want it.
+  * **Anchors every auto-extracted triple** to its witnessing drawer
+    via ``context=f"drawer:{drawer_id}"`` — the SPOC fourth axis is
+    always populated on auto-derived facts.
+  * **Auto-derives ``valid_from``** from the drawer's metadata
+    when the LLM extractor doesn't supply one. Priority order is
+    ``timestamp`` (sweeper / convo_miner) → ``filed_at`` (legacy diary)
+    → ``session_created_at`` (opencode adapter); first non-empty
+    wins. Missing keys leave ``valid_from`` open, which read paths
+    already treat as "active since forever."
+  * **Defers to the extractor** when it does emit an explicit
+    ``valid_from`` — a date the LLM parsed out of the prose
+    ("starting May 2025") is more specific than the drawer's
+    authored time and takes precedence.
 
-  Not in scope:
+  The MCP-tool surface grew matching parameters:
 
-  * Running against the production palace. The daemon's
-    ``/search/hybrid`` hard-codes ``candidate_strategy="hybrid"``
-    and doesn't forward a ``fusion_mode`` body field, so RRF can't
-    be driven remotely today. Filed forward as a palace-daemon
-    change if the A/B result motivates it.
-  * Sweeping the RRF ``k`` smoothing constant. Default 60 (Cormack
-    2009); a sweep is a follow-up if RRF is competitive enough to
-    be worth refining.
+  * ``mempalace_kg_add`` accepts ``context`` (AGE backend stores;
+    SQLite silently ignores so callers don't need to branch on
+    backend).
+  * ``mempalace_kg_timeline`` accepts ``as_of`` and validates it
+    through the same ISO-8601 gate as ``mempalace_kg_query``. The
+    accepted value round-trips in the response so callers can echo
+    the temporal slice.
 
-  *Tests:* 29 — tests/test_eval_fusion_ab.py (probe-loader accepts v2 dict + legacy list shapes, rejects scalars and dicts-without-probes-list; main rejects --mine-corpus + --palace-path together; main refuses --palace-path without --i-know-the-backfill-is-done; pre-existing run-orchestration + scoring-math tests retained)
-  *Files:* `scripts/eval_fusion_ab.py`, `tests/test_eval_fusion_ab.py`, `docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.md`, `docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.json`
+  No AGE schema migration was needed — the slot is just an
+  additional property on existing edges. Triples written before this
+  change continue to read back cleanly with ``context=None``.
+
+  *Tests:* 20 — tests/test_kg_triple_worker.py (context-cypher inclusion/omission, _derive_valid_from priority/None paths, worker anchors context=drawer:id, derives valid_from from metadata timestamp, extractor valid_from wins over drawer timestamp, missing timestamp writes open valid_from); tests/test_knowledge_graph_age.py (add_triple persists context, optional/omitted, query_entity returns context, timeline with as_of, timeline without entity respects as_of, timeline returns context field); tests/test_mcp_server.py (kg_timeline rejects invalid as_of, includes as_of in response, default omits as_of, kg_add rejects context with null bytes)
+  *Files:* `mempalace/knowledge_graph_age.py`, `mempalace/kg_triple_worker.py`, `mempalace/mcp_server.py`, `tests/test_knowledge_graph_age.py`, `tests/test_kg_triple_worker.py`, `tests/test_mcp_server.py`
 
 
 ## [2026-05-27]

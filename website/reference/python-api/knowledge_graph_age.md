@@ -68,7 +68,7 @@ the instance remains usable for subsequent writes.
 #### `add_triple`
 
 ```python
-def add_triple(self, subject: str, relation_type: str, object_: str, source: Optional[str] = None, valid_from: Optional[str] = None, valid_to: Optional[str] = None, confidence: float = 1.0) -> None
+def add_triple(self, subject: str, relation_type: str, object_: str, source: Optional[str] = None, valid_from: Optional[str] = None, valid_to: Optional[str] = None, confidence: float = 1.0, context: Optional[str] = None) -> None
 ```
 
 Write a triple ``(subject)-[relation_type]->(object_)`` to AGE.
@@ -82,6 +82,14 @@ Entities are MERGE'd (created if absent, reused if present);
 the relation itself is always CREATE'd so multiple temporally-
 distinct facts between the same entities co-exist as parallel
 edges (matches the SQLite KG semantics — see knowledge_graph.py).
+
+``context`` is the SPOC fourth-axis: a free-form anchor naming
+where this fact was witnessed (e.g. ``drawer:abc123``,
+``conversation:2026-05-28``). Distinct from ``source`` (which
+carries provenance for human-curated edits) in that ``context`` is
+meant to be set by the extraction pipeline on every auto-derived
+triple. Stored as an optional property and surfaced through every
+read path. See techempower-org/mempalace#161.
 
 #### `query_triples`
 
@@ -98,7 +106,9 @@ forever; NULL valid_to = still active).
 
 Empty list when no match. Each triple is a dict with keys:
 ``subject, relation_type, object, source, valid_from, valid_to,
-confidence``.
+confidence, context``. ``context`` is the SPOC anchor (see
+``add_triple``); ``None`` for triples written before the slot was
+introduced.
 
 #### `add_entity`
 
@@ -166,7 +176,7 @@ Mirrors SQLite ``KnowledgeGraph.query_relationship``.
 #### `timeline`
 
 ```python
-def timeline(self, entity_name: Optional[str] = None, limit: int = 100) -> list
+def timeline(self, entity_name: Optional[str] = None, limit: int = 100, as_of: Optional[str] = None) -> list
 ```
 
 Return triples in chronological order, optionally filtered by entity.
@@ -174,6 +184,11 @@ Return triples in chronological order, optionally filtered by entity.
 Mirrors SQLite ``KnowledgeGraph.timeline``. Limit defaults to 100
 for parity. AGE ``ORDER BY ... LIMIT`` works inside cypher() so no
 workaround needed.
+
+``as_of`` (P5 / #161) filters to triples whose temporal interval
+contains the given date; NULL ends are treated as open intervals
+(same semantics as ``query_triples``). Default (None) returns the
+full timeline including expired facts.
 
 #### `add_mention`
 

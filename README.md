@@ -27,7 +27,7 @@
 
 ## What this is
 
-A verbatim-first local AI memory system. This fork tracks `upstream/develop` through the v3.3.6 sync (2026-05-24, commit `6957c7e`) and runs in production on a **335K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon). It carries ~574 fork-ahead commits that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. 3676 tests pass on `main`.
+A verbatim-first local AI memory system. This fork tracks `upstream/develop` through the v3.3.6 sync (2026-05-24, commit `6957c7e`) and runs in production on a **335K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon). It carries ~574 fork-ahead commits that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. 3691 tests pass on `main`.
 
 The fork's architectural thinking — the four-layer memory model, the [verbatim-vs-derivative thesis](docs/research/verbatim-vs-derivative-axis.md), design principles, and the two-memory-layer pairing with Auto Dream — lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The new things here are *what we've learned*, not just what we've fixed.
 
@@ -153,7 +153,7 @@ Organized around the [verbatim-vs-derivative axis](docs/ARCHITECTURE.md#1-verbat
 | P2 | Decay / recency weighting (Weibull) | **Shipped** (recency-decay search weighting + `prune --stale-days`) | Fork-side; rerank also tracked upstream |
 | P3 | Feedback loops (rerank + rating MCP tool) | **Shipped** (`mempalace_rate_memory` + bounded rating signal); rerank tracked upstream | Fork-side; see [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md) |
 | P4 | KG auto-population + entity resolution | **Shipped 2026-05-22** | [PR #101](https://github.com/techempower-org/mempalace/pull/101) |
-| P5 | Temporal fact validity (SPOC context slot) | Open, depends on P4 | — |
+| P5 | Temporal fact validity (SPOC context slot) | **Shipped 2026-05-28** (context property on RELATION edges; worker auto-derives `valid_from` from drawer metadata; `as_of` plumbed through `mempalace_kg_timeline`) | [#161](https://github.com/techempower-org/mempalace/issues/161) |
 | P6 | Input sanitization on writes | Low priority while local-only | — |
 | P7 | Alternative storage modes | **Shipped** (pgvector+AGE) | [RFC 001 #743](https://github.com/MemPalace/mempalace/pull/743) |
 | P8 | Corpus partitioning by purpose | On hold | [Design doc](docs/designs/multi-palace-separation.md) |
@@ -201,7 +201,7 @@ Open from this fork as of 2026-05-24. Run `gh pr list --repo MemPalace/mempalace
 
 - **Publish Cat 9 end-to-end results** on the post-migration palace, with adapter parity numbers across the verbatim-first cohort.
 - **Publish the multipass-structural-memory-eval harness** with adapters for MemPalace, Longhand, Celiums, mcp-memory-service.
-- **Land P1 (derive hierarchy from cwd / transcript path) and P5 (temporal fact validity)** — the remaining open planned-work items; P0 (tags), P2 (decay/recency), and P3 (rating feedback) have shipped fork-side.
+- **Land P1 (derive hierarchy from cwd / transcript path)** — the last remaining open planned-work item; P0 (tags), P2 (decay/recency), P3 (rating feedback), P4 (KG auto-population), and P5 (SPOC temporal validity) have shipped fork-side.
 - **Agent-shaped CLI surface** — **shipped.** A fast direct-to-daemon CLI quartet — `mempalace list`, `mempalace graph`, `mempalace cypher`, `mempalace stats` — each with `--json`/`--format json` for non-MCP integration. These skip the MCP/AI round-trip and hit the daemon directly, so they're faster than the equivalent tool call. Prior art: Grafana's [GCX CLI](https://www.infoq.com/news/2026/04/grafana-loki-ai-agents/).
 - **First-class support across AI coding agents** — Claude Code, OpenCode, Cursor, Aider, Gemini CLI, Codex CLI, Warp. Path: upstream's [RFC 002 source-adapter spec](https://github.com/MemPalace/mempalace/pull/990). Three cells: **read** (MCP, already agent-agnostic), **mine** (per-agent via RFC 002), **hook/event** (per-host or mining-on-cron fallback).
 
@@ -237,7 +237,11 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | RRF vs convex-blend rerank — A/B measurement on our corpus (#162) | — | [`ea5d567`](https://github.com/techempower-org/mempalace/commit/ea5d567) |
+<<<<<<< HEAD
+| 1 | optional cross-encoder rerank stage between hybrid fusion and result return (#179) | — | [`b663fde`](https://github.com/techempower-org/mempalace/commit/b663fde) |
+=======
+| 1 | KG triples gain SPOC context slot + worker auto-derives valid_from from drawer metadata (#161) | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
+>>>>>>> 5226178 (feat(kg): SPOC temporal validity — context slot + auto-derived valid_from + as_of timeline)
 | 2 | mempalace bulk-move — multi-drawer metadata relocation by source wing/room (#191) | — | [`1ca544b`](https://github.com/techempower-org/mempalace/commit/1ca544b) |
 | 3 | mempalace move — fast direct-to-daemon single-drawer wing/room relocation (#191) | — | [`d007b6f`](https://github.com/techempower-org/mempalace/commit/d007b6f) |
 | 4 | mempalace stats migrates to GET /stats REST + exposes graph/status sections (#191) | — | [`853bb25`](https://github.com/techempower-org/mempalace/commit/853bb25) |
