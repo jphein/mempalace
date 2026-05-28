@@ -2,6 +2,8 @@
 
 Give your AI a persistent memory -- mine projects and conversations into a searchable palace backed by ChromaDB, with 34 MCP tools, auto-save hooks, and guided skills.
 
+To run without the MCP tool surface (CLI + hooks + skills only), set `mcp_mode: cli-only` in `~/.mempalace/config.json` -- saves ~9 KB context per session, fails open on bad config. See [MCP Integration guide](https://github.com/MemPalace/mempalace/blob/develop/website/guide/mcp-integration.md#cli-only-mode-mcp_mode).
+
 ## Prerequisites
 
 - Python 3.9+

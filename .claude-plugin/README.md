@@ -53,6 +53,16 @@ Set the `MEMPAL_DIR` environment variable to a directory path to automatically r
 
 The plugin automatically configures a local MCP server with 34 tools for storing, searching, and managing memories. No manual MCP setup is required -- `/mempalace:init` handles everything.
 
+### CLI-only mode
+
+To run without the MCP tool surface (saves ~9 KB context per session; hooks and skills keep working unchanged), set `mcp_mode` in `~/.mempalace/config.json`:
+
+```json
+{"mcp_mode": "cli-only"}
+```
+
+Or per-process via the `PALACE_MCP_MODE=cli-only` env var. Fails open to `"all"` on any unknown value or missing config. See [MCP Integration guide](https://github.com/MemPalace/mempalace/blob/develop/website/guide/mcp-integration.md#cli-only-mode-mcp_mode) for the full behavior + when the reconnect is needed.
+
 ## Full Documentation
 
 See the main [README](../README.md) for complete documentation, architecture details, and advanced usage.
