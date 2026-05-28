@@ -24,51 +24,48 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **optional cross-encoder rerank stage between hybrid fusion and result return (#179)** ([`b663fde`](https://github.com/techempower-org/mempalace/commit/b663fde))
-  Adds an opt-in cross-encoder rerank stage to ``search_memories``,
-  positioned **after** the existing hybrid fusion (convex / RRF) and
-  **before** the final ``n_results`` trim. The rerank composes with
-  every ``candidate_strategy`` (vector / union / hybrid) and every
-  ``fusion_mode`` (convex / rrf) — it reorders the already-fused
-  candidate list, never replaces fusion.
+- **RRF vs convex-blend rerank — A/B measurement on our corpus (#162)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  Closes the measurement promised by [#162][162] (the harness landed
+  in #247 — this PR runs it). Adds a self-contained ``--mine-corpus``
+  mode to ``scripts/eval_fusion_ab.py`` that mines the named
+  directory into a fresh local ChromaDB palace and runs the
+  convex-vs-RRF A/B against it. Doesn't touch the production daemon
+  or share GPU capacity with real callers; the prior
+  ``--i-know-the-backfill-is-done`` gate stays on the
+  ``--palace-path`` mode for future daemon-side wiring.
 
-  Default off. Per JP's no-model-at-query-time rule the rerank only
-  fires when the operator explicitly opts in via
-  ``MEMPALACE_RERANK_CROSS_ENCODER=1`` env or
-  ``"cross_encoder_rerank": true`` in ``config.json``. When disabled,
-  the module imports nothing heavy and adds zero query-time cost
-  (``sentence_transformers`` is lazy-imported behind the flag).
+  The probe-set loader now accepts both the v2 dict shape
+  (``{"_meta": ..., "probes": [{query, expected, why}, ...]}``,
+  which the only checked-in probe file ``scripts/probes_v2_git_derived.json``
+  uses) and the legacy list-of-lists shape. This matches the
+  multi-encoder eval harness's loader so probe sets are
+  interchangeable between the two.
 
-  The default model is ``cross-encoder/ms-marco-MiniLM-L-6-v2`` (22M
-  parameters, CPU-friendly, ~90MB to load). The True Memory ablation
-  (``docs/research/2026-05-24-true-memory-comparison.md``) found this
-  cheap reranker captures most of the rerank value — upgrading to
-  ``ms-marco-MiniLM-L-12-v2`` (149M) only moves the needle 1.3pp.
-  Operators can override via ``MEMPALACE_RERANK_CROSS_ENCODER_MODEL``.
-  ``MEMPALACE_RERANK_TOP_N`` (default 25) bounds the rerank window
-  — rerank is a quality lift, not a recall floor, so the tail keeps
-  its fused position.
+  Findings + per-probe data in
+  ``docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.md``
+  (the human-readable summary) and the companion ``.json`` (raw
+  ranks + deltas for follow-up analysis). **One-line:** RRF
+  underperforms the convex blend on this corpus — MRR 0.4075 →
+  0.3758 (−0.0318), Recall@10 52% → 47% (−5 pp), 20 regressions
+  to 10 improvements. The convex blend's vector-heavy weighting
+  (0.6/0.4) is doing real work; RRF's score-scale-agnostic
+  treatment loses strong vector signal in the rank-1-under-convex
+  cases. Convex stays the default; ``fusion_mode="rrf"`` stays
+  shipping as the explicit opt-in for callers who want it.
 
-  Critical change to the trim: ``search_memories`` previously trimmed
-  to ``n_results`` immediately after fusion. The trim now happens
-  after the rerank stage so the rerank can promote a candidate from
-  position 6 to position 1 when the rerank disagrees with fusion —
-  which is the whole point of having a reranker.
+  Not in scope:
 
-  ``sentence-transformers>=2.7`` ships as the new ``[rerank]``
-  optional extra (``pip install mempalace[rerank]``); heavy enough
-  (~2GB with torch) that we don't want it in core.
+  * Running against the production palace. The daemon's
+    ``/search/hybrid`` hard-codes ``candidate_strategy="hybrid"``
+    and doesn't forward a ``fusion_mode`` body field, so RRF can't
+    be driven remotely today. Filed forward as a palace-daemon
+    change if the A/B result motivates it.
+  * Sweeping the RRF ``k`` smoothing constant. Default 60 (Cormack
+    2009); a sweep is a follow-up if RRF is competitive enough to
+    be worth refining.
 
-  The corpus-level A/B is **deferred** — running it now would steal
-  capacity from the in-flight KG backfill + #162 RRF-vs-hybrid A/B.
-  The harness (``scripts/eval_cross_encoder_rerank.py``) is in place
-  and gated by ``--i-know-the-corpus-is-stable`` so it can't
-  accidentally run mid-flight. See
-  ``docs/research/2026-05-28-cross-encoder-rerank.md`` for the
-  measurement plan.
-
-  *Tests:* 40 — tests/test_cross_encoder_rerank.py (env/file-config gating, model/top_n resolution, rerank reorders by score, attaches cross_encoder_score, no input mutation, top-N window honored, top_n<=0 noop, missing-text recall preservation, scorer-exception graceful degrade, stable tie ordering, scorer cache, lazy import) + tests/test_eval_cross_encoder_rerank.py (A/B orchestration, env restoration, refuses to run without --i-know-the-corpus-is-stable)
-  *Files:* `mempalace/cross_encoder_rerank.py`, `mempalace/searcher.py`, `mempalace/config.py`, `pyproject.toml`, `scripts/eval_cross_encoder_rerank.py`, `tests/test_cross_encoder_rerank.py`, `tests/test_eval_cross_encoder_rerank.py`, `docs/research/2026-05-28-cross-encoder-rerank.md`
+  *Tests:* 29 — tests/test_eval_fusion_ab.py (probe-loader accepts v2 dict + legacy list shapes, rejects scalars and dicts-without-probes-list; main rejects --mine-corpus + --palace-path together; main refuses --palace-path without --i-know-the-backfill-is-done; pre-existing run-orchestration + scoring-math tests retained)
+  *Files:* `scripts/eval_fusion_ab.py`, `tests/test_eval_fusion_ab.py`, `docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.md`, `docs/research/2026-05-28-rrf-vs-hybrid-rerank-ab.json`
 
 
 ## [2026-05-27]
