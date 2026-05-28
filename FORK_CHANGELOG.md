@@ -165,6 +165,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **scripts/check-docs.sh finds pytest via main checkout when run from a worktree, fails hard instead of silently skipping test-count check (#311)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+  Working a fork-ahead PR in a worktree (the standard pattern per
+  CLAUDE.md), ``bash scripts/check-docs.sh`` reported "docs clean"
+  even when the README test count was stale — because ``REPO_ROOT``
+  resolves to the worktree directory which has no ``.venv``,
+  ``command -v pytest`` finds nothing in a fresh shell, and step 1
+  silently exits via the ``warn "no pytest available — skipping"``
+  branch. CI then failed the same check on push (CI installs deps
+  fresh, so ``pytest`` is on PATH there).
+
+  The fallback chain is now: ``$REPO_ROOT/.venv/bin/pytest`` →
+  ``$(git rev-parse --git-common-dir)/../.venv/bin/pytest`` (the
+  main checkout's venv, found via the worktree's git common dir)
+  → ``$(command -v pytest)``. Missing pytest in all three locations
+  now fails hard with an install hint instead of warning-and-skipping;
+  a silent skip lets stale test counts reach CI, and re-running the
+  check in CI to discover this is a worse signal than failing
+  locally with a clear remediation.
+
+  *Files:* `scripts/check-docs.sh`
+
+
 - **kg_triple_worker retries add_triple within-worker on transient psycopg errors instead of abandoning to lease-reclaim (#298)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
   When postgres dropped a connection mid-``add_triple`` (network
   blip, OOM-restart, statement-timeout fire) the worker would
