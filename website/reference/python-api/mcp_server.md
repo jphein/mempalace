@@ -345,6 +345,17 @@ def tool_kg_stats()
 
 Knowledge graph overview: entities, triples, relationship types.
 
+Returns a structured error envelope on transient postgres failures
+(the connection dropped between `_call_kg` opening the handle and
+`kg.stats()` finishing its query — typically caused by a postgres
+OOM-kill or restart under load). The caller sees
+``&#123;"error": "backend_unavailable", "retryable": True, ...}`` and can
+surface "try again in a moment" instead of an opaque -32000
+internal error. See techempower-org/mempalace#299.
+
+Non-transient errors (cypher syntax, value-validation, schema
+mismatch) still propagate — those need a real fix, not a retry.
+
 ### `tool_diary_write`
 
 ```python

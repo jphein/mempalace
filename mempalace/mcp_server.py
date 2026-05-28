@@ -2565,8 +2565,51 @@ def tool_kg_timeline(entity: str = None, as_of: str = None):
 
 
 def tool_kg_stats():
-    """Knowledge graph overview: entities, triples, relationship types."""
-    return _call_kg(lambda kg: kg.stats())
+    """Knowledge graph overview: entities, triples, relationship types.
+
+    Returns a structured error envelope on transient postgres failures
+    (the connection dropped between `_call_kg` opening the handle and
+    `kg.stats()` finishing its query — typically caused by a postgres
+    OOM-kill or restart under load). The caller sees
+    ``{"error": "backend_unavailable", "retryable": True, ...}`` and can
+    surface "try again in a moment" instead of an opaque -32000
+    internal error. See techempower-org/mempalace#299.
+
+    Non-transient errors (cypher syntax, value-validation, schema
+    mismatch) still propagate — those need a real fix, not a retry.
+    """
+    try:
+        return _call_kg(lambda kg: kg.stats())
+    except Exception as e:  # noqa: BLE001
+        if _is_transient_postgres_error(e):
+            logger.warning("mempalace_kg_stats: backend transiently unavailable: %s", e)
+            return {
+                "error": "backend_unavailable",
+                "detail": str(e),
+                "retryable": True,
+            }
+        raise
+
+
+def _is_transient_postgres_error(exc: BaseException) -> bool:
+    """True when ``exc`` is a psycopg connection-dropped error.
+
+    Matches the same two error families ``kg_triple_worker._execute_with_retry``
+    catches (techempower-org/mempalace#298): ``OperationalError`` (server
+    closed the connection, OOM-restart, network blip) and
+    ``InterfaceError`` (the connection is closed, pool returned a dead
+    handle). Other psycopg errors — ``DataError``, ``ProgrammingError``
+    on the postgres side, syntax errors — are bugs, not transient
+    backend state, and should propagate.
+
+    Returns False if psycopg isn't importable (sqlite-only deployments
+    can't have postgres-transient errors).
+    """
+    try:
+        import psycopg
+    except ImportError:
+        return False
+    return isinstance(exc, (psycopg.OperationalError, psycopg.InterfaceError))
 
 
 # ==================== AGENT DIARY ====================
