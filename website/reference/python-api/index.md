@@ -33,7 +33,10 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.hallways`](./hallways) — Hallways — within-wing entity-to-entity connectors.
 - [`mempalace.hooks_cli`](./hooks_cli) — Hook logic for MemPalace — Python implementation of session-start, stop, and precompact hooks.
 - [`mempalace.instructions_cli`](./instructions_cli) — Instruction text output for MemPalace CLI commands.
+- [`mempalace.kg_canonical_vocab`](./kg_canonical_vocab) — Closed-vocabulary predicate mapping spike (issue #72).
+- [`mempalace.kg_canonical_writepass`](./kg_canonical_writepass) — Guarded post-extraction canonical-mapping write pass (issue #72, approach a).
 - [`mempalace.kg_llm_extractor`](./kg_llm_extractor) — LLM-based triple extractor for the async KG worker.
+- [`mempalace.kg_predicate_norm`](./kg_predicate_norm) — Predicate normalization for the AGE knowledge graph (issue #50).
 - [`mempalace.kg_triple_worker`](./kg_triple_worker) — Async worker that drains ``mempalace_kg_extraction_queue``.
 - [`mempalace.kg_writethrough`](./kg_writethrough) — KG write-through hooks for PostgresCollection drawer writes.
 - [`mempalace.knowledge_graph`](./knowledge_graph) — knowledge_graph.py — Temporal Entity-Relationship Graph for MemPalace

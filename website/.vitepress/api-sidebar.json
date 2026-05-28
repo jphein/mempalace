@@ -100,8 +100,20 @@
         "link": "/reference/python-api/instructions_cli"
       },
       {
+        "text": "mempalace.kg_canonical_vocab",
+        "link": "/reference/python-api/kg_canonical_vocab"
+      },
+      {
+        "text": "mempalace.kg_canonical_writepass",
+        "link": "/reference/python-api/kg_canonical_writepass"
+      },
+      {
         "text": "mempalace.kg_llm_extractor",
         "link": "/reference/python-api/kg_llm_extractor"
+      },
+      {
+        "text": "mempalace.kg_predicate_norm",
+        "link": "/reference/python-api/kg_predicate_norm"
       },
       {
         "text": "mempalace.kg_triple_worker",

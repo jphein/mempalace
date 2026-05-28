@@ -44,15 +44,16 @@ from typing import Any, Awaitable, Callable, Optional
 from .kg_llm_extractor import extract_triples
 from .knowledge_graph_age import _cypher_literal, _inline_cypher_params
 
-# Canonical predicate mapping (palace-daemon #72b / mempalace #278). The seam
-# is a pure, env-gated decision function owned by palace-daemon: when
-# PALACE_KG_CANONICAL_MAPPING is unset (default), map_for_write returns
-# pass-through, so importing it changes nothing until the flag is flipped.
-# Optional-import + identity fallback lets mempalace's tests (and any env
-# without palace-daemon on sys.path) keep working — production workers run in
-# the daemon venv where the import resolves.
+# Canonical predicate mapping (mempalace #281). The seam is a pure, env-gated
+# decision function: when PALACE_KG_CANONICAL_MAPPING is unset (default),
+# map_for_write returns pass-through, so importing it changes nothing until
+# the flag is flipped. The modules now live inside the mempalace package
+# (ported from palace-daemon in #281) so the import is package-relative and
+# immune to PYTHONPATH stripping in mempalace/__init__.py. The try/except
+# stays as defense-in-depth for older mid-migration deploys; in modern
+# installs the relative import always resolves.
 try:
-    from kg_canonical_writepass import MappedPredicate, map_for_write
+    from .kg_canonical_writepass import MappedPredicate, map_for_write
 except ImportError:
 
     @dataclass(frozen=True)
