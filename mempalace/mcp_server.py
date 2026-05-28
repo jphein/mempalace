@@ -1297,6 +1297,7 @@ def tool_search(
     min_similarity: float = None,
     context: str = None,
     candidate_strategy: str = "hybrid",
+    fusion_mode: str = "convex",
     include_trace: bool = False,
 ):
     limit = max(1, min(limit, _MAX_RESULTS))
@@ -1329,6 +1330,7 @@ def tool_search(
         vector_disabled=_vector_disabled,
         collection_name=_config.collection_name,
         candidate_strategy=candidate_strategy,
+        fusion_mode=fusion_mode,
     )
     # Attach per-source trace if requested (Phase 4 hybrid retrieval).
     # Surfaces matched_via counts so callers can debug which channel
@@ -1339,6 +1341,7 @@ def tool_search(
         sources = _Counter(r.get("matched_via", "vector") for r in result["results"])
         result["trace"] = {
             "candidate_strategy": candidate_strategy,
+            "fusion_mode": fusion_mode,
             "sources": dict(sources),
         }
     if _is_transient_index_error(result):
@@ -3341,6 +3344,11 @@ TOOLS = {
                     "type": "string",
                     "description": "Candidate selection: 'vector', 'union' (vector + BM25), or 'hybrid' (default, vector + BM25 + graph).",
                     "enum": ["vector", "union", "hybrid"],
+                },
+                "fusion_mode": {
+                    "type": "string",
+                    "description": "Fusion algorithm for the final ranking — 'convex' (default, weighted vec+BM25) or 'rrf' (Reciprocal Rank Fusion).",
+                    "enum": ["convex", "rrf"],
                 },
                 "include_trace": {
                     "type": "boolean",
