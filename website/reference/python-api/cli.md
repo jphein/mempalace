@@ -167,6 +167,11 @@ def cmd_wakeup(args)
 
 Show L0 (identity) + L1 (essential story) — the wake-up context.
 
+Daemon-routes when ``_daemon_strict()`` is on and the user didn't
+pass ``--palace`` (#285). The daemon-native ``mempalace_wakeup``
+tool (palace-daemon #96) returns ``&#123;text, tokens, wing}``; we
+print in the same shape as the local-path fallback below.
+
 ### `cmd_split`
 
 ```python
@@ -215,7 +220,10 @@ rooms without breaking the DB. ON UPDATE CASCADE on the FK makes
 renames safe (all drawers auto-update); removes fail if any drawer
 still in the target room.
 
-Requires postgres backend + MEMPALACE_POSTGRES_DSN env var.
+Daemon-routes when ``_daemon_strict()`` is on (#285). palace-daemon
+PR #96 added the four ``mempalace_rooms_&#123;list,add,rename,remove}``
+tools that wrap the same SQL the local path runs. When daemon-strict
+is off, falls back to direct postgres via ``MEMPALACE_POSTGRES_DSN``.
 
 ### `cmd_purge`
 
@@ -301,6 +309,11 @@ for ``mempalace purge --source-file &lt;path>``.
 
 Skips drawers without a ``source_file`` metadata key (typically
 diary entries, kg drawers, manually-added entries).
+
+Daemon-routes when ``_daemon_strict()`` is on and ``--palace`` was
+not given (#285). palace-daemon's ``mempalace_mined`` tool (PR #96)
+returns the same ``&#123;sources_by_wing, wing_filter, total_wings,
+total_sources}`` shape the JSON path emits locally.
 
 ### `cmd_stats`
 

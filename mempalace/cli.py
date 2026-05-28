@@ -2971,6 +2971,93 @@ def cmd_migrate_to_postgres(args):
     )
 
 
+def _cmd_rooms_via_daemon(cmd: str, args) -> None:
+    """Route ``mempalace rooms <cmd>`` to palace-daemon's MCP tools (#285).
+
+    palace-daemon PR #96 added the four daemon-native tools we call here.
+    Each returns a small JSON envelope; we format the same human shape the
+    local postgres path produces so consumers can't tell the routing
+    changed (mod the cache-invalidation hint, which the daemon side
+    handles automatically).
+    """
+    if cmd == "list":
+        try:
+            rows = _call_daemon_tool("mempalace_rooms_list", {})
+        except DaemonError as e:
+            print(f"\n  ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
+        if not isinstance(rows, list) or not rows:
+            print("(no canonical rooms registered)")
+            return
+        print(f"{'name':14}  {'added_at':25}  description")
+        print("-" * 80)
+        for row in rows:
+            name = row.get("name", "")
+            desc = row.get("description") or ""
+            added_at = row.get("added_at") or ""
+            # Daemon returns ISO-ish timestamp string; trim to date for
+            # parity with the local datetime.strftime('%Y-%m-%d').
+            ts = added_at.split(" ")[0] if isinstance(added_at, str) and added_at else ""
+            print(f"{name:14}  {ts:25}  {desc}")
+        return
+
+    if cmd == "add":
+        name = args.name.strip().lower()
+        if not name or not name.replace("_", "").isalnum():
+            print(f"error: room name must be lowercase snake_case alphanumeric, got {args.name!r}")
+            sys.exit(1)
+        try:
+            payload = {"name": name}
+            if getattr(args, "description", None):
+                payload["description"] = args.description
+            data = _call_daemon_tool("mempalace_rooms_add", payload)
+        except DaemonError as e:
+            print(f"\n  ERROR: {e}", file=sys.stderr)
+            sys.exit(2)
+        action = data.get("action", "added")
+        verb = "added" if action == "added" else "updated description for"
+        print(f"{verb} canonical room {name!r}")
+        return
+
+    if cmd == "rename":
+        old = args.old.strip().lower()
+        new = args.new.strip().lower()
+        if not new.replace("_", "").isalnum():
+            print(
+                f"error: new room name must be lowercase snake_case alphanumeric, got {args.new!r}"
+            )
+            sys.exit(1)
+        try:
+            data = _call_daemon_tool("mempalace_rooms_rename", {"old": old, "new": new})
+        except DaemonError as e:
+            # Daemon's -32602 for "no canonical room named X" surfaces here.
+            print(f"\n  ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+        affected = data.get("affected_drawers", 0)
+        print(f"renamed canonical room {old!r} → {new!r} ({affected:,} drawers cascade-renamed)")
+        return
+
+    if cmd == "remove":
+        name = args.name.strip().lower()
+        try:
+            data = _call_daemon_tool("mempalace_rooms_remove", {"name": name})
+        except DaemonError as e:
+            # The daemon refuses removes whose rooms still have drawers; the
+            # error message includes "affected_drawers" — surface verbatim.
+            print(f"\n  ERROR: {e}", file=sys.stderr)
+            sys.exit(1)
+        if data.get("removed"):
+            print(f"removed canonical room {name!r}")
+        else:
+            # Defensive: daemon returned ok but didn't confirm removal.
+            print(f"error: no canonical room named {name!r}")
+            sys.exit(1)
+        return
+
+    print(f"error: unknown rooms subcommand {cmd!r}")
+    sys.exit(1)
+
+
 def cmd_rooms(args):
     """Manage the canonical room set (mempalace_canonical_rooms table).
 
@@ -2980,8 +3067,17 @@ def cmd_rooms(args):
     renames safe (all drawers auto-update); removes fail if any drawer
     still in the target room.
 
-    Requires postgres backend + MEMPALACE_POSTGRES_DSN env var.
+    Daemon-routes when ``_daemon_strict()`` is on (#285). palace-daemon
+    PR #96 added the four ``mempalace_rooms_{list,add,rename,remove}``
+    tools that wrap the same SQL the local path runs. When daemon-strict
+    is off, falls back to direct postgres via ``MEMPALACE_POSTGRES_DSN``.
     """
+    cmd = getattr(args, "rooms_cmd", None)
+
+    if _daemon_strict():
+        _cmd_rooms_via_daemon(cmd, args)
+        return
+
     try:
         import psycopg as psycopg2  # noqa: F401
     except ImportError:
@@ -2996,8 +3092,6 @@ def cmd_rooms(args):
     if not dsn:
         print("error: MEMPALACE_POSTGRES_DSN env var is not set", file=sys.stderr)
         sys.exit(1)
-
-    cmd = getattr(args, "rooms_cmd", None)
     try:
         with psycopg2.connect(dsn) as conn:
             conn.autocommit = True
