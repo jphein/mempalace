@@ -32,6 +32,42 @@ Now your AI has all 34 tools available. Ask it anything:
 
 Claude calls `mempalace_search` automatically, gets verbatim results, and answers you.
 
+## CLI-only mode (`mcp_mode`)
+
+If you want to run the palace **without** loading the 34-tool MCP surface — to save context window, run hooks + skills only, or drive everything from the CLI — set `mcp_mode` to `cli-only`.
+
+**Config file** (default location `~/.mempalace/config.json`):
+
+```json
+{
+  "mcp_mode": "cli-only"
+}
+```
+
+Or per-process via env (takes precedence over the config file):
+
+```bash
+PALACE_MCP_MODE=cli-only
+```
+
+Valid values: `"all"` (default — full 34-tool surface) and `"cli-only"`. Anything else — typo, missing config, garbled JSON — **fails open** to `"all"`, so a config bug never silently disables the tools.
+
+### What `cli-only` does
+
+- **MCP `tools/list` returns empty** — the proxy short-circuits without forwarding to the daemon. Saves ~9 KB of tool-schema context per session.
+- **`tools/call` returns the canonical error**: *"MCP tools are disabled (mcp_mode=cli-only). Use the mempalace CLI, or set mcp_mode=all and reconnect."*
+- **Hooks keep working** — auto-save, writethrough, and session-start hooks route through `palace-daemon/clients/hook.py` over HTTP, not through MCP.
+- **Skills keep working** — markdown skills load via the harness, independent of MCP.
+- The full palace is still reachable from the CLI: `mempalace search`, `mempalace graph`, `mempalace wake-up`, `mempalace status`, and so on. Run `mempalace --help` for the full surface.
+
+### When the change takes effect
+
+The MCP client (Claude Code, Codex) reads `tools/list` **once per session** and caches it. After flipping the flag, an `/mcp` reconnect or a new session is needed for the tool list to actually disappear from the context window. The proxy reports the resolved mode on stderr at connect time so you can confirm:
+
+```
+palace-daemon: connected at http://localhost:8085 (mcp_mode=cli-only)
+```
+
 ## Compatible Tools
 
 MemPalace works with any tool that supports MCP:
