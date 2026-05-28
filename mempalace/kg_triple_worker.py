@@ -653,9 +653,14 @@ async def _process_one(
                 # erroring so stats reflect only triples that actually landed.
                 continue
             try:
+                # Defense in depth: MappedPredicate.relation_type is typed
+                # Optional[str]; the daemon's mapper guarantees non-None when
+                # dropped=False, but a buggy mapper / future change could
+                # violate that and a bare NULL would crash the Cypher property
+                # map. Fall back to the raw predicate so a write still lands.
                 await kg.add_triple(
                     t.subject,
-                    mapped.relation_type,
+                    mapped.relation_type or t.predicate,
                     t.object,
                     source=f"drawer:{drawer.drawer_id}",
                     valid_from=t.valid_from,
