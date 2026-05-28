@@ -818,6 +818,68 @@ def test_run_worker_skips_dropped_triples(monkeypatch):
     assert queue_row.error is None
 
 
+def test_canonical_mapping_import_survives_pythonpath_strip():
+    """Regression for #281: with the canonical-mapping modules now living
+    inside the mempalace package, the worker's import resolves cleanly even
+    when mempalace's defensive PYTHONPATH-strip
+    (``_strip_leaked_pythonpath_from_sys_path``) runs at import time.
+
+    Pre-#281 the worker did ``from kg_canonical_writepass import …`` at the
+    top level, which depended on palace-daemon's source being on PYTHONPATH.
+    The strip removed that entry before the import ran, the ImportError was
+    swallowed by the identity fallback, and ``mapping_enabled() == True``
+    became a silent no-op — no ``raw_relation_type`` ever landed on edges.
+
+    The acceptance assertion: in a fresh subprocess with PYTHONPATH explicitly
+    cleared, ``map_for_write`` and ``MappedPredicate`` resolve to the **real**
+    implementations from ``mempalace.kg_canonical_writepass`` (not the
+    ``except ImportError`` identity stubs in ``kg_triple_worker``), AND with
+    the env flag flipped the seam returns a non-pass-through result.
+    """
+    import os
+    import subprocess
+    import sys
+    import textwrap
+
+    script = textwrap.dedent(
+        """
+        import os
+        from mempalace import kg_triple_worker as kw
+        from mempalace import kg_canonical_writepass as wp
+
+        # Same class object → the package-relative import succeeded, the
+        # ImportError fallback in kg_triple_worker did not fire.
+        assert kw.MappedPredicate is wp.MappedPredicate, (
+            "kg_triple_worker fell back to the identity stub — the package-"
+            "relative import of kg_canonical_writepass did not resolve."
+        )
+        assert kw.map_for_write is wp.map_for_write, (
+            "kg_triple_worker.map_for_write is not the real implementation."
+        )
+
+        # With the flag on, the seam is live (no longer silent pass-through).
+        assert wp.mapping_enabled() is True
+        print("OK")
+        """
+    )
+    # Strip PYTHONPATH so the only way the import can succeed is via the
+    # installed mempalace package — proving the fix doesn't lean on the env
+    # that the strip-defense removes.
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH",)}
+    env["PALACE_KG_CANONICAL_MAPPING"] = "1"
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=30,
+    )
+    assert result.returncode == 0, (
+        f"subprocess failed: stdout={result.stdout!r} stderr={result.stderr!r}"
+    )
+    assert "OK" in result.stdout
+
+
 def test_run_worker_error_path_marks_and_requeues():
     """If the LLM extraction raises, the drawer's started_at is cleared
     so it can be claimed again on the next cycle."""
