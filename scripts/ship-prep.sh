@@ -4,15 +4,17 @@
 # without manual rebase-side work.
 #
 # What it does:
-#   1. Find pytest (same fallback chain as scripts/check-docs.sh — main
+#   1. Run scripts/maintain-fork-changes.py to resolve any stuck
+#      `commit: HEAD` placeholders and de-duplicate id-clashes (#316).
+#   2. Find pytest (same fallback chain as scripts/check-docs.sh — main
 #      checkout's venv when the worktree has none).
-#   2. Count tests via `pytest --collect-only -q`.
-#   3. Rewrite the "<N> tests pass on `main`" phrase in README.md to
+#   3. Count tests via `pytest --collect-only -q`.
+#   4. Rewrite the "<N> tests pass on `main`" phrase in README.md to
 #      match (idempotent — does nothing if already correct).
-#   4. Run scripts/render-docs.py --target all  (FORK_CHANGELOG + README table)
-#   5. Run scripts/render-llms-full.py          (llms-full.txt)
-#   6. Run scripts/render-api-docs.py           (website/reference/python-api/)
-#   7. Run scripts/check-docs.sh to verify the result is clean.
+#   5. Run scripts/render-docs.py --target all  (FORK_CHANGELOG + README table)
+#   6. Run scripts/render-llms-full.py          (llms-full.txt)
+#   7. Run scripts/render-api-docs.py           (website/reference/python-api/)
+#   8. Run scripts/check-docs.sh to verify the result is clean.
 #
 # Exit codes:
 #   0 — everything clean and ready to commit
@@ -57,8 +59,13 @@ if [ -z "$pytest_bin" ] || [ ! -x "$pytest_bin" ]; then
     exit 2
 fi
 
-# ── 1. test count bump ──────────────────────────────────────────────────
-step "1/5  README test count"
+# ── 1. fork-changes.yaml maintenance (HEAD resolution + de-dup, #316) ──
+step "1/6  docs/fork-changes.yaml maintenance"
+python scripts/maintain-fork-changes.py || fail "maintain-fork-changes.py failed"
+ok "fork-changes.yaml clean"
+
+# ── 2. test count bump ──────────────────────────────────────────────────
+step "2/6  README test count"
 actual_count=$("$pytest_bin" --collect-only -q 2>/dev/null \
     | grep -E "[0-9]+/[0-9]+ tests collected" \
     | head -1 | awk -F'/' '{print $1}' || echo "")
@@ -80,27 +87,27 @@ else
     ok "bumped README $readme_count → $actual_count"
 fi
 
-# ── 2. render-docs.py (FORK_CHANGELOG + README table) ───────────────────
-step "2/5  scripts/render-docs.py --target all"
+# ── 3. render-docs.py (FORK_CHANGELOG + README table) ───────────────────
+step "3/6  scripts/render-docs.py --target all"
 python scripts/render-docs.py --target all || fail "render-docs.py failed"
 ok "rendered FORK_CHANGELOG.md + README table"
 
-# ── 3. render-llms-full.py ──────────────────────────────────────────────
-step "3/5  scripts/render-llms-full.py"
+# ── 4. render-llms-full.py ──────────────────────────────────────────────
+step "4/6  scripts/render-llms-full.py"
 python scripts/render-llms-full.py || fail "render-llms-full.py failed"
 ok "rendered website/public/llms-full.txt"
 
-# ── 4. render-api-docs.py ───────────────────────────────────────────────
-step "4/5  scripts/render-api-docs.py"
+# ── 5. render-api-docs.py ───────────────────────────────────────────────
+step "5/6  scripts/render-api-docs.py"
 python scripts/render-api-docs.py || fail "render-api-docs.py failed"
 ok "rendered website/reference/python-api/"
 
-# ── 5. final verification ───────────────────────────────────────────────
+# ── 6. final verification ───────────────────────────────────────────────
 if [ "$run_check" -eq 0 ]; then
-    step "5/5  scripts/check-docs.sh (SKIPPED via --no-check)"
+    step "6/6  scripts/check-docs.sh (SKIPPED via --no-check)"
     ok "skipped"
 else
-    step "5/5  scripts/check-docs.sh"
+    step "6/6  scripts/check-docs.sh"
     if bash scripts/check-docs.sh --quiet; then
         ok "docs clean — ready to commit"
     else
