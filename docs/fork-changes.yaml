@@ -30,7 +30,7 @@ entries:
     commit: HEAD
     area: Search
     summary: "pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308)"
-    tests: "19 + 1 opt-in smoke — tests/test_adaptmem_ft.py (EmbeddingFunction-subclass identity / embed_query presence, name()=='default' spoof, lazy load on first __call__, MEMPALACE_ADAPTMEM_PATH resolution from env→config→None, dispatch from get_embedding_function, sentence_transformers lazy-import error message, device resolution, class-cache isinstance stability; smoke test loads the real checkpoint when a complete one is present, skips gracefully on the config+tokenizer-only ft-300-base export)"
+    tests: "19 + 1 opt-in smoke — tests/test_adaptmem_ft.py (EmbeddingFunction-subclass identity / embed_query presence, name()=='default' spoof, lazy load on first encode call, MEMPALACE_ADAPTMEM_PATH resolution from env→config→None, dispatch from get_embedding_function, sentence_transformers lazy-import error message, device resolution, class-cache isinstance stability; smoke test loads the real checkpoint when a complete one is present, skips gracefully on the config+tokenizer-only ft-300-base export)"
     files:
       - mempalace/embedding.py
       - mempalace/config.py

@@ -52,7 +52,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   checkpoint as-is; the smoke test skips until a complete checkpoint
   lands. Tracked on the adaptmem side.
 
-  *Tests:* 19 + 1 opt-in smoke — tests/test_adaptmem_ft.py (EmbeddingFunction-subclass identity / embed_query presence, name()=='default' spoof, lazy load on first __call__, MEMPALACE_ADAPTMEM_PATH resolution from env→config→None, dispatch from get_embedding_function, sentence_transformers lazy-import error message, device resolution, class-cache isinstance stability; smoke test loads the real checkpoint when a complete one is present, skips gracefully on the config+tokenizer-only ft-300-base export)
+  *Tests:* 19 + 1 opt-in smoke — tests/test_adaptmem_ft.py (EmbeddingFunction-subclass identity / embed_query presence, name()=='default' spoof, lazy load on first encode call, MEMPALACE_ADAPTMEM_PATH resolution from env→config→None, dispatch from get_embedding_function, sentence_transformers lazy-import error message, device resolution, class-cache isinstance stability; smoke test loads the real checkpoint when a complete one is present, skips gracefully on the config+tokenizer-only ft-300-base export)
   *Files:* `mempalace/embedding.py`, `mempalace/config.py`, `tests/test_adaptmem_ft.py`
 
 
