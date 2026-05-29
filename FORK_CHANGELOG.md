@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+- **pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308)** ([`5fba6d8`](https://github.com/techempower-org/mempalace/commit/5fba6d8))
   The fork's encoder layer (``mempalace/embedding.py``) previously
   selected between ``minilm`` and ``embeddinggemma`` via
   ``MEMPALACE_EMBEDDING_MODEL``. AdaptMem-trained encoders (FT on
