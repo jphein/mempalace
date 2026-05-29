@@ -7,7 +7,7 @@ Embedding function factory with hardware acceleration.
 Returns a ChromaDB-compatible embedding function bound to a user-selected
 ONNX Runtime execution provider.
 
-Two embedding models are available, selected via ``MEMPALACE_EMBEDDING_MODEL``
+Three embedding models are available, selected via ``MEMPALACE_EMBEDDING_MODEL``
 or ``embedding_model`` in ``~/.mempalace/config.json``:
 
 * ``minilm`` (default) — ``all-MiniLM-L6-v2``, 384-dim, English-only training.
@@ -19,6 +19,12 @@ or ``embedding_model`` in ``~/.mempalace/config.json``:
   model is lazy-downloaded from HuggingFace on first use. Switching models
   on an existing palace requires ``mempalace repair rebuild-index``
   (different vector space).
+* ``adaptmem_ft`` — a SentenceTransformer-shaped fine-tuned checkpoint from
+  techempower-org/adaptmem, loaded from a local path (``MEMPALACE_ADAPTMEM_PATH``
+  or ``adaptmem_path`` in config). Nothing is downloaded. Same 384-dim shape as
+  MiniLM, so it drops into existing collections, but it is a different vector
+  space — switching requires ``mempalace repair rebuild-index``. Requires the
+  ``sentence-transformers`` package.
 
 Supported devices (env ``MEMPALACE_EMBEDDING_DEVICE`` or ``embedding_device``
 in ``~/.mempalace/config.json``):

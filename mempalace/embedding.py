@@ -3,7 +3,7 @@
 Returns a ChromaDB-compatible embedding function bound to a user-selected
 ONNX Runtime execution provider.
 
-Two embedding models are available, selected via ``MEMPALACE_EMBEDDING_MODEL``
+Three embedding models are available, selected via ``MEMPALACE_EMBEDDING_MODEL``
 or ``embedding_model`` in ``~/.mempalace/config.json``:
 
 * ``minilm`` (default) — ``all-MiniLM-L6-v2``, 384-dim, English-only training.
@@ -15,6 +15,12 @@ or ``embedding_model`` in ``~/.mempalace/config.json``:
   model is lazy-downloaded from HuggingFace on first use. Switching models
   on an existing palace requires ``mempalace repair rebuild-index``
   (different vector space).
+* ``adaptmem_ft`` — a SentenceTransformer-shaped fine-tuned checkpoint from
+  techempower-org/adaptmem, loaded from a local path (``MEMPALACE_ADAPTMEM_PATH``
+  or ``adaptmem_path`` in config). Nothing is downloaded. Same 384-dim shape as
+  MiniLM, so it drops into existing collections, but it is a different vector
+  space — switching requires ``mempalace repair rebuild-index``. Requires the
+  ``sentence-transformers`` package.
 
 Supported devices (env ``MEMPALACE_EMBEDDING_DEVICE`` or ``embedding_device``
 in ``~/.mempalace/config.json``):
@@ -248,6 +254,118 @@ class EmbeddinggemmaONNX:
         return (sent_emb / norms).tolist()
 
 
+# AdaptMem fine-tuned encoder — a SentenceTransformer-shaped checkpoint trained
+# by techempower-org/adaptmem (FT-300 on LongMemEval). Loaded from a local path
+# (``MEMPALACE_ADAPTMEM_PATH``); nothing is downloaded. The FT models are
+# all-MiniLM-L6-v2-shaped (384-dim), so the resulting vectors drop into existing
+# 384-dim ChromaDB collections without a schema change — but they live in a
+# *different vector space* than stock MiniLM, so switching an existing palace
+# from ``minilm`` → ``adaptmem_ft`` requires re-embedding. Run
+# ``mempalace repair rebuild-index`` after changing the model.
+_ADAPTMEM_PATH_ENV = "MEMPALACE_ADAPTMEM_PATH"
+_ADAPTMEM_FT_CLASS = None
+
+
+def _build_adaptmem_ft_class():
+    """Subclass ``chromadb.api.types.EmbeddingFunction`` for the FT encoder.
+
+    Subclassing the Protocol base (rather than the bare ``__call__`` + ``name()``
+    pattern ``EmbeddinggemmaONNX`` uses) is load-bearing: ``Collection.query``
+    in chromadb 1.5+ calls ``embed_query`` on the EF, which the Protocol base
+    provides (it delegates to ``__call__``). A bare class would raise
+    ``AttributeError`` at query time, the searcher would catch it, and vector
+    search would silently degrade to BM25 — the encoder you installed would
+    never run on queries. See the embed_query-trap note above.
+
+    Wrapped in a factory so the chromadb import stays lazy (importing this
+    module must not pull chromadb on machines that only mine). Cached after the
+    first build so module-level access and the dispatch path share one class
+    identity (``isinstance`` checks against ``embedding.AdaptMemFTEncoder`` must
+    hold for instances created by ``get_embedding_function``).
+    """
+    global _ADAPTMEM_FT_CLASS
+    if _ADAPTMEM_FT_CLASS is not None:
+        return _ADAPTMEM_FT_CLASS
+
+    from chromadb.api.types import Documents, EmbeddingFunction, Embeddings
+
+    class AdaptMemFTEncoder(EmbeddingFunction):
+        """ChromaDB EF backed by a local AdaptMem fine-tuned SentenceTransformer.
+
+        The checkpoint path comes from ``model_path`` or, if omitted, the
+        ``MEMPALACE_ADAPTMEM_PATH`` environment variable. The model loads lazily
+        on first call so construction is cheap and import-safe.
+
+        Names itself ``"default"`` (same identity-spoof as ``_MempalaceONNX``)
+        so a palace built with the stock MiniLM EF can be queried by this one
+        without ChromaDB rejecting the read on an EF-name mismatch. The vectors
+        differ (different fine-tune), so a one-time ``rebuild-index`` is still
+        required when switching — but the *name* match lets the switch happen
+        at all.
+        """
+
+        @staticmethod
+        def name() -> str:
+            # ChromaDB persists this on the collection. We spoof "default" so an
+            # existing MiniLM-built palace accepts queries from this EF. The
+            # vector space differs, so users must rebuild-index — but ChromaDB
+            # won't reject the read on a name mismatch.
+            return "default"
+
+        def __init__(self, model_path: Optional[str] = None, device: Optional[str] = None):
+            import os
+
+            path = model_path or os.environ.get(_ADAPTMEM_PATH_ENV)
+            if not path:
+                raise ValueError(
+                    "adaptmem_ft encoder needs a checkpoint path — set "
+                    f"{_ADAPTMEM_PATH_ENV} or pass model_path. Point it at a "
+                    "SentenceTransformer-shaped AdaptMem FT directory."
+                )
+            self._model_path = path
+            self._device = device
+            self._model = None
+
+        def _lazy_load(self) -> None:
+            if self._model is not None:
+                return
+            try:
+                from sentence_transformers import SentenceTransformer
+            except ImportError as e:
+                raise ImportError(
+                    "adaptmem_ft encoder requires sentence-transformers. "
+                    "Install it with: pip install sentence-transformers"
+                ) from e
+            logger.info(
+                "Loading AdaptMem FT encoder from %s (device=%s)…",
+                self._model_path,
+                self._device or "default",
+            )
+            self._model = SentenceTransformer(self._model_path, device=self._device)
+
+        def __call__(self, input: Documents) -> Embeddings:  # noqa: A002 — EF protocol
+            self._lazy_load()
+            # normalize_embeddings=True so cosine == dot product, matching what
+            # ChromaDB's distance metric expects (same convention as the other
+            # backends). Return list-of-lists; chromadb's EmbeddingFunction
+            # subclass wrapper re-validates/normalizes this to its Embeddings
+            # type before handing it to the collection.
+            vecs = self._model.encode(list(input), normalize_embeddings=True)
+            return vecs.tolist()
+
+    _ADAPTMEM_FT_CLASS = AdaptMemFTEncoder
+    return AdaptMemFTEncoder
+
+
+# Expose the class at module scope (lazily built) so callers and tests can
+# reference ``embedding.AdaptMemFTEncoder`` without triggering the chromadb
+# import until first access. Mirrors how the other EFs are importable.
+def __getattr__(name: str):
+    if name == "AdaptMemFTEncoder":
+        return _build_adaptmem_ft_class()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def get_embedding_function(device: Optional[str] = None, model: Optional[str] = None):
     """Return a cached embedding function for the requested device + model.
 
@@ -273,6 +391,14 @@ def get_embedding_function(device: Optional[str] = None, model: Optional[str] = 
 
     if model == "embeddinggemma":
         ef = EmbeddinggemmaONNX(preferred_providers=providers)
+    elif model == "adaptmem_ft":
+        # SentenceTransformer takes a torch device string ("cpu"/"cuda"),
+        # not an ONNX provider list — hand it the effective device. Path comes
+        # from MEMPALACE_ADAPTMEM_PATH (or config) inside the encoder.
+        from .config import MempalaceConfig
+
+        ef_cls = _build_adaptmem_ft_class()
+        ef = ef_cls(model_path=MempalaceConfig().adaptmem_path, device=effective)
     else:
         # Default: minilm (or anything we don't recognize — back-compat win).
         ef_cls = _build_ef_class()

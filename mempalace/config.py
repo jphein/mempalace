@@ -784,10 +784,12 @@ class MempalaceConfig:
 
         Values: ``"minilm"`` (ChromaDB's all-MiniLM-L6-v2 — English-only),
         ``"embeddinggemma"`` (multilingual, 100+ languages, default for
-        new installs since onboarding writes the choice). Read from env
-        ``MEMPALACE_EMBEDDING_MODEL`` first, then ``embedding_model`` in
-        ``config.json``, then ``"minilm"`` as a back-compat fallback for
-        palaces created before onboarding asked the question.
+        new installs since onboarding writes the choice), or ``"adaptmem_ft"``
+        (a local fine-tuned SentenceTransformer checkpoint — see
+        :attr:`adaptmem_path`). Read from env ``MEMPALACE_EMBEDDING_MODEL``
+        first, then ``embedding_model`` in ``config.json``, then ``"minilm"``
+        as a back-compat fallback for palaces created before onboarding asked
+        the question.
 
         Switching models on an existing palace requires re-embedding
         (different vector space) — ChromaDB rejects reads when the persisted
@@ -818,6 +820,27 @@ class MempalaceConfig:
             self._config_file.chmod(0o600)
         except (OSError, NotImplementedError):
             pass
+
+    @property
+    def adaptmem_path(self):
+        """Filesystem path to the AdaptMem fine-tuned encoder checkpoint.
+
+        Only consulted when ``embedding_model == "adaptmem_ft"``. Read from env
+        ``MEMPALACE_ADAPTMEM_PATH`` first, then ``adaptmem_path`` in
+        ``config.json``; ``None`` when neither is set (the encoder then raises a
+        clear error telling the user to set the path).
+
+        The checkpoint is a SentenceTransformer-shaped directory produced by
+        techempower-org/adaptmem. Switching an existing palace to this model is
+        a different vector space — run ``mempalace repair rebuild-index``.
+        """
+        env_val = os.environ.get("MEMPALACE_ADAPTMEM_PATH")
+        if env_val and env_val.strip():
+            return env_val.strip()
+        file_val = self._file_config.get("adaptmem_path")
+        if file_val and str(file_val).strip():
+            return str(file_val).strip()
+        return None
 
     @property
     def topic_tunnel_min_count(self):
