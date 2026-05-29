@@ -394,10 +394,12 @@ Embedding model identifier.
 
 Values: ``"minilm"`` (ChromaDB's all-MiniLM-L6-v2 — English-only),
 ``"embeddinggemma"`` (multilingual, 100+ languages, default for
-new installs since onboarding writes the choice). Read from env
-``MEMPALACE_EMBEDDING_MODEL`` first, then ``embedding_model`` in
-``config.json``, then ``"minilm"`` as a back-compat fallback for
-palaces created before onboarding asked the question.
+new installs since onboarding writes the choice), or ``"adaptmem_ft"``
+(a local fine-tuned SentenceTransformer checkpoint — see
+:attr:`adaptmem_path`). Read from env ``MEMPALACE_EMBEDDING_MODEL``
+first, then ``embedding_model`` in ``config.json``, then ``"minilm"``
+as a back-compat fallback for palaces created before onboarding asked
+the question.
 
 Switching models on an existing palace requires re-embedding
 (different vector space) — ChromaDB rejects reads when the persisted
@@ -416,6 +418,23 @@ Onboarding calls this once on first run. Accepts ``"minilm"`` or
 ``"embeddinggemma"``; other values are normalized to lowercase and
 passed through (``embedding.get_embedding_function`` falls back to
 minilm for unrecognized values).
+
+#### `adaptmem_path`
+
+```python
+def adaptmem_path(self)
+```
+
+Filesystem path to the AdaptMem fine-tuned encoder checkpoint.
+
+Only consulted when ``embedding_model == "adaptmem_ft"``. Read from env
+``MEMPALACE_ADAPTMEM_PATH`` first, then ``adaptmem_path`` in
+``config.json``; ``None`` when neither is set (the encoder then raises a
+clear error telling the user to set the path).
+
+The checkpoint is a SentenceTransformer-shaped directory produced by
+techempower-org/adaptmem. Switching an existing palace to this model is
+a different vector space — run ``mempalace repair rebuild-index``.
 
 #### `topic_tunnel_min_count`
 
