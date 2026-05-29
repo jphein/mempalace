@@ -160,7 +160,7 @@ Organized around the [verbatim-vs-derivative axis](docs/ARCHITECTURE.md#1-verbat
 
 ## Active investigations
 
-- **End-to-end QA measurement on the post-structural-fix palace** — the "17% E2E QA" attribution to engram-2 in earlier drafts was [not substantiated in their published materials](docs/research/2026-05-24-memory-system-benchmarks.md#the-engram-2-17-e2e-qa-for-mempalace-claim); the corpus-shape pathology it surfaced (checkpoint domination of `mempalace_search` results, pre-migration `kind=content` returning 3 tokens/Q vs post-migration 1,267) is real and is closed. E2E LongMemEval-S run instrumented, results to publish at `notebook/data/cat9-postmigrate-e2e/REPORT.md`.
+- **End-to-end QA measurement on the post-structural-fix palace** — the "17% E2E QA" attribution to engram-2 in earlier drafts was [not substantiated in their published materials](docs/research/2026-05-24-memory-system-benchmarks.md#the-engram-2-17-e2e-qa-for-mempalace-claim); the corpus-shape pathology it surfaced (checkpoint domination of `mempalace_search` results, pre-migration `kind=content` returning 3 tokens/Q vs post-migration 1,267) is real and is closed. **Results published** in [`notebook/data/cat9-postmigrate-e2e/REPORT.md`](notebook/data/cat9-postmigrate-e2e/REPORT.md): on LongMemEval oracle (n=500, reader `o4-mini` / judge `gpt-5.3-chat`), the default `/search` path scores **97.0% R@5** and **60.40% E2E QA** — a +38.4pp retrieval→answer gap that locates the open work in consumption, not retrieval. (age-fused 17.60% is a known-broken-harness reading — snippet-width starvation + empty triples layer — not a verdict on graph fusion.)
 - **Cat 9 / The Handshake** — generalizable measurement of the retrieval→consumption gap. 46.67% / 78.33% on RLM-vs-Familiar. Scaling across the verbatim-first cohort via [`jphein/multipass-structural-memory-eval`](https://github.com/jphein/multipass-structural-memory-eval).
 - **Multi-palace separation** — curated "authority" vs auto-mined memory ([upstream #1018](https://github.com/MemPalace/mempalace/discussions/1018)). P8 may absorb. [Design doc](docs/designs/multi-palace-separation.md).
 
@@ -237,7 +237,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308) | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
+| 1 | pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308) | — | [`5fba6d8`](https://github.com/techempower-org/mempalace/commit/5fba6d8) |
 | 2 | README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28) | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | 3 | README.md + docs/ECOSYSTEM.md — soften 'engram-2 17% E2E QA' framing per the 2026-05-24 research doc's unsubstantiated finding (#319) | — | [`ddf00b4`](https://github.com/techempower-org/mempalace/commit/ddf00b4) |
 | 4 | kg_llm_extractor rewrites AGE dollar-quote tag in triples so drawers indexing palace source code don't fail at add_triple (#313) | — | [`3fb9428`](https://github.com/techempower-org/mempalace/commit/3fb9428) |
