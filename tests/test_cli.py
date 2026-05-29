@@ -1055,6 +1055,7 @@ def test_cmd_mine_exits_nonzero_on_lock_holder(mock_config_cls, capsys):
 @patch("mempalace.cli.MempalaceConfig")
 def test_cmd_wakeup(mock_config_cls, capsys):
     mock_config_cls.return_value.palace_path = "/fake/palace"
+    mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
     args = argparse.Namespace(palace=None, wing=None)
     mock_stack = MagicMock()
     mock_stack.wake_up.return_value = "Hello world context"
