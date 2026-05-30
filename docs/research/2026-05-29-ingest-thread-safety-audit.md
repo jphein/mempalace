@@ -32,14 +32,19 @@ drops the 1-bench mutex).
 | (a) | Shared `SentenceTransformer` / ONNX encoder | **SAFE** | `embedding.py` `_EF_CACHE`; `backends/postgres.py:_embed` |
 | (b) | `PostgresBackend` connection / cursor scoping | **SAFE (serialized)** | `backends/postgres.py:698` `_get_conn`; psycopg3 `Connection.lock` |
 | (c) | Module-level caches in ingest path | **SAFE** | `IdfCache` (locked), `_HALL_KEYWORDS_CACHE`, `validate_room`, `functools.lru_cache` |
-| (d) | AGE KG write-through under concurrent ingest | **RACE → FIXED** (latent in prod) | `knowledge_graph_age.py` shared `_conn`, `autocommit=False`; **fixed this PR** |
+| (d) | AGE KG write-through under concurrent ingest | **RACE → FIXED** (LIVE on familiar) | `knowledge_graph_age.py` shared `_conn`, `autocommit=False`; `MEMPALACE_KG_WRITETHROUGH=1` set on familiar; **fixed this PR** |
 
 **Headline: SAFE to run concurrent *retrieval-only* benches at any N the RAM
 allows. Concurrent *ingest-heavy* benches are also data-safe, but cap at ~2–3
 because of RAM (~6 GB free on familiar), not thread-safety. The one genuine
-race — the inline AGE KG write-through — was latent (gated off in production)
-and is fixed in this PR with a per-instance lock so it can't bite if anyone
-turns it on.**
+race — the inline AGE KG write-through — is LIVE on familiar
+(`MEMPALACE_KG_WRITETHROUGH=1` is set via the daemon's systemd `EnvironmentFile`,
+with `PALACE_MAX_WRITE_CONCURRENCY=2`), so this fix is REQUIRED, not merely
+defensive: any two overlapping writes — concurrent benches, or even the live
+companion's overlapping silent-saves — can interleave their transaction spans
+and silently drop or mis-commit KG writes. This PR's per-instance lock closes
+it. Deploying the patched `knowledge_graph_age.py` to familiar (sync + daemon
+restart) is the gate before turning on concurrent ingest benches.**
 
 ---
 
@@ -148,7 +153,7 @@ The constant maps / frozen sets / regex-pattern lists in `entity_registry.py`,
 `normalize.py`, `room_detector_local.py`, `miner.py` are read-only module data
 — inherently safe.
 
-## (d) AGE KG write-through — RACE (latent) → FIXED
+## (d) AGE KG write-through — RACE (LIVE on familiar) → FIXED
 
 This was the one genuine shared-mutable-state race.
 
@@ -177,19 +182,35 @@ which would discard a concurrent writer's not-yet-committed `add_mention`. Net
 effect: **silently dropped or mis-attributed KG writes** under concurrency — a
 data-integrity bug, exactly the class this gate exists to catch.
 
-**Why it was latent, not live.** The production daemon on `familiar` does
-**not** set `MEMPALACE_KG_WRITETHROUGH=1`. Process-env inspection on familiar
-shows neither `MEMPALACE_KG_WRITETHROUGH` nor `MEMPALACE_KG_EXTRACTION_QUEUE`
-set, so `make_writethrough_from_env` returns `None` and **no hook is attached**
-to the per-request write path (`kg_writethrough.py:340-390`). The production KG
-is populated by the **async extraction-queue worker** (`kg_triple_worker.py`,
-driven by the `mempalace-kg-extract@*.service` systemd slice), which is the safe
-path (see below). So the race could only bite a *future* config that turns the
-inline hook on — but that is a one-env-var foot-gun, and the SQLite KG
+**This is LIVE on familiar — the fix is required.** The production daemon's
+systemd unit pulls in `EnvironmentFile=/home/jp/.config/palace-daemon/env`,
+which sets `MEMPALACE_KG_WRITETHROUGH=1`, `MEMPALACE_KG_EXTRACTION_QUEUE=1`,
+`MEMPALACE_KG_BACKEND=age`, and `PALACE_MAX_WRITE_CONCURRENCY=2`. Verified on the
+live process (MainPID after the 2026-05-29 18:59 restart): all four are present.
+So `make_writethrough_from_env` returns the **chained** hook — the inline
+MENTIONS write-through (`make_age_writethrough`, the racy
+shared-`KnowledgeGraphAGE`-connection path) *plus* the extraction-queue enqueue
+— and it IS attached to the per-request write path (`kg_writethrough.py:340-390`,
+`palace._maybe_attach_writethrough`). With `PALACE_MAX_WRITE_CONCURRENCY=2`, two
+write requests can be in-flight on the shared connection at once, so the
+transaction-span interleave is reachable in current production whenever two
+writes overlap — concurrent benches, or even the live companion issuing
+overlapping silent-saves. Exposure is intermittent (only on true overlap), which
+is why it had not been noticed, but it is real.
+
+(An earlier draft of this audit rated the race "latent" after inspecting an
+older daemon process started *before* the `EnvironmentFile` carried the flag.
+That snapshot was stale; the corrected reading above is from the live
+post-restart process and the env file itself.)
+
+The extraction-queue half of the chained hook (`kg_triple_worker.py`, driven by
+the `mempalace-kg-extract@*.service` slice) is concurrency-safe by design (see
+d-queue below) — the race is specific to the inline MENTIONS half sharing one
+`autocommit=False` connection. Note also that the SQLite KG
 (`knowledge_graph.py`) was *already* hardened with a per-instance lock
-(`self._lock`, guarding `close`/`add_triple`/etc., line 139 onward, asserted by
-`tests/test_kg_thread_safety.py`). The AGE KG simply never inherited it. Closing
-that gap now removes the foot-gun and brings the two KG backends to parity.
+(`self._lock`, guarding `close`/`add_triple`/etc. from line 139, asserted by
+`tests/test_kg_thread_safety.py`); the AGE KG simply never inherited it. This PR
+closes that gap and brings the two KG backends to parity.
 
 **The fix (this PR).** Add `self._lock = threading.RLock()` to
 `KnowledgeGraphAGE.__init__` and guard every transaction-bearing span with it:
@@ -208,7 +229,8 @@ Mirrors the established `KnowledgeGraph` (SQLite) lock idiom exactly.
 
 ### (d-queue) Extraction-queue enqueue + async worker — SAFE by design
 
-The path that *is* live in production is concurrency-safe:
+The extraction-queue half of the production write path (the other stage chained
+into the live write-through) is concurrency-safe:
 
 - **Enqueue write-through** (`make_extraction_enqueue_writethrough`,
   `kg_writethrough.py:215-284`): opens a **fresh psycopg connection per drawer
@@ -252,6 +274,11 @@ on the two changed files → clean.
    writes; if write throughput becomes a bottleneck, move
    `PostgresCollection` to a per-thread connection or `psycopg_pool` — an
    optimization, not a prerequisite for this gate.
-4. **If anyone enables `MEMPALACE_KG_WRITETHROUGH=1`**, it is now safe under
-   concurrency thanks to this PR. Without this PR it would have silently
-   corrupted the KG.
+4. **`MEMPALACE_KG_WRITETHROUGH=1` is set on familiar TODAY** (via the daemon's
+   systemd `EnvironmentFile`), so the inline MENTIONS write-through is live and
+   the transaction-span race is reachable under any two overlapping writes.
+   **Merging this PR and deploying the patched `knowledge_graph_age.py` to
+   familiar (sync + daemon restart) is the gate before turning on concurrent
+   ingest benches** — and it also closes an intermittent corruption window that
+   already exists in current production whenever two writes overlap. Without this
+   PR, concurrent ingest would silently drop/mis-commit KG writes.
