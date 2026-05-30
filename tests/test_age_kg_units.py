@@ -899,3 +899,129 @@ def test_make_deletethrough_from_env_enabled_returns_hook(monkeypatch):
     assert hook is not None
     hook(drawer_ids=["d1"])
     kg.delete_drawers.assert_called_once_with(["d1"])
+
+
+# =============================================================================
+# knowledge_graph_age — thread-safety of the shared (autocommit=False) conn
+# =============================================================================
+#
+# A single KnowledgeGraphAGE instance is reachable from multiple threads when
+# the inline KG write-through hook (MEMPALACE_KG_WRITETHROUGH=1) is attached —
+# the daemon offloads each write to a threadpool, so two concurrent writes call
+# add_mention on the same instance, sharing one psycopg connection. With
+# autocommit=False, psycopg's per-connection lock keeps each statement atomic on
+# the wire but does NOT isolate the transaction span: thread A's CREATE and
+# thread B's CREATE can land in one shared transaction and a single commit
+# decides both. The RLock added in __init__ restores one-transaction-per-thread
+# semantics. These tests pin that guard so it can't silently regress.
+
+
+def test_run_cypher_acquires_lock():
+    """The write/read chokepoint must hold self._lock across its span."""
+    import inspect
+
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    src = inspect.getsource(KnowledgeGraphAGE._run_cypher)
+    assert "self._lock" in src, (
+        "_run_cypher does not acquire self._lock. Concurrent threads sharing "
+        "the autocommit=False connection can interleave transactions and "
+        "silently drop KG writes."
+    )
+
+
+def test_cypher_scalar_acquires_lock():
+    import inspect
+
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    src = inspect.getsource(KnowledgeGraphAGE._cypher_scalar)
+    assert "self._lock" in src
+
+
+def test_stats_and_commit_acquire_lock():
+    import inspect
+
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    assert "self._lock" in inspect.getsource(KnowledgeGraphAGE.stats)
+    assert "self._lock" in inspect.getsource(KnowledgeGraphAGE.commit)
+    assert "self._lock" in inspect.getsource(KnowledgeGraphAGE.clear)
+
+
+def test_run_cypher_serializes_transaction_spans_across_threads():
+    """Functional proof: two threads driving _run_cypher on one shared
+    connection never interleave their execute→commit spans.
+
+    Uses a fake connection that records (thread, event) ordering and asserts
+    every thread's ``execute`` is immediately followed by its own ``commit``
+    with no other thread's event in between — which is exactly what the
+    transaction-span lock guarantees and what a bare shared autocommit=False
+    connection would violate.
+    """
+    import threading
+    import time
+
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    events: list[tuple[str, str]] = []
+    events_lock = threading.Lock()
+
+    class _FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def execute(self, *a, **k):
+            with events_lock:
+                events.append((threading.current_thread().name, "execute"))
+            # Yield the GIL mid-span so an unguarded impl would interleave.
+            time.sleep(0.001)
+
+        def fetchall(self):
+            return []
+
+        def fetchone(self):
+            return None
+
+    class _FakeConn:
+        def cursor(self):
+            return _FakeCursor()
+
+        def commit(self):
+            with events_lock:
+                events.append((threading.current_thread().name, "commit"))
+
+    # Build an instance without touching Postgres: __new__ skips __init__'s
+    # connect() / _ensure_graph(), then inject the fake conn + real RLock.
+    kg = KnowledgeGraphAGE.__new__(KnowledgeGraphAGE)
+    kg._conn = _FakeConn()
+    kg._lock = threading.RLock()
+    kg._age_loaded = True  # skip the LOAD 'age' / SET search_path preamble
+
+    def worker():
+        for _ in range(20):
+            kg._run_cypher("MATCH (n) RETURN n", {}, fetch=False, commit=True)
+
+    threads = [threading.Thread(target=worker, name=f"w{i}") for i in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # Walk the event log: every execute must be followed by a commit from the
+    # SAME thread before any other thread acts. The lock guarantees this; an
+    # unguarded shared connection would show a foreign event between them.
+    for i in range(0, len(events), 2):
+        exec_thread, exec_kind = events[i]
+        commit_thread, commit_kind = events[i + 1]
+        assert exec_kind == "execute" and commit_kind == "commit", (
+            f"span boundary broken at index {i}: {events[i]}, {events[i + 1]}"
+        )
+        assert exec_thread == commit_thread, (
+            f"transaction span interleaved: execute by {exec_thread} but "
+            f"commit by {commit_thread} — the per-instance lock is not "
+            f"serializing spans"
+        )

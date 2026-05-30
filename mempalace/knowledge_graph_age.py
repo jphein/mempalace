@@ -12,6 +12,7 @@ created on first init and reused thereafter — initialization is idempotent.
 import json
 import logging
 import re
+import threading
 from typing import Any, Optional
 
 from .config import sanitize_iso_temporal, sanitize_kg_value
@@ -176,6 +177,22 @@ class KnowledgeGraphAGE:
         # own changes; subsequent write operations control their own
         # transactions.
         self._conn.autocommit = False
+        # Serialize transaction spans across threads. The single ``self._conn``
+        # is shared whenever one KnowledgeGraphAGE instance is reached from
+        # multiple threads — e.g. the inline KG write-through hook
+        # (``MEMPALACE_KG_WRITETHROUGH=1``) runs synchronously on the daemon's
+        # write threadpool, so two concurrent writes share this connection.
+        # psycopg3's per-connection lock makes each ``execute``/``commit`` atomic
+        # on the wire, but with ``autocommit = False`` it does NOT isolate the
+        # *transaction span*: thread A's CREATE and thread B's CREATE land in one
+        # shared transaction, and whichever ``commit()`` / ``rollback()`` fires
+        # first decides both — silently dropping or mis-committing the other
+        # thread's writes. An RLock around each public read/write span restores
+        # one-transaction-per-thread semantics. Reentrant so a guarded method
+        # (e.g. ``add_triple``) can call another guarded helper (``_run_cypher``)
+        # on the same thread without deadlocking. Mirrors the ``self._lock``
+        # already present on the SQLite ``KnowledgeGraph`` (knowledge_graph.py).
+        self._lock = threading.RLock()
         self._age_loaded = False
         self._ensure_graph()
 
@@ -266,17 +283,18 @@ class KnowledgeGraphAGE:
         triple in the graph. The graph is re-registered immediately so
         the instance remains usable for subsequent writes.
         """
-        with self._conn.cursor() as cur:
-            cur.execute("LOAD 'age'")
-            cur.execute('SET search_path = ag_catalog, "$user", public')
-            cur.execute(
-                "SELECT graphid FROM ag_catalog.ag_graph WHERE name = %s",
-                (self.GRAPH_NAME,),
-            )
-            if cur.fetchone() is not None:
-                cur.execute("SELECT drop_graph(%s, true)", (self.GRAPH_NAME,))
-            cur.execute("SELECT create_graph(%s)", (self.GRAPH_NAME,))
-        self._conn.commit()
+        with self._lock:
+            with self._conn.cursor() as cur:
+                cur.execute("LOAD 'age'")
+                cur.execute('SET search_path = ag_catalog, "$user", public')
+                cur.execute(
+                    "SELECT graphid FROM ag_catalog.ag_graph WHERE name = %s",
+                    (self.GRAPH_NAME,),
+                )
+                if cur.fetchone() is not None:
+                    cur.execute("SELECT drop_graph(%s, true)", (self.GRAPH_NAME,))
+                cur.execute("SELECT create_graph(%s)", (self.GRAPH_NAME,))
+            self._conn.commit()
 
     def add_triple(
         self,
@@ -775,7 +793,8 @@ class KnowledgeGraphAGE:
         statements into one transaction, then call ``kg.commit()`` once
         per batch. The single-statement default still commits per call.
         """
-        self._conn.commit()
+        with self._lock:
+            self._conn.commit()
 
     def delete_drawer(self, drawer_id: str, *, commit: bool = True) -> int:
         """Remove a Drawer node and all its edges from the AGE graph.
@@ -873,15 +892,19 @@ class KnowledgeGraphAGE:
         shape) and #266 (performance — replaces the ~9s slow path with
         sub-100ms).
         """
-        try:
-            return self._stats_fast()
-        except Exception as exc:
+        # Lock the whole fast→fallback span: _stats_fast commits on this
+        # shared connection and the except path rolls it back, both of which
+        # would clobber a concurrent writer's transaction without the guard.
+        with self._lock:
             try:
-                self._conn.rollback()
-            except Exception:
-                pass
-            logger.debug("stats() fast path unavailable, falling back to Cypher: %s", exc)
-            return self._stats_cypher()
+                return self._stats_fast()
+            except Exception as exc:
+                try:
+                    self._conn.rollback()
+                except Exception:
+                    pass
+                logger.debug("stats() fast path unavailable, falling back to Cypher: %s", exc)
+                return self._stats_cypher()
 
     def _stats_fast(self) -> dict:
         """Backing-table fast path for ``stats()``.
@@ -1104,16 +1127,21 @@ class KnowledgeGraphAGE:
         cypher_inlined = _inline_cypher_params(cypher, params)
 
         rows: list = []
-        with self._conn.cursor() as cur:
-            if not self._age_loaded:
-                cur.execute("LOAD 'age'")
-                cur.execute('SET search_path = ag_catalog, "$user", public')
-                self._age_loaded = True
-            cur.execute(_compose_cypher_sql(self.GRAPH_NAME, cypher_inlined, cols_decl))
-            if fetch:
-                rows = cur.fetchall()
-        if commit:
-            self._conn.commit()
+        # Hold the lock across the whole cursor → execute → commit span so a
+        # concurrent thread sharing this connection cannot interleave its own
+        # statements into our transaction (see __init__). Reentrant: public
+        # callers already holding the lock pass straight through.
+        with self._lock:
+            with self._conn.cursor() as cur:
+                if not self._age_loaded:
+                    cur.execute("LOAD 'age'")
+                    cur.execute('SET search_path = ag_catalog, "$user", public')
+                    self._age_loaded = True
+                cur.execute(_compose_cypher_sql(self.GRAPH_NAME, cypher_inlined, cols_decl))
+                if fetch:
+                    rows = cur.fetchall()
+            if commit:
+                self._conn.commit()
         return rows
 
     def _cypher_scalar(self, cypher: str, params: dict, commit: bool = True) -> Any:
@@ -1132,13 +1160,15 @@ class KnowledgeGraphAGE:
         cypher_inlined = _inline_cypher_params(cypher, params)
         if " AS " not in cypher_inlined.upper():
             cypher_inlined = cypher_inlined.rstrip() + " AS v"
-        with self._conn.cursor() as cur:
-            cur.execute("LOAD 'age'")
-            cur.execute('SET search_path = ag_catalog, "$user", public')
-            cur.execute(_compose_cypher_sql(self.GRAPH_NAME, cypher_inlined, "v agtype"))
-            row = cur.fetchone()
-        if commit:
-            self._conn.commit()
+        # Lock the cursor→execute→commit span (see _run_cypher / __init__).
+        with self._lock:
+            with self._conn.cursor() as cur:
+                cur.execute("LOAD 'age'")
+                cur.execute('SET search_path = ag_catalog, "$user", public')
+                cur.execute(_compose_cypher_sql(self.GRAPH_NAME, cypher_inlined, "v agtype"))
+                row = cur.fetchone()
+            if commit:
+                self._conn.commit()
         if row is None:
             return None
         return self._unwrap_agtype(row[0])
