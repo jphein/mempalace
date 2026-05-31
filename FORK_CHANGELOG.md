@@ -337,7 +337,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+- **README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
   The verbatim-first landscape table in README.md cited MemPalace
   upstream as "~23K stars" — stale since 2026-04. ``gh api
   /repos/MemPalace/mempalace`` returns 52,993 stars / 6,995 forks

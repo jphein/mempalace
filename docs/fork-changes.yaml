@@ -221,7 +221,7 @@ entries:
       bigger; this PR closes the read-only legs.
     date: 2026-05-28
     bucket: Changed
-    commit: HEAD
+    commit: TBD
     area: Docs
     summary: "README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28)"
     files:
