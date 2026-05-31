@@ -239,7 +239,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 |---|---|---|---|
 | 1 | AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
 | 2 | pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308) | — | [`5fba6d8`](https://github.com/techempower-org/mempalace/commit/5fba6d8) |
-| 3 | README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28) | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
+| 3 | README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
 | 4 | README.md + docs/ECOSYSTEM.md — soften 'engram-2 17% E2E QA' framing per the 2026-05-24 research doc's unsubstantiated finding (#319) | — | [`ddf00b4`](https://github.com/techempower-org/mempalace/commit/ddf00b4) |
 | 5 | kg_llm_extractor rewrites AGE dollar-quote tag in triples so drawers indexing palace source code don't fail at add_triple (#313) | — | [`3fb9428`](https://github.com/techempower-org/mempalace/commit/3fb9428) |
 | 6 | scripts/maintain-fork-changes.py + ship-prep step 1: resolve commit:HEAD placeholders and de-dup yaml entries (#316) | — | [`9060e09`](https://github.com/techempower-org/mempalace/commit/9060e09) |
