@@ -64,6 +64,10 @@ exclude = [
     '^https://github\.com/google/gemini-cli(/|$)',
     '^https://github\.com/techempower-org/mempalace-viz(/|$)',
     '^https://github\.com/techempower-org/multipass-structural-memory-eval(/|$)',
+    # doobidoo/mcp-memory-service was deleted/renamed upstream (404 as of
+    # 2026-05-31); referenced in README landscape + the memory-system
+    # benchmark survey as a comparison pointer, not an active link.
+    '^https://github\.com/doobidoo/mcp-memory-service(/|$)',
     '^https://www\.usenotra\.com(/|$)',
     '^https://celiums\.ai(/|$)',
     '^https://mempalaceofficial\.com(/|$)',
