@@ -226,3 +226,49 @@ class TestGraphExpandDirectionalCypher:
             "`-[r:RELATION]-` cypher pattern. See #291 — this is the "
             "specific shape that caused palace-daemon#80's latency."
         )
+
+
+class TestGraphExpandBoundEndpoint:
+    """Regression guard for mempalace#335 item 2.
+
+    The graph-expand cypher must NOT leave a RELATION endpoint anonymous
+    (``-[r:RELATION]->()`` or ``()-[r:RELATION]->``). An anonymous node
+    matches any vertex label, so AGE builds a Parallel Append over every
+    label table (Entity + Drawer + Room + Wing + _ag_label_vertex,
+    ~1.58M rows on prod) and nested-loops to validate the endpoint —
+    materializing the union and spilling to /dev/shm. RELATION is always
+    (Entity)->(Entity), so both endpoints must be bound to ``:Entity``,
+    which collapses the Append to a single Entity scan (verified
+    row-equivalent on a 300K-edge AGE graph).
+    """
+
+    @staticmethod
+    def _code_only(fn) -> str:
+        import inspect
+
+        src = inspect.getsource(fn)
+        return "\n".join(line for line in src.splitlines() if not line.lstrip().startswith("#"))
+
+    def test_seeds_expand_binds_relation_endpoints(self):
+        from mempalace.searcher import _graph_expand_from_seeds
+
+        code = self._code_only(_graph_expand_from_seeds)
+        assert "RELATION]->()" not in code, (
+            "_graph_expand_from_seeds has an anonymous RELATION target "
+            "`-[r:RELATION]->()`. Bind it to `:Entity` so AGE scans only "
+            "the Entity label, not a Parallel Append over all vertices. "
+            "See mempalace#335."
+        )
+        assert "()-[r:RELATION]->" not in code, (
+            "_graph_expand_from_seeds has an anonymous RELATION source "
+            "`()-[r:RELATION]->`. Bind it to `:Entity`. See mempalace#335."
+        )
+
+    def test_entities_expand_binds_relation_endpoints(self):
+        from mempalace.searcher import _graph_expand_from_entities
+
+        code = self._code_only(_graph_expand_from_entities)
+        assert "RELATION]->()" not in code, (
+            "_graph_expand_from_entities has an anonymous RELATION target "
+            "`-[r:RELATION]->()`. Bind it to `:Entity`. See mempalace#335."
+        )

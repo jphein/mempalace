@@ -377,6 +377,19 @@ def backfill(
         finally:
             scan_conn.close()
 
+    # Install the edge-endpoint indexes the graph-walk retrieval paths join
+    # on (mempalace#335). MENTIONS/RELATION label tables only exist once an
+    # edge has been written, so this is deferred to the end of the run — by
+    # which point a full entity pass has created them. The method skips any
+    # label whose table is still absent (e.g. skip_entities=True with no prior
+    # MENTIONS edges) and is idempotent, so re-running backfill is cheap.
+    try:
+        kg._ensure_edge_endpoint_indexes()
+    except Exception:
+        # Index creation is best-effort hardening, never a reason to fail a
+        # completed backfill — the rows are already written and correct.
+        logger.warning("backfill: edge-endpoint index creation failed", exc_info=True)
+
     counters["finished_at"] = time.time()
     counters["wall_clock_s"] = round(counters["finished_at"] - counters["started_at"], 1)
     kg.close()
