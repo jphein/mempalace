@@ -1209,14 +1209,23 @@ def _graph_expand_from_seeds(
     # object of a relation extracted from a seed drawer — both are
     # valid hits and direction-collapsing would silently drop half of
     # them.
+    #
+    # mempalace#335: the open endpoint is bound to ``:Entity`` rather than
+    # left anonymous (``()``). An anonymous node matches *any* vertex label,
+    # so AGE builds a Parallel Append over every label table (Entity + Drawer
+    # + Room + Wing + _ag_label_vertex, ~1.58M rows on prod) and nested-loops
+    # to validate the endpoint exists — materializing the union and spilling
+    # to /dev/shm. RELATION is always (Entity)->(Entity), so binding the open
+    # end to ``:Entity`` is semantically identical (verified row-for-row on a
+    # 300K-edge AGE graph) and collapses the Append to a single Entity scan.
     entity_cypher_outbound = f"""
-        MATCH (e:Entity)-[r:RELATION]->()
+        MATCH (e:Entity)-[r:RELATION]->(:Entity)
         WHERE r.source IN {seeds_clause}
         RETURN DISTINCT e.name AS name
         LIMIT {max_entities}
     """
     entity_cypher_inbound = f"""
-        MATCH ()-[r:RELATION]->(e:Entity)
+        MATCH (:Entity)-[r:RELATION]->(e:Entity)
         WHERE r.source IN {seeds_clause}
         RETURN DISTINCT e.name AS name
         LIMIT {max_entities}
@@ -1250,7 +1259,7 @@ def _graph_expand_from_seeds(
                 for ent in entities:
                     ent_safe = _esc(ent)
                     expand_cypher = f"""
-                        MATCH (a:Entity {{name: '{ent_safe}'}})-[r:RELATION]->()
+                        MATCH (a:Entity {{name: '{ent_safe}'}})-[r:RELATION]->(:Entity)
                         RETURN DISTINCT r.source AS source
                         LIMIT {max_drawers_per_entity}
                     """
@@ -1317,8 +1326,15 @@ def _graph_expand_from_entities(
                     # Safe for this projection — ``r.source`` is the drawer
                     # where the edge was extracted and doesn't depend on
                     # which endpoint binds to ``a``.
+                    #
+                    # mempalace#335: the open endpoint is bound to ``:Entity``
+                    # (not anonymous ``()``) so AGE scans only the Entity label
+                    # table instead of a Parallel Append over every vertex
+                    # label. RELATION is always (Entity)->(Entity); verified
+                    # row-equivalent. See _graph_expand_from_seeds for the full
+                    # rationale.
                     expand_cypher = f"""
-                        MATCH (a:Entity)-[r:RELATION]->()
+                        MATCH (a:Entity)-[r:RELATION]->(:Entity)
                         WHERE a.name = '{ent_safe}'
                         RETURN DISTINCT r.source AS source
                         LIMIT {max_drawers_per_entity}

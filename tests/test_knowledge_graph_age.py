@@ -627,3 +627,75 @@ def test_age_stats_per_field_cypher_helpers_match_canonical():
         assert kg._relationship_types_cypher() == slow["relationship_types"]
     finally:
         kg.close()
+
+
+# ── edge-endpoint indexes (mempalace#335 item 1) ─────────────────────
+
+
+def test_edge_endpoint_index_targets_are_the_four_we_expect():
+    """Guard the index name/label/column triples (no postgres required).
+
+    Keeps the set in sync with palace-daemon's scripts/age_graph_indexes.sql
+    + the operator-online POST /backfill-age/indexes route.
+    """
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    assert set(KnowledgeGraphAGE._EDGE_ENDPOINT_INDEXES) == {
+        ("idx_mentions_end_id", "MENTIONS", "end_id"),
+        ("idx_mentions_start_id", "MENTIONS", "start_id"),
+        ("idx_relation_start_id", "RELATION", "start_id"),
+        ("idx_relation_end_id", "RELATION", "end_id"),
+    }
+
+
+@pgmark
+def test_ensure_edge_endpoint_indexes_skips_absent_then_installs():
+    """_ensure_edge_endpoint_indexes is a no-op while the edge label tables
+    don't exist (fresh graph, no edges written), then installs all four once
+    a MENTIONS and a RELATION edge have been created. Idempotent on re-run."""
+    from mempalace.knowledge_graph_age import KnowledgeGraphAGE
+
+    graph = KnowledgeGraphAGE.GRAPH_NAME
+    wanted = {n for n, _, _ in KnowledgeGraphAGE._EDGE_ENDPOINT_INDEXES}
+
+    def _present(kg) -> set:
+        with kg._conn.cursor() as cur:
+            cur.execute(
+                "SELECT c.relname FROM pg_class c "
+                "JOIN pg_namespace n ON n.oid = c.relnamespace "
+                "WHERE n.nspname = %s AND c.relname = ANY(%s)",
+                (graph, list(wanted)),
+            )
+            return {r[0] for r in cur.fetchall()}
+
+    kg = KnowledgeGraphAGE(dsn=POSTGRES_DSN)
+    try:
+        kg.clear()  # fresh graph: no MENTIONS/RELATION label tables yet
+
+        # No edge tables → no indexes created, no error.
+        kg._ensure_edge_endpoint_indexes()
+        assert _present(kg) == set(), "should skip while edge tables are absent"
+
+        # Create one of each edge type so both label tables exist. add_triple
+        # makes a RELATION edge; a raw MENTIONS edge mirrors backfill_age.
+        kg.add_triple("A", "rel", "B", source="d1")
+        with kg._conn.cursor() as cur:
+            cur.execute("LOAD 'age'")
+            cur.execute('SET search_path = ag_catalog, "$user", public')
+            cur.execute(
+                "SELECT * FROM cypher('mempalace_kg', $$ "
+                "  MERGE (d:Drawer {id: 'd1'}) "
+                "  MERGE (e:Entity {name: 'A'}) "
+                "  CREATE (d)-[:MENTIONS {count: 1}]->(e) "
+                "$$) AS (v agtype)"
+            )
+        kg._conn.commit()
+
+        kg._ensure_edge_endpoint_indexes()
+        assert _present(kg) == wanted, "all four indexes should now exist"
+
+        # Idempotent: a second call neither errors nor changes anything.
+        kg._ensure_edge_endpoint_indexes()
+        assert _present(kg) == wanted
+    finally:
+        kg.close()

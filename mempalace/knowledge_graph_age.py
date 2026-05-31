@@ -263,6 +263,60 @@ class KnowledgeGraphAGE:
             )
         self._conn.commit()
 
+    # Edge-endpoint indexes the graph-walk retrieval paths join on. AGE only
+    # btree-indexes each label table's own ``id`` (``_ag_label_edge_pkey``),
+    # never the ``start_id`` / ``end_id`` graphid columns. Without these, the
+    # per-entity Cypher in ``searcher._graph_expand_*`` and the daemon's
+    # ``/search/age-fused`` lookup parallel-seq-scans the entire edge table
+    # (MENTIONS is multi-million-row on a full palace) — ~5.8s cold for a hot
+    # entity. The index turns that into a bounded bitmap index scan. See
+    # palace-daemon scripts/age_graph_indexes.sql + the
+    # 2026-05-30 hybrid-graph-walk-latency perf note (mempalace#335). Keep the
+    # index names + columns in sync with that SQL file.
+    _EDGE_ENDPOINT_INDEXES: tuple[tuple[str, str, str], ...] = (
+        ("idx_mentions_end_id", "MENTIONS", "end_id"),
+        ("idx_mentions_start_id", "MENTIONS", "start_id"),
+        ("idx_relation_start_id", "RELATION", "start_id"),
+        ("idx_relation_end_id", "RELATION", "end_id"),
+    )
+
+    def _ensure_edge_endpoint_indexes(self) -> None:
+        """Install btree indexes on MENTIONS/RELATION (start_id, end_id).
+
+        Mirrors :meth:`_ensure_drawer_unique_index`: skips silently for any
+        edge label whose backing table doesn't exist yet (the label is only
+        created on the first edge write, so a palace that has never had a
+        MENTIONS or RELATION edge has no table to index). Idempotent —
+        ``CREATE INDEX IF NOT EXISTS`` — so a later call after edges land
+        installs the missing ones.
+
+        Non-concurrent: intended to run at the end of a backfill (or any
+        bootstrap) where a brief lock on the edge table is acceptable. The
+        operator-online path (rebuild against a live daemon) uses
+        ``CREATE INDEX CONCURRENTLY`` via palace-daemon's
+        ``POST /backfill-age/indexes`` instead.
+        """
+        graph = self.GRAPH_NAME
+        with self._conn.cursor() as cur:
+            for index_name, label, column in self._EDGE_ENDPOINT_INDEXES:
+                cur.execute(
+                    "SELECT 1 FROM information_schema.tables "
+                    "WHERE table_schema = %s AND table_name = %s",
+                    (graph, label),
+                )
+                if cur.fetchone() is None:
+                    logger.debug(
+                        "skipping %s: %s.%s edge table does not exist yet",
+                        index_name,
+                        graph,
+                        label,
+                    )
+                    continue
+                cur.execute(
+                    f'CREATE INDEX IF NOT EXISTS {index_name} ON "{graph}"."{label}" ({column})'
+                )
+        self._conn.commit()
+
     def close(self) -> None:
         """Close the underlying Postgres connection."""
         if self._conn and not self._conn.closed:
