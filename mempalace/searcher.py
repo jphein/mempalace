@@ -126,8 +126,8 @@ def _bm25_scores(
 def _hybrid_rank(
     results: list,
     query: str,
-    vector_weight: float = 0.6,
-    bm25_weight: float = 0.4,
+    vector_weight: float | None = None,
+    bm25_weight: float | None = None,
 ) -> list:
     """Re-rank ``results`` by a convex combination of vector similarity and BM25.
 
@@ -144,11 +144,23 @@ def _hybrid_rank(
     Used by candidate-union mode to merge BM25-only candidates that the
     vector index didn't surface.
 
+    When ``vector_weight``/``bm25_weight`` are left ``None`` (the production
+    dispatch path), the weights come from :func:`_hybrid_weights` so the #111
+    sweep can tune them via env without a code change. Explicit kwargs (used
+    by unit tests) bypass the env so tests stay deterministic.
+
     Mutates each result dict to add ``bm25_score`` and reorders the list
     in place. Returns the same list for convenience.
     """
     if not results:
         return results
+
+    if vector_weight is None or bm25_weight is None:
+        env_vw, env_bw = _hybrid_weights()
+        if vector_weight is None:
+            vector_weight = env_vw
+        if bm25_weight is None:
+            bm25_weight = env_bw
 
     docs = [r.get("text", "") for r in results]
     bm25_raw = _bm25_scores(query, docs)
@@ -323,6 +335,47 @@ def _recency_halflife_days() -> float:
         return float(raw)
     except ValueError:
         return RECENCY_HALFLIFE_DAYS
+
+
+# Convex-fusion weights for ``_hybrid_rank`` (techempower-org/mempalace, SME
+# #111). The hybrid candidate strategy unions BM25/graph candidates into the
+# vector pool, then re-ranks the whole pool by a convex combination of vector
+# similarity and BM25. Because BM25 IDF is recomputed corpus-relative to the
+# candidate set, the *act* of widening the pool shifts every drawer's BM25
+# score and can reshuffle near-tied vector hits — which is how the
+# candidate-strategy ablation (baselines/candidate-strategy-2026-05-28.json)
+# saw hybrid win tail recall (R@5 0.92→1.00) while demoting a rank-1 vector
+# match (MRR -2.3pp). The weights are the lever that trades those off, so we
+# expose them as a live env knob (read per call, no restart needed) mirroring
+# the rating/recency gates. Defaults reproduce the historical 0.6/0.4 blend.
+HYBRID_VECTOR_WEIGHT = 0.6
+HYBRID_BM25_WEIGHT = 0.4
+
+
+def _hybrid_weights() -> tuple[float, float]:
+    """Return ``(vector_weight, bm25_weight)`` for the convex hybrid blend.
+
+    Overridable via ``PALACE_HYBRID_VECTOR_WEIGHT`` / ``PALACE_HYBRID_BM25_WEIGHT``
+    so the #111 weight sweep can A/B against the live daemon without a code
+    change per point. Unparseable or unset values fall back to the module
+    defaults. The two weights are independent (not forced to sum to 1) — the
+    convex score is a monotone blend, so only their *ratio* changes ranking.
+    """
+
+    def _read(name: str, default: float) -> float:
+        raw = os.environ.get(name, "").strip()
+        if not raw:
+            return default
+        try:
+            v = float(raw)
+        except ValueError:
+            return default
+        return v if v >= 0.0 else default
+
+    return (
+        _read("PALACE_HYBRID_VECTOR_WEIGHT", HYBRID_VECTOR_WEIGHT),
+        _read("PALACE_HYBRID_BM25_WEIGHT", HYBRID_BM25_WEIGHT),
+    )
 
 
 def build_where_filter(

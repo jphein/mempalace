@@ -231,3 +231,68 @@ class TestHybridRankTolerantOfMissingDistance:
         assert all("bm25_score" in r for r in ranked), "rerank should add bm25_score"
         # Both must survive — neither should crash on distance=None.
         assert len(ranked) == 2
+
+
+class TestHybridWeightsEnvKnob:
+    """``_hybrid_weights`` exposes the convex blend as a live env knob
+    (PALACE_HYBRID_VECTOR_WEIGHT / PALACE_HYBRID_BM25_WEIGHT) for the #111
+    scorer-weight tuning. Defaults reproduce the historical 0.6/0.4 blend so
+    behavior is unchanged unless an operator sets the env."""
+
+    def test_default_weights_are_historical_blend(self, monkeypatch):
+        from mempalace.searcher import _hybrid_weights
+
+        monkeypatch.delenv("PALACE_HYBRID_VECTOR_WEIGHT", raising=False)
+        monkeypatch.delenv("PALACE_HYBRID_BM25_WEIGHT", raising=False)
+        assert _hybrid_weights() == (0.6, 0.4)
+
+    def test_env_overrides_both_weights(self, monkeypatch):
+        from mempalace.searcher import _hybrid_weights
+
+        monkeypatch.setenv("PALACE_HYBRID_VECTOR_WEIGHT", "0.85")
+        monkeypatch.setenv("PALACE_HYBRID_BM25_WEIGHT", "0.15")
+        assert _hybrid_weights() == (0.85, 0.15)
+
+    def test_unparseable_and_negative_fall_back_to_default(self, monkeypatch):
+        from mempalace.searcher import _hybrid_weights
+
+        monkeypatch.setenv("PALACE_HYBRID_VECTOR_WEIGHT", "not-a-float")
+        monkeypatch.setenv("PALACE_HYBRID_BM25_WEIGHT", "-0.3")
+        assert _hybrid_weights() == (0.6, 0.4)
+
+    def test_hybrid_rank_reads_env_when_weights_omitted(self, monkeypatch):
+        from mempalace.searcher import _hybrid_rank
+
+        # Two candidates: A has the better vector distance, B has the heavier
+        # BM25 term. A high vector weight must rank A first; a high BM25 weight
+        # must rank B first — proving _hybrid_rank consumes the env knob when
+        # called the way the fusion dispatch calls it (no explicit weights).
+        def pool():
+            return [
+                {"text": "alpha beta", "distance": 0.20},  # A: better vector
+                {"text": "alpha alpha alpha", "distance": 0.40},  # B: heavier BM25
+            ]
+
+        monkeypatch.setenv("PALACE_HYBRID_VECTOR_WEIGHT", "0.95")
+        monkeypatch.setenv("PALACE_HYBRID_BM25_WEIGHT", "0.05")
+        ranked = _hybrid_rank(pool(), "alpha")
+        assert ranked[0]["distance"] == 0.20  # vector-dominant → A first
+
+        monkeypatch.setenv("PALACE_HYBRID_VECTOR_WEIGHT", "0.05")
+        monkeypatch.setenv("PALACE_HYBRID_BM25_WEIGHT", "0.95")
+        ranked = _hybrid_rank(pool(), "alpha")
+        assert ranked[0]["distance"] == 0.40  # BM25-dominant → B first
+
+    def test_explicit_kwargs_bypass_env(self, monkeypatch):
+        from mempalace.searcher import _hybrid_rank
+
+        # Env says BM25-dominant, but an explicit vector-dominant kwarg wins —
+        # tests stay deterministic regardless of ambient env.
+        monkeypatch.setenv("PALACE_HYBRID_VECTOR_WEIGHT", "0.05")
+        monkeypatch.setenv("PALACE_HYBRID_BM25_WEIGHT", "0.95")
+        results = [
+            {"text": "alpha beta", "distance": 0.20},
+            {"text": "alpha alpha alpha", "distance": 0.40},
+        ]
+        ranked = _hybrid_rank(results, "alpha", vector_weight=0.95, bm25_weight=0.05)
+        assert ranked[0]["distance"] == 0.20
