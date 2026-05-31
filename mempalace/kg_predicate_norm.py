@@ -33,6 +33,8 @@ from typing import Optional
 __all__ = [
     "normalize_predicate",
     "CODE_TOKEN_BLOCKLIST",
+    "SHELL_COMMAND_BLOCKLIST",
+    "STOPWORD_BLOCKLIST",
     "SYNONYM_MAP",
     "NEGATION_PREFIXES",
 ]
@@ -88,6 +90,131 @@ CODE_TOKEN_BLOCKLIST: frozenset[str] = frozenset(
         "setattr",
         "hasattr",
         "delattr",
+    }
+)
+
+
+# ─── Class 1b: shell-command blocklist ──────────────────────────────────
+# Shell / CLI command names the extractor mistook for relations when mining
+# terminal-transcript and code-walkthrough drawers. Unlike CODE_TOKEN_BLOCKLIST
+# (camelCase API methods, caught partly by the digit heuristic), these are
+# short all-lowercase words with no digit, so the heuristic can't see them —
+# they have to be enumerated. Measured on the production AGE graph (issue #45),
+# these accounted for ~tens of thousands of triples wrongly typed as the
+# `other` long-tail bucket (``grep``=2750, ``cd``=2543, ``ls``=2020, …). They
+# carry no entity→entity semantic relation and are dropped outright.
+#
+# Conservative on collisions with real verbs: ``run`` / ``set`` / ``add`` /
+# ``push`` / ``commit`` / ``merge`` are NOT here because they double as
+# legitimate relations (and are routed to canonicals via SYNONYM_MAP below).
+SHELL_COMMAND_BLOCKLIST: frozenset[str] = frozenset(
+    {
+        "grep",
+        "cd",
+        "ls",
+        "diff",
+        "echo",
+        "cat",
+        "sed",
+        "awk",
+        "find",
+        "mv",
+        "cp",
+        "rm",
+        "mkdir",
+        "rmdir",
+        "touch",
+        "chmod",
+        "chown",
+        "tail",
+        "head",
+        "sort",
+        "uniq",
+        "wc",
+        "curl",
+        "wget",
+        "ssh",
+        "scp",
+        "sudo",
+        "apt",
+        "yum",
+        "brew",
+        "pip",
+        "npm",
+        "yarn",
+        "tar",
+        "gzip",
+        "unzip",
+        "ps",
+        "kill",
+        "top",
+        "df",
+        "du",
+        "ln",
+        "env",
+        "export",
+        "source",
+        "alias",
+        "pwd",
+        "which",
+        "man",
+    }
+)
+
+
+# ─── Class 1c: content-free function-word blocklist ──────────────────────
+# Modal / auxiliary / preposition fragments the extractor emits as standalone
+# predicates (``can``, ``will``, ``should``, ``does``, ``for``, ``on``, …).
+# They carry no relation by themselves; the LLM glued a bare grammatical word
+# where a verb phrase belonged. On the production graph (issue #45) these were
+# another large slice of the `other` bucket (``can``=3540, ``will``=1969,
+# ``should``=1735, ``does``=1619, ``for``=1267, ``on``=1054, ``had``=1043).
+#
+# NB: ``is`` / ``are`` / ``was`` / ``has`` / ``have`` are deliberately NOT here
+# — they are routed to ``is_a`` / ``contains`` via SYNONYM_MAP because they
+# usually express a real copular/possessive relation. Only the truly empty
+# auxiliaries and bare prepositions are dropped.
+STOPWORD_BLOCKLIST: frozenset[str] = frozenset(
+    {
+        "can",
+        "could",
+        "will",
+        "would",
+        "shall",
+        "may",
+        "might",
+        "must",
+        "should",
+        "do",
+        "does",
+        "did",
+        "had",
+        "for",
+        "on",
+        "of",
+        "to",
+        "from",
+        "with",
+        "by",
+        "as",
+        "at",
+        "into",
+        "onto",
+        "over",
+        "under",
+        "about",
+        "the",
+        "a",
+        "an",
+        "and",
+        "or",
+        "but",
+        "if",
+        "then",
+        "than",
+        "that",
+        "this",
+        "it",
     }
 )
 
@@ -155,6 +282,240 @@ SYNONYM_MAP: dict[str, str] = {
     "work_on": "works_on",
     "working_on": "works_on",
     "works_with": "works_on",
+    # ── issue #45: high-frequency genuine-relation paraphrases that were
+    # landing in the `other` bucket because the embedding nearest-canonical
+    # gate (threshold 0.45) couldn't bind them. The synonym map is a
+    # deterministic short-circuit that runs *before* the embedding scorer, so
+    # these resolve exactly rather than scoring ~0.30-0.44 and falling to
+    # `other`. Each family below was seeded from the production frequency
+    # table of `other` raw_relation_types (see scripts + #45 diagnosis).
+    # read family → reads
+    "read": "reads",
+    "get": "reads",
+    "gets": "reads",
+    "got": "reads",
+    "fetch": "reads",
+    "fetches": "reads",
+    "fetched": "reads",
+    "load": "reads",
+    "loads": "reads",
+    "loaded": "reads",
+    "retrieves": "reads",
+    "retrieve": "reads",
+    # write family → writes
+    "write": "writes",
+    "wrote": "writes",
+    "set": "writes",
+    "sets": "writes",
+    "is_set_to": "writes",
+    "store": "writes",
+    "stores": "writes",
+    "stored": "writes",
+    "save": "writes",
+    "saves": "writes",
+    "saved": "writes",
+    "assigns_value": "writes",
+    # modify family → modifies
+    "modify": "modifies",
+    "modified": "modifies",
+    "update": "modifies",
+    "updates": "modifies",
+    "updated": "modifies",
+    "has_been_updated": "modifies",
+    "change": "modifies",
+    "changes": "modifies",
+    "changed": "modifies",
+    "edit": "modifies",
+    "edits": "modifies",
+    "edited": "modifies",
+    "fix": "modifies",
+    "fixes": "modifies",
+    "fixed": "modifies",
+    "patches": "modifies",
+    # add family → adds
+    "add": "adds",
+    "added": "adds",
+    "append": "adds",
+    "appends": "adds",
+    "appended": "adds",
+    "insert": "adds",
+    "inserts": "adds",
+    "inserted": "adds",
+    "merge": "adds",
+    "merges": "adds",
+    "merged": "adds",
+    # run family → runs
+    "run": "runs",
+    "ran": "runs",
+    "execute": "runs",
+    "executes": "runs",
+    "executed": "runs",
+    "start": "runs",
+    "starts": "runs",
+    "started": "runs",
+    "launch": "runs",
+    "launches": "runs",
+    "launched": "runs",
+    "invoke": "runs",
+    "invokes": "runs",
+    "invoked": "runs",
+    # use family → uses (extends existing use/used/utilizes group)
+    "take": "uses",
+    "takes": "uses",
+    "took": "uses",
+    "accept": "uses",
+    "accepts": "uses",
+    "accepted": "uses",
+    "consume": "uses",
+    "consumes": "uses",
+    "consumed": "uses",
+    # send family → sends
+    "send": "sends",
+    "sent": "sends",
+    "emit": "sends",
+    "emits": "sends",
+    "emitted": "sends",
+    "fire": "sends",
+    "fires": "sends",
+    "fired": "sends",
+    "dispatch": "sends",
+    "dispatches": "sends",
+    "dispatched": "sends",
+    "publish": "sends",
+    "publishes": "sends",
+    "published": "sends",
+    # provide family → provides
+    "provide": "provides",
+    "offer": "provides",
+    "offers": "provides",
+    "offered": "provides",
+    "expose": "provides",
+    "exposes": "provides",
+    "exposed": "provides",
+    "supply": "provides",
+    "supplies": "provides",
+    "supplied": "provides",
+    # location family → located_at
+    "is_in": "located_at",
+    "located_in": "located_at",
+    "lives_in": "located_at",
+    "resides_in": "located_at",
+    "stored_in": "located_at",
+    "found_in": "located_at",
+    "is_located_at": "located_at",
+    "is_at": "located_at",
+    # property family → has_property
+    "has_method": "has_property",
+    "has_methods": "has_property",
+    "has_feature": "has_property",
+    "has_features": "has_property",
+    "has_version": "has_property",
+    "has_status": "has_property",
+    "has_id": "has_property",
+    "has_field": "has_property",
+    "has_fields": "has_property",
+    "has_attribute": "has_property",
+    "has_value": "has_property",
+    "has_name": "has_property",
+    "has_type": "has_property",
+    "has_property": "has_property",
+    # identity family → is_a (extends existing is/are/was group)
+    "is_called": "is_a",
+    "called": "is_a",
+    "named": "is_a",
+    "was_named": "is_a",
+    "exists": "is_a",
+    "exist": "is_a",
+    "represents": "is_a",
+    # creation family → creates
+    "make": "creates",
+    "makes": "creates",
+    "made": "creates",
+    "generate": "creates",
+    "generates": "creates",
+    "generated": "creates",
+    "build": "creates",
+    "builds": "creates",
+    "produce": "creates",
+    "produces": "creates",
+    "produced": "creates",
+    # description family → describes
+    "describe": "describes",
+    "described": "describes",
+    "report": "describes",
+    "reports": "describes",
+    "reported": "describes",
+    "say": "describes",
+    "says": "describes",
+    "said": "describes",
+    "state": "describes",
+    "states": "describes",
+    "stated": "describes",
+    "suggest": "describes",
+    "suggests": "describes",
+    "ask": "describes",
+    "asks": "describes",
+    "note": "describes",
+    "notes": "describes",
+    "explain": "describes",
+    "explains": "describes",
+    "indicates": "describes",
+    "indicate": "describes",
+    # completion family → completed
+    "complete": "completed",
+    "completes": "completed",
+    "finish": "completed",
+    "finishes": "completed",
+    "finished": "completed",
+    "done": "completed",
+    "pass": "completed",
+    "passes": "completed",
+    "passed": "completed",
+    "close": "completed",
+    "closes": "completed",
+    "closed": "completed",
+    "resolve": "completed",
+    "resolves": "completed",
+    "resolved": "completed",
+    # containment extensions → contains
+    "cover": "contains",
+    "covers": "contains",
+    "covered": "contains",
+    "wraps": "contains",
+    "wrap": "contains",
+    # check family → checks
+    "check": "checks",
+    "verify": "checks",
+    "verifies": "checks",
+    "verified": "checks",
+    "validate": "checks",
+    "validates": "checks",
+    "validated": "checks",
+    "test": "checks",
+    "tests": "checks",
+    "tested": "checks",
+    "ensure": "checks",
+    "ensures": "checks",
+    # dependency extensions → depends_on
+    "need": "depends_on",
+    "needs": "depends_on",
+    "needed": "depends_on",
+    # handling family → handles
+    "handle": "handles",
+    "process": "handles",
+    "processes": "handles",
+    "processed": "handles",
+    "manage": "handles",
+    "manages": "handles",
+    "managed": "handles",
+    # failure family → failed
+    "fail": "failed",
+    "fails": "failed",
+    "errors": "failed",
+    "errored": "failed",
+    "crashed": "failed",
+    "broke": "failed",
+    "broken": "failed",
 }
 
 
@@ -256,6 +617,10 @@ def _is_code_token(folded: str) -> bool:
         return True
     if folded.replace("_", "") in CODE_TOKEN_BLOCKLIST:
         return True
+    # Shell / CLI command names (issue #45) — single all-lowercase words with
+    # no digit, so the heuristic below can't catch them; enumerated explicitly.
+    if folded in SHELL_COMMAND_BLOCKLIST:
+        return True
     return _looks_like_code(folded)
 
 
@@ -287,10 +652,11 @@ def normalize_predicate(raw: str) -> Optional[str]:
 
     Pipeline:
       1. fold — lowercase, snake_case, strip quotes/apostrophes (class 3 prep)
-      2. drop if empty or a known/heuristic code token (class 1)
-      3. strip negation prefix, remember polarity (class 3)
-      4. canonicalize the base via the synonym map (class 2)
-      5. re-apply ``not_`` prefix if it was negated
+      2. drop if empty or a known/heuristic code or shell token (class 1)
+      3. drop if a content-free function word / modal (class 1c, issue #45)
+      4. strip negation prefix, remember polarity (class 3)
+      5. canonicalize the base via the synonym map (class 2)
+      6. re-apply ``not_`` prefix if it was negated
 
     The negation prefix is applied *after* canonicalization so that
     ``doesn't_appear`` and ``does_not_appear`` both land on ``not_appear``,
@@ -313,8 +679,18 @@ def normalize_predicate(raw: str) -> Optional[str]:
     if folded in _BARE_NEGATION_WORDS:
         return None
 
-    # Class 1: code tokens are dropped outright (no negation/synonym pass).
+    # Class 1: code / shell tokens are dropped outright (no negation/synonym
+    # pass).
     if _is_code_token(folded):
+        return None
+
+    # Class 1c (issue #45): a bare content-free function word / modal /
+    # preposition carries no relation on its own. Checked before negation so
+    # that e.g. ``does`` drops but ``does_not_exist`` (a negation prefix +
+    # base) still reaches the negation peel below. STOPWORD_BLOCKLIST is
+    # disjoint from SYNONYM_MAP keys and canonical names, so this never eats a
+    # legitimate relation.
+    if folded in STOPWORD_BLOCKLIST:
         return None
 
     # Class 3: peel negation, normalize the base, then re-prefix.
@@ -323,9 +699,9 @@ def normalize_predicate(raw: str) -> Optional[str]:
         # The whole token was a negation prefix (e.g. "not_"); nothing left.
         return None
 
-    # A dropped base (code token hiding behind a negation) drops the whole
-    # predicate too.
-    if _is_code_token(base):
+    # A dropped base (code/shell token or a stopword hiding behind a negation)
+    # drops the whole predicate too.
+    if _is_code_token(base) or base in STOPWORD_BLOCKLIST:
         return None
 
     # Class 2: collapse synonyms on the base.

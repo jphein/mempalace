@@ -106,9 +106,13 @@ class TestClass3Negation(unittest.TestCase):
     """Negation/punctuation fragments → stripped + polarity denormalized."""
 
     def test_issue_apostrophe_examples(self):
-        # don't_adapt → not_adapt ; aren't_merged → not_merged
+        # don't_adapt → not_adapt (base `adapt` not a synonym, passes through)
         self.assertEqual(normalize_predicate("don't_adapt"), "not_adapt")
-        self.assertEqual(normalize_predicate("aren't_merged"), "not_merged")
+        # aren't_merged: peel `arent_`, base `merged` now canonicalizes to
+        # `adds` (issue #45 add-family synonym), then re-prefix → not_adds.
+        # This is the documented peel-then-canonicalize design applied to the
+        # expanded synonym map, not a leaf passthrough.
+        self.assertEqual(normalize_predicate("aren't_merged"), "not_adds")
         self.assertEqual(normalize_predicate("'doesn't_appear'"), "not_appear")
 
     def test_apostrophe_stripped_from_endpoints(self):
@@ -126,9 +130,11 @@ class TestClass3Negation(unittest.TestCase):
         # re-prefix not_. "is not a part of" → base "a_part_of" → part_of
         # → not_part_of.
         self.assertEqual(normalize_predicate("is_not_a_part_of"), "not_part_of")
-        # "isn't a" strips the "isnt_" prefix leaving base "a" (not a known
-        # synonym), so the result is not_a — consistent peel-then-canonicalize.
-        self.assertEqual(normalize_predicate("isnt_a"), "not_a")
+        # "isn't a" strips the "isnt_" prefix leaving base "a", which is now a
+        # content-free stopword (issue #45 STOPWORD_BLOCKLIST). A negation of a
+        # contentless word carries no relation, so the whole predicate drops to
+        # None — the stopword check applies to the negation-stripped base too.
+        self.assertIsNone(normalize_predicate("isnt_a"))
 
     def test_bare_negation_token_drops(self):
         self.assertIsNone(normalize_predicate("not_"))
@@ -189,6 +195,92 @@ class TestIdempotency(unittest.TestCase):
     def test_blocklist_entries_all_drop(self):
         for tok in CODE_TOKEN_BLOCKLIST:
             self.assertIsNone(normalize_predicate(tok), tok)
+
+
+class TestIssue45ShellAndStopwordDrops(unittest.TestCase):
+    """Issue #45: shell commands and content-free function words drop.
+
+    These accounted for a large slice of the production `other` bucket —
+    single all-lowercase words with no digit, invisible to the camelCase /
+    digit heuristics, so they had to be enumerated.
+    """
+
+    def test_shell_commands_dropped(self):
+        for tok in ("grep", "cd", "ls", "echo", "diff", "find", "curl", "ssh"):
+            self.assertIsNone(normalize_predicate(tok), tok)
+
+    def test_stopwords_dropped(self):
+        for tok in ("can", "will", "should", "does", "for", "on", "had", "the"):
+            self.assertIsNone(normalize_predicate(tok), tok)
+
+    def test_real_verbs_that_double_as_commands_survive_via_synonym(self):
+        # `run` / `set` / `add` / `push` / `merge` / `make` double as verbs and
+        # CLI subcommands. They are deliberately NOT in the shell blocklist;
+        # the synonym map routes them to canonicals instead of dropping.
+        self.assertEqual(normalize_predicate("run"), "runs")
+        self.assertEqual(normalize_predicate("set"), "writes")
+        self.assertEqual(normalize_predicate("add"), "adds")
+        self.assertEqual(normalize_predicate("make"), "creates")
+        self.assertEqual(normalize_predicate("merged"), "adds")
+
+    def test_is_copula_routes_to_is_a_not_dropped(self):
+        # `is` / `are` / `was` express a copular relation → is_a, NOT dropped.
+        for tok in ("is", "are", "was"):
+            self.assertEqual(normalize_predicate(tok), "is_a", tok)
+
+
+class TestIssue45SynonymFamilies(unittest.TestCase):
+    """Issue #45: high-frequency `other`-bucket paraphrases → canonicals.
+
+    Each assertion is a real production predicate that previously scored below
+    the 0.45 embedding threshold and fell to `other`; the deterministic
+    synonym short-circuit now binds it exactly.
+    """
+
+    def test_read_family(self):
+        for raw in ("get", "gets", "fetches", "loads"):
+            self.assertEqual(normalize_predicate(raw), "reads", raw)
+
+    def test_write_family(self):
+        for raw in ("set", "sets", "is_set_to", "stores", "saves"):
+            self.assertEqual(normalize_predicate(raw), "writes", raw)
+
+    def test_modify_family(self):
+        for raw in ("update", "updated", "changed", "fixes", "has_been_updated"):
+            self.assertEqual(normalize_predicate(raw), "modifies", raw)
+
+    def test_run_family(self):
+        for raw in ("run", "executed", "started", "launches"):
+            self.assertEqual(normalize_predicate(raw), "runs", raw)
+
+    def test_send_family(self):
+        for raw in ("sent", "emits", "fires", "publishes"):
+            self.assertEqual(normalize_predicate(raw), "sends", raw)
+
+    def test_provide_family(self):
+        for raw in ("offers", "exposes", "supplies"):
+            self.assertEqual(normalize_predicate(raw), "provides", raw)
+
+    def test_location_family(self):
+        for raw in ("is_in", "located_in", "stored_in", "found_in"):
+            self.assertEqual(normalize_predicate(raw), "located_at", raw)
+
+    def test_property_family(self):
+        for raw in ("has_method", "has_feature", "has_version", "has_id"):
+            self.assertEqual(normalize_predicate(raw), "has_property", raw)
+
+    def test_describe_family(self):
+        for raw in ("reports", "says", "states", "suggests", "asks"):
+            self.assertEqual(normalize_predicate(raw), "describes", raw)
+
+    def test_completion_family(self):
+        for raw in ("passed", "closes", "finished", "resolved"):
+            self.assertEqual(normalize_predicate(raw), "completed", raw)
+
+    def test_all_new_synonym_targets_are_canonical_fixed_points(self):
+        # Every synonym target must itself normalize to itself (no chains).
+        for target in set(SYNONYM_MAP.values()):
+            self.assertEqual(normalize_predicate(target), target, target)
 
 
 if __name__ == "__main__":
