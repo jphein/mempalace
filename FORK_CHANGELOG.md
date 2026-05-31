@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Performance
 
 
-- **AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335)** ([`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD))
+- **AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
   Follow-ups to the Cat 7b hybrid-latency root-cause (palace-daemon
   ``docs/perf/2026-05-30-hybrid-graph-walk-latency.md``): the per-entity
   graph-walk Cypher in ``searcher._graph_expand_*`` and the daemon's
@@ -60,7 +60,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ``--shm-size=256m``).
 
   *Tests:* 6 — tests/test_knowledge_graph_age.py::{test_edge_endpoint_index_targets_are_the_four_we_expect, test_ensure_edge_endpoint_indexes_skips_absent_then_installs} + tests/test_searcher_stopwords.py::TestGraphExpandBoundEndpoint (seeds/entities anonymous-target guards); the index test is a @pgmark integration run against a live AGE container (skip-when-absent → install-when-present → idempotent)
-  *Upstream:* [PR #335](https://github.com/MemPalace/mempalace/pull/335) (OPEN)
   *Files:* `mempalace/knowledge_graph_age.py`, `mempalace/backfill_age.py`, `mempalace/searcher.py`, `docs/operators/2026-05-31-age-graph-walk-shm-size.md`
 
 

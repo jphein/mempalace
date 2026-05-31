@@ -237,7 +237,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335) | [#335](https://github.com/MemPalace/mempalace/pull/335) (OPEN) | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
+| 1 | AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
 | 2 | pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308) | — | [`5fba6d8`](https://github.com/techempower-org/mempalace/commit/5fba6d8) |
 | 3 | README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28) | — | [`HEAD`](https://github.com/techempower-org/mempalace/commit/HEAD) |
 | 4 | README.md + docs/ECOSYSTEM.md — soften 'engram-2 17% E2E QA' framing per the 2026-05-24 research doc's unsubstantiated finding (#319) | — | [`ddf00b4`](https://github.com/techempower-org/mempalace/commit/ddf00b4) |

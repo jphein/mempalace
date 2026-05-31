@@ -43,10 +43,11 @@ triple should be dropped (code token, empty, or punctuation-only input).
 
 Pipeline:
   1. fold — lowercase, snake_case, strip quotes/apostrophes (class 3 prep)
-  2. drop if empty or a known/heuristic code token (class 1)
-  3. strip negation prefix, remember polarity (class 3)
-  4. canonicalize the base via the synonym map (class 2)
-  5. re-apply ``not_`` prefix if it was negated
+  2. drop if empty or a known/heuristic code or shell token (class 1)
+  3. drop if a content-free function word / modal (class 1c, issue #45)
+  4. strip negation prefix, remember polarity (class 3)
+  5. canonicalize the base via the synonym map (class 2)
+  6. re-apply ``not_`` prefix if it was negated
 
 The negation prefix is applied *after* canonicalization so that
 ``doesn't_appear`` and ``does_not_appear`` both land on ``not_appear``,

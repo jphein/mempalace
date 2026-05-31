@@ -307,12 +307,13 @@ class KnowledgeGraphAGE:
                 if cur.fetchone() is None:
                     logger.debug(
                         "skipping %s: %s.%s edge table does not exist yet",
-                        index_name, graph, label,
+                        index_name,
+                        graph,
+                        label,
                     )
                     continue
                 cur.execute(
-                    f'CREATE INDEX IF NOT EXISTS {index_name} '
-                    f'ON "{graph}"."{label}" ({column})'
+                    f'CREATE INDEX IF NOT EXISTS {index_name} ON "{graph}"."{label}" ({column})'
                 )
         self._conn.commit()
 

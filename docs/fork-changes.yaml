@@ -27,11 +27,9 @@ entries:
   - id: age-graph-walk-followups
     date: 2026-05-31
     bucket: Performance
-    commit: HEAD
+    commit: TBD
     area: Performance
     summary: "AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335)"
-    pr: 335
-    pr_state: OPEN
     tests: "6 — tests/test_knowledge_graph_age.py::{test_edge_endpoint_index_targets_are_the_four_we_expect, test_ensure_edge_endpoint_indexes_skips_absent_then_installs} + tests/test_searcher_stopwords.py::TestGraphExpandBoundEndpoint (seeds/entities anonymous-target guards); the index test is a @pgmark integration run against a live AGE container (skip-when-absent → install-when-present → idempotent)"
     files:
       - mempalace/knowledge_graph_age.py
