@@ -37,7 +37,17 @@ dependencies = [
     # but unused — small wheel-size cost in exchange for one fewer pip
     # command in the multilingual setup path.
     "huggingface_hub>=1.0",
-    "tokenizers>=0.23",
+    # Lower bound is 0.22, not 0.23: the [rerank] extra pulls
+    # sentence-transformers → transformers, whose current releases pin
+    # ``tokenizers>=0.22.0,<=0.23.0`` (e.g. transformers 5.9.0). A bare
+    # ``>=0.23`` floor sits above the bottom of that window, leaving the
+    # resolver only the single point 0.23.0 to satisfy both — which sends
+    # pip into long backtracking and ultimately ResolutionImpossible on a
+    # fresh ``pip install mempalace[rerank]`` (techempower-org/mempalace#333).
+    # 0.22 matches what the rerank stack actually resolves to (0.22.2), and
+    # mempalace's only direct use (embedding.py: ``Tokenizer.from_file``) is
+    # stable well below 0.22. Upper guard ``<0.24`` keeps it bounded.
+    "tokenizers>=0.22,<0.24",
     "numpy>=2.0",
     # Tier 6a content-date extraction uses dateutil for natural-language
     # date parsing (filename + content body branches). It happens to install

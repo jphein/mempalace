@@ -2038,7 +2038,7 @@ requires-dist = [
     { name = "pyyaml", specifier = ">=6.0,<7" },
     { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.14" },
     { name = "striprtf", marker = "extra == 'extract'", specifier = ">=0.0.27" },
-    { name = "tokenizers", specifier = ">=0.15" },
+    { name = "tokenizers", specifier = ">=0.22,<0.24" },
     { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0.0" },
 ]
 provides-extras = ["dev", "spellcheck", "gpu", "dml", "coreml", "multilingual", "extract"]
