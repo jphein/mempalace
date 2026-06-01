@@ -148,7 +148,7 @@ class TestToolSelection:
         assert result is not None
         assert result.tool == "mempalace_search"
         assert result.args["query"] == "remind me about the reranker?"
-        assert result.args["limit"] == 5
+        assert result.args["limit"] == 10
 
     def test_entity_and_temporal_routes_to_kg_query(self):
         signals = _empty_signals(score=5)
@@ -170,7 +170,7 @@ class TestToolSelection:
         assert result.tool == "mempalace_search"
         assert result.args["query"] == "Alice"
         assert result.args["wing"] == "wing_alice"
-        assert result.args["limit"] == 3
+        assert result.args["limit"] == 5
 
     def test_entity_only_without_wing_routes_to_search_no_wing(self):
         signals = _empty_signals(score=4)
@@ -181,7 +181,7 @@ class TestToolSelection:
         assert result.tool == "mempalace_search"
         assert result.args["query"] == "UnknownThing"
         assert "wing" not in result.args
-        assert result.args["limit"] == 3
+        assert result.args["limit"] == 5
 
     def test_temporal_only_routes_to_search_with_project_wing(self):
         signals = _empty_signals(
@@ -196,7 +196,7 @@ class TestToolSelection:
         assert result.tool == "mempalace_search"
         assert result.args["query"] == "last time we debugged the latency issue"
         assert result.args["wing"] == "wing_familiar"
-        assert result.args["limit"] == 3
+        assert result.args["limit"] == 5
 
     def test_temporal_only_no_project_wing(self):
         signals = _empty_signals(score=4, query_text="last time we looked at this")
@@ -250,7 +250,7 @@ class TestPriority:
 
         assert result is not None
         assert result.tool == "mempalace_search"
-        assert result.args["limit"] == 5  # explicit uses limit=5
+        assert result.args["limit"] == 10  # explicit uses limit=10
 
     def test_entity_temporal_overrides_entity_only(self):
         """Entity + temporal -> kg_query, not search."""

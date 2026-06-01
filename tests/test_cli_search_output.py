@@ -542,9 +542,9 @@ class TestSearchParserFlags:
         ns = self._parse(["mempalace", "search", "q", "--limit", "20"])
         assert ns is not None
         assert ns.limit == 20
-        # Default ``--results`` stays at 5 so backwards-compat callers
-        # that omit ``--limit`` see no change.
-        assert ns.results == 5
+        # Default ``--results`` is 15 (retrieval-breadth tuning, mempalace 3.3.7);
+        # ``--limit`` is an alias that overrides it.
+        assert ns.results == 15
 
     def test_default_format_is_none(self):
         """``cmd_search`` resolves None → ``table`` itself so explicit
