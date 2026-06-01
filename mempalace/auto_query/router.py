@@ -73,7 +73,7 @@ def _select_tool(signals: SignalSet) -> Optional[MCPCall]:
         query = _sanitize_for_search(signals.query_text)
         return MCPCall(
             tool="mempalace_search",
-            args={"query": query, "limit": 5},
+            args={"query": query, "limit": 10},
         )
 
     # Priority 3: Entity + temporal compound
@@ -87,7 +87,7 @@ def _select_tool(signals: SignalSet) -> Optional[MCPCall]:
     # Priority 4: Entity only
     if signals.entity:
         best = max(signals.entity, key=lambda s: s.score)
-        args = {"query": best.name, "limit": 3}
+        args = {"query": best.name, "limit": 5}
         if best.wing:
             args["wing"] = best.wing
         return MCPCall(tool="mempalace_search", args=args)
@@ -95,7 +95,7 @@ def _select_tool(signals: SignalSet) -> Optional[MCPCall]:
     # Priority 5: Temporal only
     if signals.temporal:
         query = _sanitize_for_search(signals.query_text)
-        args = {"query": query, "limit": 3}
+        args = {"query": query, "limit": 5}
         if signals.project_wing:
             args["wing"] = signals.project_wing
         return MCPCall(tool="mempalace_search", args=args)

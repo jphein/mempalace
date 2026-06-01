@@ -1289,7 +1289,7 @@ def tool_get_taxonomy():
 
 def tool_search(
     query: str,
-    limit: int = 5,
+    limit: int = 15,
     wing: str = None,
     room: str = None,
     tags: list = None,
@@ -3332,7 +3332,7 @@ TOOLS = {
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Max results (default 5)",
+                    "description": "Max results (default 15)",
                     "minimum": 1,
                     "maximum": 100,
                 },

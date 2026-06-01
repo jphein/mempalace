@@ -5558,7 +5558,7 @@ def main():
             "multiple --tag flags AND together (drawer must have ALL of them)."
         ),
     )
-    p_search.add_argument("--results", type=int, default=5, help="Number of results")
+    p_search.add_argument("--results", type=int, default=15, help="Number of results")
     p_search.add_argument(
         "--limit",
         type=int,
