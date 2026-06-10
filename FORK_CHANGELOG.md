@@ -18,6 +18,34 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-06-10]
+
+
+### Added
+
+
+- **auto_wake: opt-in wake-on-demand for a sleeping palace-daemon host (wake command + /health poll + single retry)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  The palace daemon often runs on a Wake-on-LAN-armed host that
+  suspends to save power, so "connection refused" routinely means
+  *asleep*, not *down*. With ``"auto_wake"`` configured in
+  ``~/.mempalace/config.json`` (a command string, or an object with
+  ``command`` / ``timeout_seconds`` / ``poll_interval_seconds``),
+  the CLI's six daemon call sites route through
+  ``auto_wake.urlopen_with_wake()``: on a connection-level failure
+  it runs the wake command, polls ``/health`` until the deadline,
+  and retries the original request once. HTTP errors never trigger
+  a wake (the daemon answered — 404-fallback paths stay intact),
+  the attempt is once-per-process, ``PALACE_AUTO_WAKE=0``
+  force-disables, and any malformed config resolves to *off* — a
+  typo must never make the CLI run an unexpected shell command.
+  Hooks deliberately stay out: they have a latency budget, and
+  their failed mines are already journaled and replayed by
+  ``pending_queue``.
+
+  *Tests:* 31 — tests/test_auto_wake.py (config normalization fail-open-to-off, HTTP-vs-connection eligibility gate, attempt/poll/deadline, once-per-process guard, urlopen wrapper retry)
+  *Files:* `mempalace/auto_wake.py`, `mempalace/config.py`, `mempalace/cli.py`, `tests/test_auto_wake.py`
+
+
 ## [2026-05-31]
 
 

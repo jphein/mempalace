@@ -68,6 +68,10 @@ exclude = [
     # 2026-05-31); referenced in README landscape + the memory-system
     # benchmark survey as a comparison pointer, not an active link.
     '^https://github\.com/doobidoo/mcp-memory-service(/|$)',
+    # 199-biotechnologies/engram-2 was deleted/renamed upstream (404 as of
+    # 2026-06-10); referenced in ECOSYSTEM + research docs as a comparison
+    # pointer, not an active link.
+    '^https://github\.com/199-biotechnologies/engram-2(/|$)',
     '^https://www\.usenotra\.com(/|$)',
     '^https://celiums\.ai(/|$)',
     '^https://mempalaceofficial\.com(/|$)',

@@ -356,6 +356,59 @@ class MempalaceConfig:
         return True
 
     @property
+    def auto_wake(self):
+        """Opt-in wake-on-demand for a sleeping palace host.
+
+        The daemon host may be a suspend-to-RAM machine where
+        "unreachable" routinely means "asleep", not "down". When
+        configured, connection-level failures in the CLI run the wake
+        command (a Wake-on-LAN sender or similar), wait for the daemon's
+        ``/health``, and retry once. See :mod:`mempalace.auto_wake`.
+
+        ``config.json`` accepts a command string::
+
+            {"auto_wake": "wakeonlan aa:bb:cc:dd:ee:ff"}
+
+        or an object with tuning knobs::
+
+            {"auto_wake": {"command": "wakeonlan aa:bb:cc:dd:ee:ff",
+                           "timeout_seconds": 45,
+                           "poll_interval_seconds": 2}}
+
+        Returns a normalized dict (``command``, ``timeout_seconds``,
+        ``poll_interval_seconds``) or ``None`` when disabled. The env
+        escape hatch ``PALACE_AUTO_WAKE=0`` force-disables without
+        editing config — useful for scripts that prefer fail-fast.
+        Garbage values fall back to defaults; a missing/empty command
+        disables (fail-open to "off": a typo must never make the CLI
+        run an unexpected shell command).
+        """
+        env_val = os.environ.get("PALACE_AUTO_WAKE")
+        if env_val is not None and env_val.strip().lower() in ("0", "false", "no"):
+            return None
+        raw = self._file_config.get("auto_wake")
+        if isinstance(raw, str):
+            raw = {"command": raw}
+        if not isinstance(raw, dict):
+            return None
+        command = raw.get("command")
+        if not isinstance(command, str) or not command.strip():
+            return None
+
+        def _bounded(key, default, lo, hi):
+            try:
+                val = float(raw.get(key, default))
+            except (TypeError, ValueError):
+                return default
+            return min(max(val, lo), hi)
+
+        return {
+            "command": command.strip(),
+            "timeout_seconds": _bounded("timeout_seconds", 45.0, 5.0, 300.0),
+            "poll_interval_seconds": _bounded("poll_interval_seconds", 2.0, 0.5, 30.0),
+        }
+
+    @property
     def palace_path(self):
         """Path to the memory palace data directory."""
         env_val = os.environ.get("MEMPALACE_PALACE_PATH") or os.environ.get("MEMPAL_PALACE_PATH")

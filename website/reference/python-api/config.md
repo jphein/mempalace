@@ -58,6 +58,38 @@ explicitly via ``PALACE_DAEMON_STRICT=0`` env or ``"daemon_strict":
 false`` in config.json — useful for test suites and offline
 development where the daemon isn't reachable.
 
+#### `auto_wake`
+
+```python
+def auto_wake(self)
+```
+
+Opt-in wake-on-demand for a sleeping palace host.
+
+The daemon host may be a suspend-to-RAM machine where
+"unreachable" routinely means "asleep", not "down". When
+configured, connection-level failures in the CLI run the wake
+command (a Wake-on-LAN sender or similar), wait for the daemon's
+``/health``, and retry once. See :mod:`mempalace.auto_wake`.
+
+``config.json`` accepts a command string::
+
+    &#123;"auto_wake": "wakeonlan aa:bb:cc:dd:ee:ff"}
+
+or an object with tuning knobs::
+
+    &#123;"auto_wake": &#123;"command": "wakeonlan aa:bb:cc:dd:ee:ff",
+                   "timeout_seconds": 45,
+                   "poll_interval_seconds": 2}}
+
+Returns a normalized dict (``command``, ``timeout_seconds``,
+``poll_interval_seconds``) or ``None`` when disabled. The env
+escape hatch ``PALACE_AUTO_WAKE=0`` force-disables without
+editing config — useful for scripts that prefer fail-fast.
+Garbage values fall back to defaults; a missing/empty command
+disables (fail-open to "off": a typo must never make the CLI
+run an unexpected shell command).
+
 #### `palace_path`
 
 ```python
