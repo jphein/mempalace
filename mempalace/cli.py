@@ -40,6 +40,7 @@ import shlex
 import argparse
 from pathlib import Path
 
+from .auto_wake import urlopen_with_wake
 from .config import MempalaceConfig
 from .corpus_origin import detect_origin_heuristic, detect_origin_llm
 from .llm_client import LLMError, get_provider
@@ -194,7 +195,7 @@ def _call_daemon_tool(name: str, arguments: dict) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_daemon_timeout()) as resp:
+        with urlopen_with_wake(req, timeout=_daemon_timeout()) as resp:
             body = resp.read()
         envelope = json.loads(body.decode("utf-8", errors="replace"))
     except (urllib.error.URLError, ConnectionError, OSError, json.JSONDecodeError) as e:
@@ -233,7 +234,7 @@ def _call_daemon_rest(path: str, params: dict | None = None) -> dict:
         headers["x-api-key"] = api_key
     req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
+        with urlopen_with_wake(req, timeout=10) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
         if e.code in (404, 401, 403):
@@ -264,7 +265,7 @@ def _post_daemon_rest(path: str, body: dict) -> dict:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_daemon_timeout()) as resp:
+        with urlopen_with_wake(req, timeout=_daemon_timeout()) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
         if e.code == 404:
@@ -298,7 +299,7 @@ def _patch_daemon_rest(path: str, body: dict) -> dict:
         method="PATCH",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_daemon_timeout()) as resp:
+        with urlopen_with_wake(req, timeout=_daemon_timeout()) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace"))
     except urllib.error.HTTPError as e:
         if e.code in (404, 401, 403):
@@ -331,7 +332,7 @@ def _post_daemon_mine_cli(directory: str, wing: str, mode: str = "convos") -> bo
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_daemon_timeout()) as resp:
+        with urlopen_with_wake(req, timeout=_daemon_timeout()) as resp:
             body = resp.read().decode("utf-8", errors="replace")
         print(f"  Daemon mine accepted: {body[:200]}")
         return True
@@ -2654,7 +2655,7 @@ def _post_cypher(body: dict) -> tuple[dict | None, int | None]:
         method="POST",
     )
     try:
-        with urllib.request.urlopen(req, timeout=_daemon_timeout()) as resp:
+        with urlopen_with_wake(req, timeout=_daemon_timeout()) as resp:
             return json.loads(resp.read().decode("utf-8", errors="replace")), None
     except urllib.error.HTTPError as e:
         return None, e.code
