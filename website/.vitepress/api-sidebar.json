@@ -8,6 +8,10 @@
         "link": "/reference/python-api/auto_query"
       },
       {
+        "text": "mempalace.auto_wake",
+        "link": "/reference/python-api/auto_wake"
+      },
+      {
         "text": "mempalace.backends",
         "link": "/reference/python-api/backends"
       },
