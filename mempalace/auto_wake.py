@@ -50,7 +50,10 @@ def _daemon_healthy(daemon_url: str, timeout: float = 3.0) -> bool:
     try:
         with urllib.request.urlopen(f"{daemon_url.rstrip('/')}/health", timeout=timeout) as resp:
             return resp.status == 200
-    except OSError:
+    except Exception:
+        # Any failure means "not healthy yet": besides the OSError family,
+        # urlopen can raise ValueError (malformed URL from config) or
+        # http.client.HTTPException mid-resume — none may crash the poll.
         return False
 
 
@@ -82,8 +85,10 @@ def attempt_wake(daemon_url: str, settings: dict) -> bool:
     timeout_s = settings["timeout_seconds"]
     poll_s = settings["poll_interval_seconds"]
 
+    # Deliberately not echoing the command: it comes from the user's
+    # config and may embed credentials; stderr ends up in transcripts.
     print(
-        f"palace-daemon unreachable — auto_wake: running {command!r} "
+        f"palace-daemon unreachable — auto_wake: waking palace host "
         f"(waiting up to {timeout_s:.0f}s)",
         file=sys.stderr,
     )
