@@ -3480,14 +3480,14 @@ def tool_reconnect():
         _palace_db_mtime, \
         _vector_disabled, \
         _vector_disabled_reason
-    from .palace import get_backend
+    from .palace import get_backend_for_palace
 
     close_errors = []
     palace_ref = PalaceRef(id=_config.palace_path, local_path=_config.palace_path)
     closed_backend_names = set()
     cached_backend_name = _collection_cache_backend
     try:
-        backend = palace_module.get_backend_for_palace(_config.palace_path)
+        backend = get_backend_for_palace(_config.palace_path)
         backend.close_palace(palace_ref)
         if getattr(backend, "name", None):
             closed_backend_names.add(backend.name)
@@ -4311,7 +4311,7 @@ def _internal_tool_error(req_id, tool_name: str, exc: BaseException = None) -> d
     }
 
 
-def handle_request(request):
+def handle_request(request):  # noqa: C901 — merged fork+upstream tool dispatch
     global _last_request_time
     if not isinstance(request, dict):
         return {

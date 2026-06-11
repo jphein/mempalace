@@ -20,6 +20,10 @@
         "link": "/reference/python-api/backfill_age"
       },
       {
+        "text": "mempalace.backups",
+        "link": "/reference/python-api/backups"
+      },
+      {
         "text": "mempalace.calibration",
         "link": "/reference/python-api/calibration"
       },
@@ -30,6 +34,10 @@
       {
         "text": "mempalace.closet_llm",
         "link": "/reference/python-api/closet_llm"
+      },
+      {
+        "text": "mempalace.collision_scan",
+        "link": "/reference/python-api/collision_scan"
       },
       {
         "text": "mempalace.config",
@@ -102,6 +110,10 @@
       {
         "text": "mempalace.hooks_cli",
         "link": "/reference/python-api/hooks_cli"
+      },
+      {
+        "text": "mempalace.ids",
+        "link": "/reference/python-api/ids"
       },
       {
         "text": "mempalace.instructions_cli",
@@ -308,6 +320,10 @@
     "collapsed": true,
     "items": [
       {
+        "text": "mempalace.backends._sidecar",
+        "link": "/reference/python-api/backends/_sidecar"
+      },
+      {
         "text": "mempalace.backends.base",
         "link": "/reference/python-api/backends/base"
       },
@@ -316,12 +332,28 @@
         "link": "/reference/python-api/backends/chroma"
       },
       {
+        "text": "mempalace.backends.embedding_wrapper",
+        "link": "/reference/python-api/backends/embedding_wrapper"
+      },
+      {
+        "text": "mempalace.backends.pgvector",
+        "link": "/reference/python-api/backends/pgvector"
+      },
+      {
         "text": "mempalace.backends.postgres",
         "link": "/reference/python-api/backends/postgres"
       },
       {
+        "text": "mempalace.backends.qdrant",
+        "link": "/reference/python-api/backends/qdrant"
+      },
+      {
         "text": "mempalace.backends.registry",
         "link": "/reference/python-api/backends/registry"
+      },
+      {
+        "text": "mempalace.backends.sqlite_exact",
+        "link": "/reference/python-api/backends/sqlite_exact"
       }
     ]
   },

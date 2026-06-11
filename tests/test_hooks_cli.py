@@ -1666,8 +1666,11 @@ def test_stop_hook_oserror_on_last_save_read(tmp_path):
     )
     # Write invalid content to last save file
     (tmp_path / "test_last_save").write_text("not_a_number")
-    with patch("mempalace.hooks_cli._ingest_transcript"), patch(
-        "mempalace.hooks_cli._save_diary_direct", return_value={"count": 3, "themes": ["hooks"]}
+    with (
+        patch("mempalace.hooks_cli._ingest_transcript"),
+        patch(
+            "mempalace.hooks_cli._save_diary_direct", return_value={"count": 3, "themes": ["hooks"]}
+        ),
     ):
         result = _capture_hook_output(
             hook_stop,
@@ -1864,9 +1867,12 @@ def test_stop_hook_enabled_by_default(tmp_path):
         mock_cfg_cls.return_value.hooks_auto_save = True
         mock_cfg_cls.return_value.hook_silent_save = True
         mock_cfg_cls.return_value.hook_desktop_toast = False
-        with patch("mempalace.hooks_cli._ingest_transcript"), patch(
-            "mempalace.hooks_cli._save_diary_direct",
-            return_value={"count": 2, "themes": []},
+        with (
+            patch("mempalace.hooks_cli._ingest_transcript"),
+            patch(
+                "mempalace.hooks_cli._save_diary_direct",
+                return_value={"count": 2, "themes": []},
+            ),
         ):
             result = _capture_hook_output(
                 hook_stop,

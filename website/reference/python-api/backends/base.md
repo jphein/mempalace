@@ -50,6 +50,22 @@ Raised when a where-clause uses an operator the backend does not implement.
 
 Silent dropping of unknown operators is forbidden by spec (RFC 001 §1.4).
 
+### `class UnsupportedCapabilityError(BackendError)`
+
+Raised when a backend does not implement an optional capability.
+
+### `class UnsupportedMaintenanceKindError(BackendError)`
+
+Raised when ``run_maintenance(kind)`` is called with an unadvertised kind.
+
+A backend MUST advertise a kind in ``maintenance_kinds`` before it accepts
+it (RFC 001). Advertising a kind it does not implement is a conformance
+failure; a kind it has no analogue for MUST be omitted, not no-op'd.
+
+### `class BackendMismatchError(BackendError)`
+
+Raised when a selected backend does not match existing palace artifacts.
+
 ### `class DimensionMismatchError(BackendError)`
 
 Raised when the embedding dimension on write does not match the collection.
@@ -58,6 +74,14 @@ Raised when the embedding dimension on write does not match the collection.
 
 Raised when the stored embedder model name differs from the current one.
 
+### `class EmbedderIdentityUnknownWarning(UserWarning)`
+
+Emitted on first open of a collection with no recorded embedder identity.
+
+Legacy palaces created before identity tracking carry no model name. Per
+RFC 001 the right behavior is warn-not-fail: the identity is recorded on
+the next write and subsequent opens become strict.
+
 ### `class PalaceRef`
 
 A handle to a palace, consumed by backends.
@@ -65,6 +89,69 @@ A handle to a palace, consumed by backends.
 ``id`` is always present and is the key backends use to cache handles.
 ``local_path`` is populated for filesystem-rooted palaces.
 ``namespace`` is used by server-mode backends for tenant / prefix routing.
+
+Isolation contract (RFC 001 §2.1, conformance: ``tests/test_backend_conformance.py``)
+-----------------------------------------------------------------------------------
+``id`` is the *required* isolation key. Within a single backend instance:
+
+    A record written for one ``PalaceRef.id`` MUST NOT be returned,
+    modified, or deleted by an operation issued for a different
+    ``PalaceRef.id``. Cross-palace access is a spec violation.
+
+``namespace`` is *additional* partitioning, honored only by backends that
+advertise the ``supports_namespace_isolation`` capability. For those
+backends the same guarantee extends to namespaces:
+
+    A record written under one ``namespace`` MUST NOT be returned,
+    modified, or deleted by an operation issued under a different
+    ``namespace`` within the same backend instance. Cross-namespace
+    access is a spec violation.
+
+Backends that do not advertise ``supports_namespace_isolation`` (e.g.
+``sqlite_exact``, whose isolation is the on-disk path alone) MAY ignore
+``namespace`` entirely; callers MUST NOT rely on it for tenant isolation
+on such backends. Any conforming backend can self-check both guarantees by
+running the shared assertions in ``tests/_backend_conformance.py``.
+
+### `class EmbedderIdentity`
+
+Identity of the embedder that produced a collection's vectors (RFC 001).
+
+``model_name`` is the stable identity persisted alongside a collection and
+checked on subsequent opens. ``dimension`` is the vector width. A
+``dimension`` of ``0`` means *unknown / not probed* — comparisons treat it
+as "no dimension signal" rather than a real zero-width vector, so a cheap
+read-path check can compare model names without loading the model.
+
+### `class MaintenanceResult`
+
+Observable outcome of ``run_maintenance(kind)`` (RFC 001).
+
+Maintenance is *not* fire-and-forget: a backend MUST serialize concurrent
+same-kind runs and report the outcome so a caller can learn it must not
+re-trigger. ``status`` is one of:
+
+* ``"ran"`` — this call performed the maintenance.
+* ``"already_running"`` — another caller holds the work; this call did
+  nothing and the caller MUST NOT re-trigger (the production index-build
+  wedge: concurrent writers each issuing the build stacked exclusive locks).
+* ``"noop"`` — nothing needed doing (e.g. the index already exists).
+
+``stats`` is free-form per kind (rows analyzed, bytes reclaimed, index
+build time) for benchmark/operator reporting.
+
+### `class Embedder(Protocol)`
+
+Minimal embedder contract (RFC 001, normative for identity checking).
+
+The fuller embedder RFC (batching/async/pooling) is additive; identity
+enforcement depends only on these three members.
+
+#### `embed`
+
+```python
+def embed(self, texts: list[str]) -> list[list[float]]
+```
 
 ### `class HealthStatus`
 
@@ -113,6 +200,14 @@ Typed return from ``BaseCollection.get``.
 ```python
 def empty(cls) -> 'GetResult'
 ```
+
+### `class LexicalHit`
+
+One hit from backend lexical candidate search.
+
+### `class LexicalResult`
+
+Typed return from ``BaseCollection.lexical_search``.
 
 ### `class BaseCollection(ABC)`
 
@@ -172,6 +267,91 @@ def close(self) -> None
 def health(self) -> HealthStatus
 ```
 
+#### `distance_metric`
+
+```python
+def distance_metric(self) -> str
+```
+
+The space this collection's ``distances`` are reported in.
+
+Defaults to the owning backend's declared metric (cosine for all
+in-tree backends). Collections that can vary per-collection — e.g. a
+legacy Chroma palace built without ``hnsw:space=cosine`` — override
+this to report their actual space so core ranking converts correctly.
+
+#### `get_stored_embedder_identity`
+
+```python
+def get_stored_embedder_identity(self) -> Optional[EmbedderIdentity]
+```
+
+Return the embedder identity recorded for this collection, if any.
+
+Returns ``None`` when nothing is recorded — a legacy collection, or a
+backend that does not yet persist identity. Core treats ``None`` as the
+``unknown`` state (warn, do not fail). Backends override this and
+:meth:`set_embedder_identity` against their own metadata store.
+
+#### `set_embedder_identity`
+
+```python
+def set_embedder_identity(self, identity: EmbedderIdentity) -> None
+```
+
+Persist this collection's embedder identity. Default: no-op.
+
+A backend without an identity slot inherits the no-op default and so
+stays permanently ``unknown`` (safe — it simply never enforces). The
+enforcement choke point calls this when recording on first write or
+on an explicit, forced model swap.
+
+#### `effective_embedder_identity`
+
+```python
+def effective_embedder_identity(self) -> Optional[EmbedderIdentity]
+```
+
+The identity of the embedder this collection actually uses.
+
+For ``server_embedder`` backends that ignore the injected embedder,
+this reports the server-side embedder so the same identity rules apply
+(RFC 001). Defaults to ``None`` — the collection is embedded by the
+injected/core embedder, and the caller supplies the current identity.
+
+#### `maintenance_state`
+
+```python
+def maintenance_state(self) -> dict
+```
+
+Return a structured snapshot of this collection's maintenance state.
+
+Free-form per backend (e.g. row count, whether a vector index exists,
+last-analyze age). Used by benchmark harnesses to record state
+alongside each latency/recall measurement so an un-analyzed store is
+not compared against a settled one (RFC 001). Defaults to empty.
+
+#### `run_maintenance`
+
+```python
+def run_maintenance(self, kind: str) -> 'MaintenanceResult'
+```
+
+Run a maintenance ``kind`` and return an observable result (RFC 001).
+
+Backends advertise supported kinds in ``BaseBackend.maintenance_kinds``
+and override this. The default supports nothing, so every kind raises
+:class:`UnsupportedMaintenanceKindError`. Implementations MUST serialize
+concurrent same-kind runs and report ``already_running`` rather than
+stacking the work.
+
+#### `lexical_search`
+
+```python
+def lexical_search(self, *, query: str, n_results: int = 10, where: Optional[dict] = None) -> LexicalResult
+```
+
 #### `update`
 
 ```python
@@ -204,6 +384,14 @@ Long-lived factory serving many palaces (RFC 001 §2).
 Instances are lightweight on construction — no I/O, no network. All
 connection work is deferred to ``get_collection``. Instances are thread-
 safe for concurrent ``get_collection`` calls across different palaces.
+
+Every backend MUST satisfy the per-``PalaceRef.id`` isolation guarantee in
+:class:`PalaceRef`. Backends that additionally isolate by
+``PalaceRef.namespace`` (multi-tenant / hosted deployments) MUST advertise
+the ``supports_namespace_isolation`` capability token; doing so is a
+promise to satisfy the cross-namespace guarantee and to pass the namespace
+arm of the conformance suite. Backends without the token MAY ignore
+``namespace``.
 
 #### `get_collection`
 
@@ -238,3 +426,29 @@ def health(self, palace: Optional[PalaceRef] = None) -> HealthStatus
 ```python
 def detect(cls, path: str) -> bool
 ```
+
+## Functions
+
+### `check_embedder_identity`
+
+```python
+def check_embedder_identity(stored: Optional[EmbedderIdentity], current: Optional[EmbedderIdentity], *, force_model_swap: bool = False) -> str
+```
+
+Three-state embedder-identity check (RFC 001).
+
+Returns the resolved state and raises on a hard, unforced conflict:
+
+* ``"unknown"`` — no identity recorded yet (legacy collection), or the
+  current embedder is nameless. The caller warns and records on write.
+* ``"known_match"`` — stored name (and dimension, when both known) equal
+  the current embedder. Proceed normally.
+* ``"known_mismatch"`` — names or dimensions differ. Without
+  ``force_model_swap`` this raises (:class:`EmbedderIdentityMismatchError`
+  for a model swap, :class:`DimensionMismatchError` for a width change,
+  which is checked first because mismatched vectors are physically
+  unusable). With ``force_model_swap`` it returns the state so the caller
+  can re-record the identity and log the swap.
+
+A ``dimension`` of ``0`` on either side means "unknown" and is skipped, so
+a model-name-only check (cheap read path) still works.

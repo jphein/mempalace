@@ -1271,7 +1271,10 @@ class TestForceChromaCacheReset:
 
         mcp_server._force_chroma_cache_reset()
 
-        assert stub.closed == [config.palace_path]
+        # Post-#1679 the backend API takes a PalaceRef, not a raw path.
+        assert len(stub.closed) == 1
+        closed = stub.closed[0]
+        assert getattr(closed, "local_path", closed) == config.palace_path
 
     def test_reset_releases_sqlite_lock_for_reopen(self, monkeypatch, config, palace_path, kg):
         """End-to-end: after the reset, the palace path's chromadb file

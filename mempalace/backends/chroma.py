@@ -304,6 +304,7 @@ def _apply_tag_postfilter_query(
 
     return out_ids, out_docs, out_metas, out_dists, out_embeds
 
+
 def _tokenize(text: str) -> list[str]:
     if not text:
         return []

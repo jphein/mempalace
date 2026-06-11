@@ -455,7 +455,9 @@ class MempalaceConfig:
     @property
     def backend_override(self):
         """Explicit backend selection from env/config, or None for auto/default resolution."""
-        raw = os.environ.get("MEMPALACE_BACKEND") or self._file_config.get("backend")
+        # Resolution order matches resolve_backend_name (upstream RFC 001):
+        # config.json beats MEMPALACE_BACKEND.
+        raw = self._file_config.get("backend") or os.environ.get("MEMPALACE_BACKEND")
         if raw:
             return _normalize_backend_name(raw)
         return None
@@ -647,6 +649,7 @@ class MempalaceConfig:
         if normalized in aliases:
             return aliases[normalized]
         return normalized.replace("-", "_").replace(" ", "_")
+
     @property
     def qdrant_url(self):
         """Qdrant endpoint for the opt-in ``qdrant`` backend.
@@ -1104,10 +1107,13 @@ class MempalaceConfig:
             # and silently overrides convo_miner's stricter 30-char floor,
             # dropping legitimate short conversation exchanges. Module-level
             # defaults already apply correctly when these keys are absent.
+            # "backend" is intentionally NOT seeded: an absent key means
+            # "resolve normally" (env, detected artifacts, chroma default),
+            # and writing the default would make config.json silently win
+            # over MEMPALACE_BACKEND under the RFC 001 resolution order.
             default_config = {
                 "palace_path": DEFAULT_PALACE_PATH,
                 "collection_name": DEFAULT_COLLECTION_NAME,
-                "backend": DEFAULT_BACKEND,
                 "topic_wings": DEFAULT_TOPIC_WINGS,
                 "hall_keywords": DEFAULT_HALL_KEYWORDS,
             }

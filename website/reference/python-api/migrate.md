@@ -81,3 +81,29 @@ def migrate(palace_path: str, dry_run: bool = False, confirm: bool = False)
 ```
 
 Migrate a palace to the currently installed ChromaDB version.
+
+### `plan_wing_renames`
+
+```python
+def plan_wing_renames(items)
+```
+
+Pure planner over ``(id, metadata)`` pairs.
+
+Returns ``(summary, updates)`` where ``summary`` is ``&#123;(old, new): count}``
+and ``updates`` is ``[(id, new_metadata), ...]`` for only the records whose
+wing changes. Metadata is copied; only the ``wing`` key is rewritten.
+
+### `migrate_wing_names`
+
+```python
+def migrate_wing_names(palace_path: str, dry_run: bool = False, confirm: bool = False) -> bool
+```
+
+Normalize legacy wing names in ``palace_path`` (strip leading/trailing
+separators), so palaces built before #1675 keep their memories discoverable.
+
+Re-keys the ``wing`` metadata on drawers and closets in place (IDs untouched)
+and the ``topics_by_wing`` registry, merging collisions. Idempotent.
+
+Returns True if anything was (or, in dry-run, would be) migrated.

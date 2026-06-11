@@ -25,7 +25,6 @@ from .backends import (
     UnsupportedCapabilityError,
 )
 from .palace import (
-    _open_collection_or_explain,
     get_closets_collection,
     get_collection,
     resolve_backend_name,
@@ -627,6 +626,10 @@ def search(
         print("  Run: mempalace init <dir> then mempalace mine <dir>")
         raise SearchError(f"No palace found at {palace_path}") from e
 
+    try:
+        metric = _metric_for_collection(get_collection(palace_path, create=False))
+    except Exception:
+        metric = "cosine"
     result = search_memories(
         query, palace_path, wing=wing, room=room, tags=tags, n_results=n_results
     )
@@ -683,7 +686,7 @@ def search(
         print(f"  [{i}] {wing_name} / {room_name}")
         print(f"      Source: {source}")
         if similarity is not None and bm25 is not None:
-            print(f"      Match:  cosine={similarity}  bm25={bm25}")
+            print(f"      Match:  {metric}_sim={similarity}  bm25={bm25}")
         elif similarity is not None:
             print(f"      Match:  {similarity}")
         elif bm25 is not None:
@@ -1650,39 +1653,42 @@ def _merge_bm25_union_candidates(
                 _include_internal=True,
             ).get("results", [])
         else:
-            bm25_extra = _bm25_only_via_sqlite(
-                query,
-                palace_path,
-                wing=wing,
-                room=room,
+            # RFC 001 capability path: the collection's own lexical_search
+            # (chroma BM25, sqlite_exact FTS, qdrant, pgvector). Backends
+            # without the capability raise UnsupportedCapabilityError, which
+            # must propagate so _finalize_candidate_hits reports it.
+            where = build_where_filter(wing, room)
+            lexical = drawers_col.lexical_search(
+                query=query,
                 n_results=n_results * 3,
-                _include_internal=True,
-            ).get("results", [])
+                where=where or None,
+            )
+            bm25_extra = []
+            for hit in lexical.hits:
+                meta = hit.metadata or {}
+                full_source = meta.get("source_file", "") or ""
+                bm25_extra.append(
+                    {
+                        "text": hit.document or "",
+                        "wing": meta.get("wing", "unknown"),
+                        "room": meta.get("room", "unknown"),
+                        "source_file": Path(full_source).name if full_source else "?",
+                        "created_at": meta.get("filed_at", "unknown"),
+                        "similarity": None,
+                        "distance": None,
+                        "effective_distance": None,
+                        "closet_boost": 0.0,
+                        "matched_via": "bm25_backend",
+                        "bm25_score": round(float(hit.score), 3),
+                        "_source_file_full": full_source,
+                        "_chunk_index": meta.get("chunk_index"),
+                    }
+                )
+    except UnsupportedCapabilityError:
+        raise
     except Exception:
         logger.debug("candidate_strategy=union: lexical fetch failed", exc_info=True)
         return
-
-    bm25_extra = []
-    for hit in lexical.hits:
-        meta = hit.metadata or {}
-        full_source = meta.get("source_file", "") or ""
-        bm25_extra.append(
-            {
-                "text": hit.document or "",
-                "wing": meta.get("wing", "unknown"),
-                "room": meta.get("room", "unknown"),
-                "source_file": Path(full_source).name if full_source else "?",
-                "created_at": meta.get("filed_at", "unknown"),
-                "similarity": None,
-                "distance": None,
-                "effective_distance": None,
-                "closet_boost": 0.0,
-                "matched_via": "bm25_backend",
-                "bm25_score": round(float(hit.score), 3),
-                "_source_file_full": full_source,
-                "_chunk_index": meta.get("chunk_index"),
-            }
-        )
 
     def _dedup_key(entry: dict):
         full = entry.get("_source_file_full")
@@ -1708,8 +1714,8 @@ def _merge_bm25_union_candidates(
 
 def _merge_hybrid_candidates(
     hits: list,
+    drawers_col,
     query: str,
-    palace_path: str,
     wing: str,
     room: str,
     n_results: int,
@@ -1756,7 +1762,7 @@ def _merge_hybrid_candidates(
     # hybrid retrieval explicitly wants BM25 candidates that vector
     # missed, even when a strict vector threshold would normally filter
     # them out.
-    _merge_bm25_union_candidates(hits, query, palace_path, wing, room, n_results, max_distance=0.0)
+    _merge_bm25_union_candidates(hits, drawers_col, query, wing, room, n_results, max_distance=0.0)
 
     # Step 2 + 3: graph expansion requires postgres backend
     dsn = None
@@ -1978,6 +1984,7 @@ def _vector_disabled_search(
     palace_path: str,
     wing: str,
     room: str,
+    tags: list = None,
     n_results: int,
     collection_name: str,
 ) -> dict:
@@ -1999,6 +2006,7 @@ def _vector_disabled_search(
         palace_path,
         wing=wing,
         room=room,
+        tags=tags,
         n_results=n_results,
         collection_name=collection_name,
     )

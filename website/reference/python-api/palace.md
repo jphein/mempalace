@@ -27,7 +27,7 @@ def __init__(self, palace_path: str, errors: list[str]) -> None
 ### `get_collection`
 
 ```python
-def get_collection(palace_path: str, collection_name: Optional[str] = None, create: bool = True)
+def get_collection(palace_path: str, collection_name: Optional[str] = None, create: bool = True, backend: Optional[str] = None, _skip_identity_check: bool = False)
 ```
 
 Get the palace collection through the backend layer.
@@ -42,13 +42,63 @@ written assuming all callers omitted the keyword and got the default,
 which broke the None path. Accepting both forms is the minimal shim
 until fork-side callers migrate to the new convention.
 
+``backend`` explicitly selects a backend (CLI ``--backend`` / RFC 001);
+when omitted, resolution follows ``resolve_backend_name`` (config, env,
+detected artifacts, chroma default) with mismatch protection.
+
+``_skip_identity_check`` bypasses the embedder-identity enforcement so the
+``set-embedder`` override path can open a palace whose recorded model
+differs from the current one (the very state it exists to repair).
+
+### `set_palace_embedder_identity`
+
+```python
+def set_palace_embedder_identity(palace_path: str, model: Optional[str] = None, *, force: bool = False, backend: Optional[str] = None, collection_name: Optional[str] = None)
+```
+
+Record (or force-override) a palace collection's embedder identity (RFC 001).
+
+Backs ``mempalace palace set-embedder``. Returns ``(old, new)`` identities.
+Without ``force``, refuses to overwrite an existing identity that names a
+different model (the user must confirm they know the vectors are
+compatible). Opens with the identity check skipped so a mismatched palace —
+the exact state being repaired — can be opened at all.
+
 ### `get_closets_collection`
 
 ```python
-def get_closets_collection(palace_path: str, create: bool = True)
+def get_closets_collection(palace_path: str, create: bool = True, backend: Optional[str] = None)
 ```
 
 Get the closets collection — the searchable index layer.
+
+### `resolve_backend_name`
+
+```python
+def resolve_backend_name(palace_path: str, explicit: Optional[str] = None) -> str
+```
+
+Resolve and validate the selected backend for ``palace_path``.
+
+Public resolution order:
+
+1. Explicit CLI/MCP flag or direct ``get_collection(..., backend=...)``.
+2. ``backend`` in ``~/.mempalace/config.json``.
+3. ``MEMPALACE_BACKEND``.
+4. Detected existing palace artifacts.
+5. ``chroma``.
+
+If artifacts for a different backend are already present, raise
+``BackendMismatchError`` so normal write paths cannot silently mix storage
+formats in one palace directory.
+
+### `get_backend_for_palace`
+
+```python
+def get_backend_for_palace(palace_path: str, explicit: Optional[str] = None)
+```
+
+Return the resolved backend instance for ``palace_path``.
 
 ### `build_closet_lines`
 

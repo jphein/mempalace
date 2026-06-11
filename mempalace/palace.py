@@ -91,6 +91,7 @@ def _emit_current_daemon_url(emit) -> None:
         "  (from PALACE_DAEMON_URL or ~/.mempalace/config.json — may differ from marker text above)"
     )
 
+
 # (palace_id, collection_name, model_name) tuples already validated this
 # process, so the identity check (one metadata read) runs at most once per
 # collection per run — keeps the hot get_collection path cheap.
@@ -211,8 +212,8 @@ def get_collection(
     config = MempalaceConfig()
     if collection_name is None or collection_name == DEFAULT_COLLECTION_NAME:
         collection_name = config.collection_name
-    backend_obj = get_backend_for_palace(palace_path, explicit=backend)
-    backend_name = getattr(backend_obj, "name", None)
+    backend_name = resolve_backend_name(palace_path, explicit=backend)
+    backend_obj = get_backend(backend_name)
     palace_ref = PalaceRef(id=palace_path, local_path=palace_path)
     kwargs = {"palace": palace_ref, "collection_name": collection_name, "create": create}
     if backend_name == "postgres" and config.postgres_dsn:

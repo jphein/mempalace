@@ -77,14 +77,12 @@ Args:
           ``n_results * 3`` rows from the vector index are the rerank pool.
           Cheap; works well when query and target docs agree in the
           embedding space.
-        * ``"union"`` — also pull top ``n_results * 3`` BM25 candidates
-          from the sqlite FTS5 index and merge them into the rerank pool
-          (deduped by source_file). Catches docs with strong BM25 signal
-          that are vector-distant from the query (e.g. terminology guides
-          looked up by narrative-shaped queries; policy clauses surfaced
-          by scenario descriptions). Adds one sqlite open + FTS5 MATCH
-          per query; perf cost is small but unmeasured at corpus scale.
-          Opt in until the cost is characterized.
+        * ``"union"`` — also pull top ``n_results * 3`` lexical candidates
+          through the backend's ``lexical_search`` capability and merge
+          them into the rerank pool (deduped by source_file). Catches docs
+          with strong BM25 signal that are vector-distant from the query.
+          Perf depends on the selected backend; opt in until the cost is
+          characterized.
 
           When ``max_distance > 0.0`` is also set, BM25-only candidates
           are skipped — they have no vector distance and would silently

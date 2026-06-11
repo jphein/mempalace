@@ -4910,6 +4910,8 @@ def cmd_tunnels(args):
         return
 
     _print_tunnels_table(data, scope_wing=wing)
+
+
 def cmd_palace_set_embedder(args):
     """Record (or force-override) a palace's embedder identity (RFC 001).
 
@@ -6163,7 +6165,6 @@ def main():
     )
     p_rooms_remove.add_argument("name", help="Room slug to remove")
 
-    sub.add_parser("status", help="Show what's been filed")
     # migrate-wings
     p_migrate_wings = sub.add_parser(
         "migrate-wings",
