@@ -13,9 +13,11 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.auto_wake`](./auto_wake) — Wake-on-demand for a sleeping palace host.
 - [`mempalace.backends`](./backends) — Storage backend implementations for MemPalace (RFC 001).
 - [`mempalace.backfill_age`](./backfill_age) — Backfill the AGE graph from an existing drawer table.
+- [`mempalace.backups`](./backups) — Retention pruning for timestamped palace backups.
 - [`mempalace.calibration`](./calibration) — Calibrated confidence for search results.
 - [`mempalace.cli`](./cli) — MemPalace — Give your AI a memory. No API key required.
 - [`mempalace.closet_llm`](./closet_llm) — closet_llm.py — Generate closets via a user-configured LLM for richer indexing.
+- [`mempalace.collision_scan`](./collision_scan) — Pre-mining defense against drawer_id collisions.
 - [`mempalace.config`](./config) — MemPalace configuration system.
 - [`mempalace.convo_miner`](./convo_miner) — convo_miner.py — Mine conversations into the palace.
 - [`mempalace.convo_scanner`](./convo_scanner) — convo_scanner.py — Parse Claude Code conversation directories into ProjectInfo.
@@ -34,6 +36,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.general_extractor`](./general_extractor) — general_extractor.py — Extract 5 types of memories from text.
 - [`mempalace.hallways`](./hallways) — Hallways — within-wing entity-to-entity connectors.
 - [`mempalace.hooks_cli`](./hooks_cli) — Hook logic for MemPalace — Python implementation of session-start, stop, and precompact hooks.
+- [`mempalace.ids`](./ids) — Centralized drawer/triple ID construction with collision-safe delimiter.
 - [`mempalace.instructions_cli`](./instructions_cli) — Instruction text output for MemPalace CLI commands.
 - [`mempalace.kg_canonical_vocab`](./kg_canonical_vocab) — Closed-vocabulary predicate mapping spike (issue #72).
 - [`mempalace.kg_canonical_writepass`](./kg_canonical_writepass) — Guarded post-extraction canonical-mapping write pass (issue #72, approach a).
@@ -88,10 +91,15 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 
 ### backends
 
+- [`mempalace.backends._sidecar`](./backends/_sidecar) — Shared embedder-identity sidecar (RFC 001).
 - [`mempalace.backends.base`](./backends/base) — Storage backend contract for MemPalace (RFC 001).
 - [`mempalace.backends.chroma`](./backends/chroma) — ChromaDB-backed MemPalace storage backend (RFC 001 reference implementation).
+- [`mempalace.backends.embedding_wrapper`](./backends/embedding_wrapper) — Core-side embedding adapter for explicit-vector backends.
+- [`mempalace.backends.pgvector`](./backends/pgvector) — Postgres + pgvector backend for MemPalace.
 - [`mempalace.backends.postgres`](./backends/postgres) — Optional PostgreSQL-backed MemPalace storage backend.
+- [`mempalace.backends.qdrant`](./backends/qdrant) — Qdrant REST backend for MemPalace.
 - [`mempalace.backends.registry`](./backends/registry) — Backend registry + entry-point discovery (RFC 001 §3).
+- [`mempalace.backends.sqlite_exact`](./backends/sqlite_exact) — SQLite exact-vector backend for MemPalace.
 
 ### sources
 

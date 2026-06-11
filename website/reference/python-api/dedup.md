@@ -10,7 +10,9 @@ accumulate. This module finds drawers from the same source_file that
 are too similar (cosine distance < threshold), keeps the longest/richest
 version, and deletes the rest.
 
-No API calls — uses ChromaDB's built-in embedding similarity.
+Uses the configured storage backend's similarity search. With the default
+local backends (Chroma, sqlite_exact) this stays on-machine with no external
+calls; with a remote backend (e.g. Qdrant) it issues queries to that backend.
 
 Usage (standalone):
     python -m mempalace.dedup                          # dedup all

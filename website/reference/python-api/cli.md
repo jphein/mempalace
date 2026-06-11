@@ -289,6 +289,14 @@ power-resilience design. Drain semantics:
 * Duplicate ``(dir, wing, mode)`` tuples are deduped before transmit
   so a long outage doesn't replay the same target N times.
 
+### `cmd_migrate_wings`
+
+```python
+def cmd_migrate_wings(args)
+```
+
+Normalize legacy wing names (strip leading/trailing separators).
+
 ### `cmd_status`
 
 ```python
@@ -401,6 +409,20 @@ pass ``--passive`` to also include passive tunnels (rooms appearing
 in 2+ wings, inferred from the palace graph — see issue #75).
 
 Daemon unreachable → exit 1; inner-error envelope → exit 2.
+
+### `cmd_palace_set_embedder`
+
+```python
+def cmd_palace_set_embedder(args)
+```
+
+Record (or force-override) a palace's embedder identity (RFC 001).
+
+Resolves the ``unknown`` state for a legacy palace, or records a specific
+model with ``--model``. It records identity on the palace only; it does not
+change the configured model — when the two differ it prints how to align
+``MEMPALACE_EMBEDDING_MODEL``. ``--force`` overwrites an existing,
+differently-named identity.
 
 ### `cmd_repair_status`
 

@@ -315,3 +315,10 @@ def status(palace_path: str)
 ```
 
 Show what's been filed in the palace.
+
+Tallies drawers by wing/room directly from ``chroma.sqlite3`` so a routine
+status check never cold-loads the HNSW vector index — a load that costs
+tens of seconds of CPU per call on large palaces (#1681). Falls back to the
+ChromaDB client path when the sqlite read is unavailable (missing DB,
+un-bootstrapped collection, or an unexpected schema); the fallback also
+emits the state-specific guidance for absent/empty palaces.

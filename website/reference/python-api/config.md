@@ -303,6 +303,62 @@ Resolve a room name to its canonical palace room.
 Checks ``room_aliases`` first, then falls back to the default
 normalization (lowercase, dashes/spaces → underscores).
 
+#### `qdrant_url`
+
+```python
+def qdrant_url(self)
+```
+
+Qdrant endpoint for the opt-in ``qdrant`` backend.
+
+Defaults to localhost so selecting Qdrant never silently sends memory
+to a remote service. Users can point at a LAN or cloud endpoint via
+config or ``MEMPALACE_QDRANT_URL`` when they deliberately choose that.
+
+#### `qdrant_api_key`
+
+```python
+def qdrant_api_key(self)
+```
+
+API key for the opt-in ``qdrant`` backend, if configured.
+
+#### `qdrant_namespace`
+
+```python
+def qdrant_namespace(self)
+```
+
+Optional Qdrant collection namespace/prefix.
+
+#### `qdrant_timeout`
+
+```python
+def qdrant_timeout(self)
+```
+
+Qdrant HTTP timeout in seconds.
+
+#### `pgvector_dsn`
+
+```python
+def pgvector_dsn(self)
+```
+
+Postgres DSN for the opt-in ``pgvector`` backend.
+
+Defaults to a localhost DSN so selecting pgvector never silently sends
+memory to a remote database. Point at a LAN or cloud Postgres via config
+or ``MEMPALACE_PGVECTOR_DSN`` only when deliberately chosen.
+
+#### `pgvector_namespace`
+
+```python
+def pgvector_namespace(self)
+```
+
+Optional pgvector table namespace/prefix for multi-tenant isolation.
+
 #### `people_map`
 
 ```python
@@ -451,6 +507,14 @@ Onboarding calls this once on first run. Accepts ``"minilm"`` or
 passed through (``embedding.get_embedding_function`` falls back to
 minilm for unrecognized values).
 
+#### `set_backend`
+
+```python
+def set_backend(self, backend: str) -> None
+```
+
+Persist the storage backend choice to ``config.json``.
+
 #### `adaptmem_path`
 
 ```python
@@ -482,6 +546,30 @@ to ``2+`` if your projects share lots of common-tech labels (Python,
 Docker, Git) and you want only meaningfully overlapping wings to
 link. Reads ``MEMPALACE_TOPIC_TUNNEL_MIN_COUNT`` env first, then the
 config-file value, then ``1``.
+
+#### `max_backups`
+
+```python
+def max_backups(self) -> int
+```
+
+Number of timestamped palace backups to retain before pruning.
+
+Applies to the accumulating, timestamped backups created by
+``mempalace migrate`` (``&lt;palace>.pre-migrate.&lt;timestamp>``) and
+``mempalace repair max-seq-id``
+(``chroma.sqlite3.max-seq-id-backup-&lt;timestamp>``). Each of those
+commands writes a fresh full-size copy every run and historically
+never deleted the old ones, so on a machine that mines or repairs on
+a schedule the backup set could silently grow until it filled the
+disk. After each backup is written, copies beyond this count (oldest
+first) are removed.
+
+Reads ``MEMPALACE_MAX_BACKUPS`` env first, then ``max_backups`` in
+``config.json``, then the default of ``10``. A value of ``0`` disables
+pruning and keeps every backup (use when an external retention policy
+manages cleanup). Negative or non-numeric values fall back to the
+default rather than crashing migrate/repair.
 
 #### `hook_silent_save`
 
@@ -561,6 +649,11 @@ Lower-case + collapse separators (`-`, ` `) to `_` for wing slugs.
 The same rule is applied by ``init`` when persisting `topics_by_wing`
 and when writing `mempalace.yaml`, so the miner's lookup matches at
 mine time regardless of the source dirname.
+
+Leading/trailing separators are stripped so a path-encoded dirname like
+``-home-user-proj`` yields ``home_user_proj`` rather than a leading-
+underscore slug that ``sanitize_name`` (and thus the MCP write tools)
+would reject.
 
 ### `sanitize_name`
 

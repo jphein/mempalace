@@ -794,8 +794,16 @@ def _save_diary_direct(
     session_id: str,
     wing: str = "",
     toast: bool = False,
+    *,
+    agent_name: str,
 ) -> dict:
     """Write a diary checkpoint by calling the tool function directly (no MCP roundtrip).
+
+    The entry is filed under `agent_name` so the agent that later calls
+    `mempalace_diary_read(agent_name=...)` discovers it (#1693). If `wing` is
+    set, the entry lands in that wing (typically the project wing derived from
+    the transcript path); a `diary_read` with an empty wing spans every wing
+    the agent wrote to, so project-derived wings stay discoverable.
 
     Returns {"count": N, "themes": [...]} on success, {"count": 0} on failure.
     """
@@ -817,7 +825,7 @@ def _save_diary_direct(
         from .mcp_server import tool_diary_write
 
         result = tool_diary_write(
-            agent_name="session-hook",
+            agent_name=agent_name,
             entry=entry,
             topic="checkpoint",
             wing=wing,
@@ -892,6 +900,20 @@ def _ingest_transcript(transcript_path: str):
 
 
 SUPPORTED_HARNESSES = {"claude-code", "codex"}
+
+
+def _diary_agent_for_harness(harness: str) -> str:
+    """Return the diary ``agent_name`` a session in ``harness`` reads under.
+
+    Stop-hook checkpoints must be filed beside the agent's own entries so
+    ``mempalace_diary_read(agent_name=...)`` surfaces them. The old code filed
+    them under a fixed ``"session-hook"`` identity that no reader ever queried,
+    hiding every checkpoint (#1693). A ``claude-code`` session reads its diary
+    as ``"claude"``; every other harness already reads under its own name, so
+    returning the harness name keeps a newly supported harness discoverable
+    instead of silently invisible again.
+    """
+    return "claude" if harness == "claude-code" else harness
 
 
 def _parse_harness_input(data: dict, harness: str) -> dict:
@@ -1197,25 +1219,42 @@ def hook_stop(data: dict, harness: str):
         project_wing = _wing_from_transcript_path(transcript_path)
 
         if silent:
-            # Verbatim-only mode: transcript ingest is the only save path.
-            # No more 1-KB checkpoint summaries — verbatim transcript
-            # chunks in mempalace_drawers contain everything a summary would.
-            # The save-marker gate ("only advance on confirmed save") does
-            # not apply to fire-and-forget mining; advance unconditionally.
-            # Failure detection moves to daemon-side observability
-            # (hook.log + systemd journal). See
-            # docs/superpowers/specs/2026-05-05-verbatim-only-design.md.
+            # Diary checkpoints + verbatim ingest (2026-06-11): each save
+            # writes a themed diary entry via the direct Python API AND
+            # fire-and-forget-ingests the verbatim transcript. The save
+            # marker advances only after a confirmed diary write (the
+            # original silent-mode contract); ingest failures surface via
+            # daemon-side observability (hook.log + systemd journal).
+            result = {"count": 0}
             if transcript_path:
+                result = _save_diary_direct(
+                    transcript_path,
+                    session_id,
+                    wing=project_wing,
+                    toast=toast,
+                    agent_name=_diary_agent_for_harness(harness),
+                )
                 _ingest_transcript(transcript_path)
             _maybe_auto_ingest()
-            try:
-                last_save_file.write_text(str(exchange_count), encoding="utf-8")
-            except OSError:
-                pass
-            sys_msg = f"\u2726 Transcript ingest triggered (wing={project_wing})"
-            if toast:
-                _desktop_toast(sys_msg)
-            _output({"systemMessage": sys_msg})
+            # Only advance save marker after successful save
+            count = result.get("count", 0)
+            if count > 0:
+                try:
+                    last_save_file.write_text(str(exchange_count), encoding="utf-8")
+                except OSError:
+                    pass
+                themes = result.get("themes", [])
+                if themes:
+                    tag = " \u2014 " + ", ".join(themes)
+                else:
+                    tag = ""
+                _output(
+                    {
+                        "systemMessage": f"\u2726 {count} memories woven into the palace{tag}",
+                    }
+                )
+            else:
+                _output({})
         else:
             # Legacy: block and ask Claude to save via MCP tools.
             # Marker advances before confirmed save — best-effort; if Claude

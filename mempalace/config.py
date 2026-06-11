@@ -37,8 +37,13 @@ def normalize_wing_name(name: str) -> str:
     The same rule is applied by ``init`` when persisting `topics_by_wing`
     and when writing `mempalace.yaml`, so the miner's lookup matches at
     mine time regardless of the source dirname.
+
+    Leading/trailing separators are stripped so a path-encoded dirname like
+    ``-home-user-proj`` yields ``home_user_proj`` rather than a leading-
+    underscore slug that ``sanitize_name`` (and thus the MCP write tools)
+    would reject.
     """
-    return name.lower().replace(" ", "_").replace("-", "_")
+    return name.lower().replace(" ", "_").replace("-", "_").strip("_")
 
 
 def sanitize_name(value: str, field_name: str = "name") -> str:
@@ -192,6 +197,12 @@ def sanitize_content(value: str, max_length: int = 100_000) -> str:
 DEFAULT_PALACE_PATH = os.path.expanduser("~/.mempalace/palace")
 DEFAULT_COLLECTION_NAME = "mempalace_drawers"
 DEFAULT_BACKEND = "chroma"
+
+# How many timestamped palace backups to retain before the oldest are
+# pruned. Applies to the accumulating backups written by ``mempalace
+# migrate`` and ``mempalace repair max-seq-id`` — see
+# ``MempalaceConfig.max_backups``.
+DEFAULT_MAX_BACKUPS = 10
 
 
 @lru_cache(maxsize=1)
@@ -444,7 +455,9 @@ class MempalaceConfig:
     @property
     def backend_override(self):
         """Explicit backend selection from env/config, or None for auto/default resolution."""
-        raw = os.environ.get("MEMPALACE_BACKEND") or self._file_config.get("backend")
+        # Resolution order matches resolve_backend_name (upstream RFC 001):
+        # config.json beats MEMPALACE_BACKEND.
+        raw = self._file_config.get("backend") or os.environ.get("MEMPALACE_BACKEND")
         if raw:
             return _normalize_backend_name(raw)
         return None
@@ -636,6 +649,72 @@ class MempalaceConfig:
         if normalized in aliases:
             return aliases[normalized]
         return normalized.replace("-", "_").replace(" ", "_")
+
+    @property
+    def qdrant_url(self):
+        """Qdrant endpoint for the opt-in ``qdrant`` backend.
+
+        Defaults to localhost so selecting Qdrant never silently sends memory
+        to a remote service. Users can point at a LAN or cloud endpoint via
+        config or ``MEMPALACE_QDRANT_URL`` when they deliberately choose that.
+        """
+        env_val = os.environ.get("MEMPALACE_QDRANT_URL")
+        if env_val:
+            return env_val.strip()
+        return str(self._file_config.get("qdrant_url", "http://localhost:6333")).strip()
+
+    @property
+    def qdrant_api_key(self):
+        """API key for the opt-in ``qdrant`` backend, if configured."""
+        env_val = os.environ.get("MEMPALACE_QDRANT_API_KEY")
+        if env_val:
+            return env_val
+        value = self._file_config.get("qdrant_api_key")
+        return str(value) if value else None
+
+    @property
+    def qdrant_namespace(self):
+        """Optional Qdrant collection namespace/prefix."""
+        env_val = os.environ.get("MEMPALACE_QDRANT_NAMESPACE")
+        if env_val:
+            return env_val.strip()
+        value = self._file_config.get("qdrant_namespace")
+        return str(value).strip() if value else None
+
+    @property
+    def qdrant_timeout(self):
+        """Qdrant HTTP timeout in seconds."""
+        env_val = os.environ.get("MEMPALACE_QDRANT_TIMEOUT")
+        raw = env_val if env_val is not None else self._file_config.get("qdrant_timeout", 10.0)
+        try:
+            timeout = float(raw)
+        except (TypeError, ValueError):
+            timeout = 10.0
+        return timeout if timeout > 0 else 10.0
+
+    @property
+    def pgvector_dsn(self):
+        """Postgres DSN for the opt-in ``pgvector`` backend.
+
+        Defaults to a localhost DSN so selecting pgvector never silently sends
+        memory to a remote database. Point at a LAN or cloud Postgres via config
+        or ``MEMPALACE_PGVECTOR_DSN`` only when deliberately chosen.
+        """
+        env_val = os.environ.get("MEMPALACE_PGVECTOR_DSN")
+        if env_val:
+            return env_val.strip()
+        return str(
+            self._file_config.get("pgvector_dsn", "postgresql://localhost:5432/mempalace")
+        ).strip()
+
+    @property
+    def pgvector_namespace(self):
+        """Optional pgvector table namespace/prefix for multi-tenant isolation."""
+        env_val = os.environ.get("MEMPALACE_PGVECTOR_NAMESPACE")
+        if env_val:
+            return env_val.strip()
+        value = self._file_config.get("pgvector_namespace")
+        return str(value).strip() if value else None
 
     @property
     def people_map(self):
@@ -874,6 +953,24 @@ class MempalaceConfig:
         except (OSError, NotImplementedError):
             pass
 
+    def set_backend(self, backend: str) -> None:
+        """Persist the storage backend choice to ``config.json``."""
+        backend = str(backend).strip().lower()
+        from .backends import get_backend_class
+
+        get_backend_class(backend)
+        self._file_config["backend"] = backend
+        self._config_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(self._config_file, "w", encoding="utf-8") as f:
+                json.dump(self._file_config, f, indent=2, ensure_ascii=False)
+        except OSError:
+            pass
+        try:
+            self._config_file.chmod(0o600)
+        except (OSError, NotImplementedError):
+            pass
+
     @property
     def adaptmem_path(self):
         """Filesystem path to the AdaptMem fine-tuned encoder checkpoint.
@@ -920,6 +1017,36 @@ class MempalaceConfig:
         except (TypeError, ValueError):
             parsed = 1
         return max(1, parsed)
+
+    @property
+    def max_backups(self) -> int:
+        """Number of timestamped palace backups to retain before pruning.
+
+        Applies to the accumulating, timestamped backups created by
+        ``mempalace migrate`` (``<palace>.pre-migrate.<timestamp>``) and
+        ``mempalace repair max-seq-id``
+        (``chroma.sqlite3.max-seq-id-backup-<timestamp>``). Each of those
+        commands writes a fresh full-size copy every run and historically
+        never deleted the old ones, so on a machine that mines or repairs on
+        a schedule the backup set could silently grow until it filled the
+        disk. After each backup is written, copies beyond this count (oldest
+        first) are removed.
+
+        Reads ``MEMPALACE_MAX_BACKUPS`` env first, then ``max_backups`` in
+        ``config.json``, then the default of ``10``. A value of ``0`` disables
+        pruning and keeps every backup (use when an external retention policy
+        manages cleanup). Negative or non-numeric values fall back to the
+        default rather than crashing migrate/repair.
+        """
+        env_val = os.environ.get("MEMPALACE_MAX_BACKUPS")
+        if env_val is not None:
+            coerced = self._try_coerce_int(env_val, minimum=0)
+            if coerced is not None:
+                return coerced
+        coerced = self._try_coerce_int(
+            self._file_config.get("max_backups", DEFAULT_MAX_BACKUPS), minimum=0
+        )
+        return DEFAULT_MAX_BACKUPS if coerced is None else coerced
 
     @property
     def hook_silent_save(self):
@@ -980,10 +1107,13 @@ class MempalaceConfig:
             # and silently overrides convo_miner's stricter 30-char floor,
             # dropping legitimate short conversation exchanges. Module-level
             # defaults already apply correctly when these keys are absent.
+            # "backend" is intentionally NOT seeded: an absent key means
+            # "resolve normally" (env, detected artifacts, chroma default),
+            # and writing the default would make config.json silently win
+            # over MEMPALACE_BACKEND under the RFC 001 resolution order.
             default_config = {
                 "palace_path": DEFAULT_PALACE_PATH,
                 "collection_name": DEFAULT_COLLECTION_NAME,
-                "backend": DEFAULT_BACKEND,
                 "topic_wings": DEFAULT_TOPIC_WINGS,
                 "hall_keywords": DEFAULT_HALL_KEYWORDS,
             }

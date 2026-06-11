@@ -63,6 +63,30 @@ Return a long-lived instance of the named backend.
 Instances are cached per-name; repeated calls return the same object.
 Call :func:`reset_backends` in tests that need isolation.
 
+### `detect_backends_for_path`
+
+```python
+def detect_backends_for_path(path: str) -> list[str]
+```
+
+Return all registered backend names whose artifacts are present at ``path``.
+
+Detection is a migration/protection aid for local palaces. Backends are
+checked in registry-name order so callers get deterministic diagnostics if
+a broken directory contains artifacts from more than one backend.
+
+### `detect_backend_for_path`
+
+```python
+def detect_backend_for_path(path: str) -> Optional[str]
+```
+
+Return the single detected backend at ``path``, or ``None``.
+
+If multiple backend artifacts are present, the first name in registry order
+is returned for backward compatibility. Callers that enforce mismatch
+protection should use :func:`detect_backends_for_path`.
+
 ### `reset_backends`
 
 ```python

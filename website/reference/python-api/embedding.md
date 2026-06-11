@@ -66,6 +66,22 @@ def name() -> str
 def __init__(self, preferred_providers = None)
 ```
 
+#### `embed_query`
+
+```python
+def embed_query(self, input: list[str]) -> list[list[float]]
+```
+
+Embed query documents (ChromaDB EF protocol).
+
+#### `embed_documents`
+
+```python
+def embed_documents(self, input: list[str]) -> list[list[float]]
+```
+
+Embed a batch of documents (ChromaDB EF protocol).
+
 ## Functions
 
 ### `get_embedding_function`
@@ -91,3 +107,39 @@ Return a short human-readable label for the resolved device.
 
 Used by the miner CLI header so users can see at a glance whether GPU
 acceleration actually engaged.
+
+### `current_model_name`
+
+```python
+def current_model_name(model: Optional[str] = None) -> str
+```
+
+Resolve the canonical embedder model name (cheap, no model load).
+
+This is the configured ``embedding_model`` (``"minilm"`` /
+``"embeddinggemma"`` / ...), not the embedding function's internal
+``name()`` (which is spoofed to ``"default"`` for ChromaDB compatibility).
+
+### `probe_dimension`
+
+```python
+def probe_dimension(device: Optional[str] = None, model: Optional[str] = None) -> int
+```
+
+Return the embedder's output dimension by embedding a short probe.
+
+Model-agnostic — works for any model without a hardcoded table — and
+cached per resolved model name so the probe is paid at most once per
+process. Returns ``0`` if the probe fails (treated as "dimension unknown"
+by the identity check, so a probe failure never blocks normal operation).
+
+### `get_embedder_identity`
+
+```python
+def get_embedder_identity(device: Optional[str] = None, model: Optional[str] = None)
+```
+
+Resolve the current embedder identity (RFC 001).
+
+``model_name`` from config (cheap); ``dimension`` from a cached one-time
+probe. Returns an :class:`~mempalace.backends.base.EmbedderIdentity`.

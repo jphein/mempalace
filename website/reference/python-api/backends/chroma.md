@@ -74,6 +74,18 @@ def delete(self, *, ids = None, where = None)
 def count(self)
 ```
 
+#### `lexical_search`
+
+```python
+def lexical_search(self, *, query: str, n_results: int = 10, where: Optional[dict] = None) -> LexicalResult
+```
+
+Return lexical BM25 candidates for this collection.
+
+This is the normal healthy-Chroma implementation behind the optional
+backend capability. The HNSW-disabled fallback in ``searcher.py`` still
+reads ``chroma.sqlite3`` directly and remains Chroma-only.
+
 #### `metadata`
 
 ```python
@@ -87,6 +99,34 @@ without ``hnsw:space=cosine`` and therefore silently use L2
 distance, which breaks cosine-based similarity interpretation.
 Returns ``&#123;}`` when metadata is absent so callers can do a plain
 ``.get("hnsw:space")`` without None-checks.
+
+#### `distance_metric`
+
+```python
+def distance_metric(self) -> str
+```
+
+Report this collection's actual space from ``hnsw:space``.
+
+MemPalace sets ``hnsw:space=cosine`` on every creation path, so a
+healthy palace reports ``"cosine"``. When the key is absent, empty, or
+an unrecognized value, the collection is genuinely using Chroma's HNSW
+default — **L2** (Euclidean) — because cosine was never set on it. We
+report ``"l2"`` in that case so core ranking maps the distances
+correctly; reporting ``"cosine"`` here would reintroduce the
+floor-every-result-to-zero misranking this property exists to fix.
+
+#### `get_stored_embedder_identity`
+
+```python
+def get_stored_embedder_identity(self)
+```
+
+#### `set_embedder_identity`
+
+```python
+def set_embedder_identity(self, identity) -> None
+```
 
 ### `class ChromaBackend(BaseBackend)`
 
@@ -112,15 +152,14 @@ def __init__(self)
 def make_client(palace_path: str)
 ```
 
-Create a fresh ``PersistentClient`` (fixes BLOB seq_ids first).
+Create a fresh ``PersistentClient`` (runs pre-open safety pass first).
 
 Deprecated-ish: exposed for legacy long-lived callers that manage their
 own client cache. New code should obtain a collection through
 :meth:`get_collection` which manages caching internally.
 
-Quarantines HNSW segments **once per palace per process**. See
-:attr:`_quarantined_paths` for the rationale (cold-start protection
-vs. runtime thrash on steady-write daemons).
+Quarantines HNSW segments on first open and after any detected
+disk change. See :attr:`_quarantined_paths` for the gate logic.
 
 #### `backend_version`
 

@@ -163,6 +163,22 @@ def tool_delete_tunnel(tunnel_id: str)
 
 Delete an explicit tunnel by its ID.
 
+### `tool_list_hallways`
+
+```python
+def tool_list_hallways(wing: str = None)
+```
+
+List within-wing hallway records, optionally filtered by wing.
+
+### `tool_delete_hallway`
+
+```python
+def tool_delete_hallway(hallway_id: str)
+```
+
+Delete a hallway record by its ID.
+
 ### `tool_follow_tunnels`
 
 ```python
@@ -200,6 +216,40 @@ def tool_delete_drawer(drawer_id: str)
 ```
 
 Delete a single drawer by ID.
+
+### `tool_mine`
+
+```python
+def tool_mine(source: str, mode: str = 'projects', wing: str = None, agent: str = 'mempalace', limit: int = 0, dry_run: bool = False, extract: str = 'exchange')
+```
+
+Mine a directory into the palace — the MCP equivalent of ``mempalace mine``.
+
+Lets MCP clients that cannot shell out (Claude Desktop, LM Studio, Aionui,
+Desktop Commander) trigger indexing in-conversation (#1662). Wraps the same
+in-process miners the CLI's ``cmd_mine`` calls; it adds no new ingestion
+logic of its own.
+
+mode:
+    ``"projects"`` (default) — code/docs via ``miner.mine``.
+    ``"convos"``             — chat transcripts via ``convo_miner.mine_convos``.
+    ``"extract"``            — office documents (PDF/DOCX/RTF/…) via
+                               ``format_miner.mine_formats``; requires the
+                               optional ``mempalace[extract]`` dependency.
+wing:    target wing (default: derived from the source directory name).
+agent:   recorded on every drawer (default ``"mempalace"``).
+limit:   max files to process (0 = all).
+dry_run: walk + chunk and report, but file nothing.
+extract: convos extraction strategy — ``"exchange"`` (default) or
+         ``"general"``; ignored by the other modes.
+
+Runs synchronously and mirrors the :func:`tool_sync` contract: success
+returns ``&#123;success: True, mode, dry_run, output[, output_truncated]}`` where ``output`` is
+the miner's human-readable summary (captured so it cannot corrupt the
+JSON-RPC stream); failure returns ``&#123;success: False, error[, error_class]}``.
+The palace write lock is held by the miners themselves, so a concurrent mine
+surfaces as a structured already-running error. Orphan cleanup is not part of
+mining — use ``mempalace_sync`` for that.
 
 ### `tool_sync`
 
