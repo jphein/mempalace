@@ -270,10 +270,17 @@ caller can tell why a directory looks empty after walking.
 ### `mine`
 
 ```python
-def mine(project_dir: str, palace_path: str, wing_override: str = None, agent: str = 'mempalace', limit: int = 0, dry_run: bool = False, respect_gitignore: bool = True, include_ignored: list = None, files: list = None, max_chunks_per_file: Optional[int] = None, *, collection = None, closets_collection = None)
+def mine(project_dir: str, palace_path: str, wing_override: str = None, agent: str = 'mempalace', limit: int = 0, dry_run: bool = False, respect_gitignore: bool = True, include_ignored: list = None, files: list = None, max_chunks_per_file: Optional[int] = None, workers: int = 1, *, collection = None, closets_collection = None)
 ```
 
 Mine a project directory into the palace.
+
+``workers`` controls parallelism of the read/chunk/route prep half.
+The default ``1`` runs the unchanged sequential path (zero behaviour
+change). When ``> 1``, files are prepared across a thread pool while
+every backend write (embedding ``upsert`` + closet build) stays serial
+on the main thread — see :func:`_prepare_file` / :func:`_write_prepared`
+and issue #330 for why the encoder must stay single-threaded.
 
 ``files`` may optionally be a pre-scanned list of file paths from
 :func:`scan_project`. When provided, the corpus walk is skipped — the
