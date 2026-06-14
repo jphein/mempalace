@@ -2734,3 +2734,200 @@ def test_mine_limit_summary_counts(tmp_path, capsys):
     assert "Files processed: 2" in out
     assert "Drawers filed: 6" in out
     assert "(limit: 2 new)" in out
+
+
+# =============================================================================
+# Concurrent mining — parallel-prepare / serial-write (restored, issue #330)
+# =============================================================================
+#
+# These exercise the workers>1 path through the injected-collection route so
+# no real backend / ONNX encoder is constructed — the stub collections record
+# every write deterministically, mirroring _StubCollection above.
+
+
+class _ThreadRecordingCollection(_StubCollection):
+    """Stub that records the thread + a serialized-overlap signal per upsert.
+
+    Beyond ``_StubCollection``'s write capture, every ``upsert`` records the
+    calling thread name and, while it holds an internal sentinel, sleeps a
+    hair so that any *concurrent* upsert would be observably overlapping.
+    ``overlap_detected`` flips True if a second thread ever enters ``upsert``
+    while the first is still inside it. The serial-write contract requires it
+    to stay False regardless of worker count.
+    """
+
+    def __init__(self):
+        super().__init__()
+        import threading
+
+        self._active = 0
+        self._active_lock = threading.Lock()
+        self.overlap_detected = False
+        self.upsert_threads = []
+
+    def upsert(self, *, documents, ids, metadatas):
+        import threading
+        import time
+
+        with self._active_lock:
+            self._active += 1
+            if self._active > 1:
+                self.overlap_detected = True
+        self.upsert_threads.append(threading.current_thread().name)
+        # Hold the "inside upsert" window open briefly so a genuinely
+        # concurrent writer would be caught by the overlap check above.
+        time.sleep(0.005)
+        super().upsert(documents=documents, ids=ids, metadatas=metadatas)
+        with self._active_lock:
+            self._active -= 1
+
+
+def _make_concurrent_fixture(project_root: Path, n_files: int = 12) -> None:
+    """A project with enough distinct files to actually fan out across workers."""
+    for idx in range(n_files):
+        write_file(
+            project_root / f"mod_{idx}.py",
+            f"def fn_{idx}():\n    return {idx} * 2\n# filler line {idx}\n" * 12,
+        )
+    with open(project_root / "mempalace.yaml", "w") as f:
+        yaml.dump(
+            {
+                "wing": "concurrent_test",
+                "rooms": [{"name": "general", "description": "General"}],
+            },
+            f,
+        )
+
+
+def _written_pairs(stub: "_StubCollection"):
+    """Flatten a stub's upsert calls into a sorted {id: document} mapping."""
+    pairs = {}
+    for call in stub.upsert_calls:
+        for drawer_id, doc in zip(call["ids"], call["documents"]):
+            pairs[drawer_id] = doc
+    return pairs
+
+
+def test_concurrent_mine_matches_sequential_drawers(monkeypatch, tmp_path):
+    """workers>1 files the SAME drawers (ids + documents) as workers=1.
+
+    Determinism gate: parallelizing the read/chunk/route prep must not
+    change which drawers land or what they contain — only the order of
+    preparation differs, and writes are re-serialized on the main thread.
+    """
+    from mempalace import miner as miner_mod
+
+    project_root = tmp_path / "proj"
+    project_root.mkdir()
+    _make_concurrent_fixture(project_root, n_files=12)
+    palace_path = project_root / "palace"
+
+    monkeypatch.setattr(miner_mod, "_validate_palace_fts5_after_mine", lambda *a, **k: None)
+
+    seq_drawers = _ThreadRecordingCollection()
+    seq_closets = _StubCollection()
+    mine(
+        str(project_root),
+        str(palace_path),
+        workers=1,
+        collection=seq_drawers,
+        closets_collection=seq_closets,
+    )
+
+    par_drawers = _ThreadRecordingCollection()
+    par_closets = _StubCollection()
+    mine(
+        str(project_root),
+        str(palace_path),
+        workers=4,
+        collection=par_drawers,
+        closets_collection=par_closets,
+    )
+
+    seq_pairs = _written_pairs(seq_drawers)
+    par_pairs = _written_pairs(par_drawers)
+
+    assert seq_pairs, "sequential mine wrote no drawers — fixture/setup broken"
+    assert par_pairs == seq_pairs, (
+        "concurrent mine must write byte-identical drawers (same ids + documents) "
+        "as the sequential mine"
+    )
+
+
+def test_concurrent_mine_serializes_writes(monkeypatch, tmp_path):
+    """Even with workers>1, no two upserts overlap — embedding stays serial."""
+    from mempalace import miner as miner_mod
+
+    project_root = tmp_path / "proj"
+    project_root.mkdir()
+    _make_concurrent_fixture(project_root, n_files=12)
+    palace_path = project_root / "palace"
+
+    monkeypatch.setattr(miner_mod, "_validate_palace_fts5_after_mine", lambda *a, **k: None)
+
+    drawers = _ThreadRecordingCollection()
+    closets = _StubCollection()
+    mine(
+        str(project_root),
+        str(palace_path),
+        workers=4,
+        collection=drawers,
+        closets_collection=closets,
+    )
+
+    assert len(drawers.upsert_calls) >= 1, "no writes happened — fixture broken"
+    assert drawers.overlap_detected is False, (
+        "two upserts overlapped in time under workers=4 — writes are NOT serialized; "
+        "embedding would run multi-threaded, violating the issue #330 invariant"
+    )
+    # All writes land on the SAME (main) thread — prep fans out, writes don't.
+    assert len(set(drawers.upsert_threads)) == 1, (
+        f"upserts ran on multiple threads {set(drawers.upsert_threads)} — "
+        "the serial-write half must execute on a single thread"
+    )
+
+
+def test_concurrent_mine_prep_error_does_not_abort_others(monkeypatch, tmp_path):
+    """A file that raises during PREP is skipped; every other file still files."""
+    from mempalace import miner as miner_mod
+
+    project_root = tmp_path / "proj"
+    project_root.mkdir()
+    _make_concurrent_fixture(project_root, n_files=10)
+    palace_path = project_root / "palace"
+
+    monkeypatch.setattr(miner_mod, "_validate_palace_fts5_after_mine", lambda *a, **k: None)
+
+    real_prepare = miner_mod._prepare_file
+    boom_target = "mod_5.py"
+
+    def flaky_prepare(filepath, *args, **kwargs):
+        if Path(filepath).name == boom_target:
+            raise RuntimeError("simulated prep explosion")
+        return real_prepare(filepath, *args, **kwargs)
+
+    monkeypatch.setattr(miner_mod, "_prepare_file", flaky_prepare)
+
+    drawers = _ThreadRecordingCollection()
+    closets = _StubCollection()
+    mine(
+        str(project_root),
+        str(palace_path),
+        workers=4,
+        collection=drawers,
+        closets_collection=closets,
+    )
+
+    written = _written_pairs(drawers)
+    written_sources = {
+        meta["source_file"] for call in drawers.upsert_calls for meta in call["metadatas"]
+    }
+
+    assert written, "the failing file aborted the whole mine — others were not written"
+    # The 9 healthy files must all be present; the boom file must be absent.
+    assert not any(Path(src).name == boom_target for src in written_sources), (
+        "the file that raised in prep should have been skipped, not written"
+    )
+    healthy = {f"mod_{i}.py" for i in range(10)} - {boom_target}
+    got = {Path(src).name for src in written_sources}
+    assert healthy <= got, f"missing healthy files after a prep error: {healthy - got}"

@@ -941,6 +941,7 @@ def test_cmd_mine_projects_mode(mock_config_cls):
         no_gitignore=False,
         include_ignored=[],
         extract="exchange",
+        workers=1,
     )
     with patch("mempalace.miner.mine") as mock_mine:
         cmd_mine(args)
@@ -954,6 +955,7 @@ def test_cmd_mine_projects_mode(mock_config_cls):
             respect_gitignore=True,
             include_ignored=[],
             max_chunks_per_file=None,
+            workers=1,
         )
 
 
