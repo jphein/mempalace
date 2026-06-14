@@ -18,6 +18,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-06-14]
+
+
+### Performance
+
+
+- **Restore concurrent file mining via parallel-prepare/serial-write (regression from a dropped sync hunk); opt-in --workers** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  The ``--workers`` flag had been stranded in ``cli.py`` — advertised
+  but consumed nowhere after an upstream sync dropped the
+  ``ThreadPoolExecutor`` wiring originally added in ``5cd14bd``, so
+  mining ran serially regardless of the flag. Re-implemented on the
+  current architecture (not a cherry-pick) with a **parallel-prepare /
+  serial-write** split: worker threads run the embedding-free prep
+  (read, ``detect_room``, ``chunk_text``, chunk-cap, mtime/date) via
+  ``_prepare_file``; the main thread performs every
+  ``collection.upsert`` serially via ``_write_prepared`` under
+  ``mine_lock``. Because embedding happens inside the backend's
+  ``upsert(documents=...)`` and all upserts stay on the main thread,
+  the encoder is single-threaded regardless of worker count — so this
+  composes with the ONNX intra-op cap (upstream #1071) without
+  depending on it, and the single-writer property structurally avoids
+  the parallel-insert HNSW corruption class (#330). Default
+  ``workers=1`` everywhere (sequential, zero behavior change);
+  parallelism is opt-in. 3 new tests (workers=1 vs N equivalence,
+  write-serialization, prep-error isolation).
+
+  *Files:* `mempalace/miner.py`, `mempalace/cli.py`, `tests/test_miner.py`
+
+
 ## [2026-06-11]
 
 
