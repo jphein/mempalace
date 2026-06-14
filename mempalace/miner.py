@@ -1571,6 +1571,242 @@ def process_file(
 
 
 # =============================================================================
+# PARALLEL-PREPARE / SERIAL-WRITE SPLIT
+# =============================================================================
+#
+# ``process_file`` (above) is the sequential one-shot path and stays the
+# canonical implementation for ``workers <= 1``. For ``workers > 1`` the
+# work is split into two halves so a ThreadPoolExecutor can run the
+# read-only / CPU-bound prep concurrently while the embedding write stays
+# strictly serial on the main thread.
+#
+# The correctness invariant: embedding happens inside
+# ``collection.upsert(documents=...)`` (the backend embeds documents on
+# write). Keeping every ``upsert`` on the main thread therefore keeps the
+# ONNX / encoder path single-threaded regardless of worker count — the
+# thread-safety gate from issue #330. Threads only do the embedding-free
+# prep (read, route, chunk, id-compute), which is where a cold mine spends
+# its CPU on a multi-core box.
+
+
+class _PreparedFile:
+    """Result of :func:`_prepare_file` — everything the serial write needs.
+
+    Holds only embedding-free, read-only computation: the file content,
+    its routed room, the chunk list, and the filesystem-derived
+    ``source_mtime`` / ``content_date``. The novelty tag, metadata build,
+    collision scan, ``upsert`` and closet build are deliberately NOT here —
+    they touch the backend (shared mutable state) and run serially in
+    :func:`_write_prepared`.
+    """
+
+    __slots__ = ("filepath", "content", "room", "chunks", "source_mtime", "content_date")
+
+    def __init__(self, filepath, content, room, chunks, source_mtime, content_date):
+        self.filepath = filepath
+        self.content = content
+        self.room = room
+        self.chunks = chunks
+        self.source_mtime = source_mtime
+        self.content_date = content_date
+
+
+def _prepare_file(
+    filepath: Path,
+    project_path: Path,
+    rooms: list,
+    chunk_size: int = None,
+    chunk_overlap: int = None,
+    min_chunk_size: int = None,
+    max_chunks_per_file: Optional[int] = None,
+    room_resolver: Optional[callable] = None,
+) -> tuple:
+    """Thread-safe, embedding-free prep half of :func:`process_file`.
+
+    Reads the file, routes it to a room, chunks it, and resolves the
+    filesystem-derived dates — none of which touch the backend or embed
+    anything, so this is safe to run across a ThreadPoolExecutor.
+
+    Returns ``(prepared, skip_reason)`` where ``prepared`` is a
+    :class:`_PreparedFile` on success or ``None`` on a skip (unreadable,
+    too short, empty after chunking, or over the chunk cap). ``skip_reason``
+    mirrors :func:`process_file`: ``None`` for ordinary skips, ``"chunk_cap"``
+    when the per-file chunk cap aborted the file.
+
+    The already-mined check is intentionally NOT done here — it queries the
+    backend and must run under ``mine_lock`` in the serial write half, so
+    it is performed in :func:`_write_prepared` exactly as ``process_file``
+    does.
+    """
+    effective_min = min_chunk_size if min_chunk_size is not None else MIN_CHUNK_SIZE
+    source_file = str(filepath)
+
+    try:
+        content = filepath.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return None, None
+
+    content = content.strip()
+    if len(content) < effective_min:
+        return None, None
+
+    room = detect_room(filepath, content, rooms, project_path)
+    if room_resolver is not None:
+        room = room_resolver(room)
+    chunks = chunk_text(
+        content,
+        source_file,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        min_chunk_size=min_chunk_size,
+    )
+
+    effective_cap = _resolve_max_chunks_per_file(max_chunks_per_file)
+    if effective_cap > 0 and len(chunks) > effective_cap:
+        print(
+            f"  ! [skip] {filepath.name[:50]:50} produced {len(chunks)} chunks "
+            f"(> {effective_cap}); raise via --max-chunks-per-file or "
+            f"MEMPALACE_MAX_CHUNKS_PER_FILE (set 0 to disable), or add to "
+            f"SKIP_FILENAMES if this is a generated artifact",
+            file=sys.stderr,
+        )
+        return None, "chunk_cap"
+
+    if not chunks:
+        return None, None
+
+    try:
+        source_mtime = os.path.getmtime(source_file)
+    except OSError:
+        source_mtime = None
+
+    content_date = _extract_content_date(source_file, content)
+
+    return (
+        _PreparedFile(filepath, content, room, chunks, source_mtime, content_date),
+        None,
+    )
+
+
+def _write_prepared(
+    prepared: "_PreparedFile",
+    collection,
+    wing: str,
+    agent: str,
+    closets_col=None,
+) -> tuple:
+    """Serial, main-thread write half of :func:`process_file`.
+
+    Performs the embedding write for a single already-prepared file. This
+    is byte-for-byte the same write sequence ``process_file`` runs once it
+    has chunks in hand: already-mined skip check, ``mine_lock``, post-lock
+    re-check, stale-drawer purge, novelty tag, batched ``assert_no_collisions``
+    + ``collection.upsert``, then the closet build.
+
+    MUST be called from a single thread (the main thread). Every embedding
+    forward pass happens inside the ``upsert`` calls below, so serializing
+    this keeps the encoder single-threaded (issue #330).
+
+    Returns ``(drawer_count, room)`` mirroring the success contract of
+    ``process_file``; ``drawer_count == 0`` means the post-lock re-check
+    found the file already filed by a peer.
+    """
+    source_file = str(prepared.filepath)
+    room = prepared.room
+    content = prepared.content
+    chunks = prepared.chunks
+
+    # Skip if already filed (matches process_file's pre-lock check).
+    if file_already_mined(collection, source_file, check_mtime=True):
+        return 0, room
+
+    with mine_lock(source_file):
+        # Re-check after acquiring lock — another agent may have just finished.
+        if file_already_mined(collection, source_file, check_mtime=True):
+            return 0, room
+
+        try:
+            collection.delete(where={"source_file": source_file})
+        except Exception:
+            logger.debug("Stale-drawer purge failed for %s", source_file, exc_info=True)
+
+        from .room_taxonomy import validate_room
+
+        room_warnings = validate_room(room)
+        for _w in room_warnings:
+            logger.warning("room taxonomy: %s (source=%s)", _w, source_file)
+
+        from .novelty_wiring import compute_novelty_tag
+
+        file_novelty_tag = compute_novelty_tag(collection, wing, room, content)
+
+        drawers_added = 0
+        all_metas: list = []
+        for batch_start in range(0, len(chunks), DRAWER_UPSERT_BATCH_SIZE):
+            batch_docs: list = []
+            batch_ids: list = []
+            batch_metas: list = []
+            for chunk in chunks[batch_start : batch_start + DRAWER_UPSERT_BATCH_SIZE]:
+                drawer_id = make_drawer_id_from_chunk(wing, room, source_file, chunk["chunk_index"])
+                batch_docs.append(chunk["content"])
+                batch_ids.append(drawer_id)
+                batch_metas.append(
+                    _build_drawer_metadata(
+                        wing,
+                        room,
+                        source_file,
+                        chunk["chunk_index"],
+                        agent,
+                        chunk["content"],
+                        prepared.source_mtime,
+                        line_start=chunk.get("line_start"),
+                        line_end=chunk.get("line_end"),
+                        content_date=prepared.content_date,
+                        novelty_tag=file_novelty_tag,
+                    )
+                )
+            assert_no_collisions(list(zip(batch_ids, batch_metas)), collection)
+            collection.upsert(
+                documents=batch_docs,
+                ids=batch_ids,
+                metadatas=batch_metas,
+            )
+            drawers_added += len(batch_docs)
+            all_metas.extend(batch_metas)
+
+        if closets_col and drawers_added > 0:
+            drawer_ids = [
+                make_drawer_id_from_chunk(wing, room, source_file, c["chunk_index"]) for c in chunks
+            ]
+            closet_lines = build_closet_lines(
+                source_file,
+                drawer_ids,
+                content,
+                wing,
+                room,
+                drawer_metas=all_metas,
+            )
+            closet_id_base = (
+                f"closet_{wing}_{room}_{hashlib.sha256(source_file.encode()).hexdigest()[:24]}"
+            )
+            entities = _extract_entities_for_metadata(content)
+            closet_meta = {
+                "wing": wing,
+                "room": room,
+                "source_file": source_file,
+                "drawer_count": drawers_added,
+                "filed_at": datetime.now().isoformat(),
+                "normalize_version": NORMALIZE_VERSION,
+            }
+            if entities:
+                closet_meta["entities"] = entities
+            purge_file_closets(closets_col, source_file)
+            upsert_closet_lines(closets_col, closet_id_base, closet_lines, closet_meta)
+
+    return drawers_added, room
+
+
+# =============================================================================
 # SCAN PROJECT
 # =============================================================================
 
@@ -1665,11 +1901,19 @@ def mine(
     include_ignored: list = None,
     files: list = None,
     max_chunks_per_file: Optional[int] = None,
+    workers: int = 1,
     *,
     collection=None,
     closets_collection=None,
 ):
     """Mine a project directory into the palace.
+
+    ``workers`` controls parallelism of the read/chunk/route prep half.
+    The default ``1`` runs the unchanged sequential path (zero behaviour
+    change). When ``> 1``, files are prepared across a thread pool while
+    every backend write (embedding ``upsert`` + closet build) stays serial
+    on the main thread — see :func:`_prepare_file` / :func:`_write_prepared`
+    and issue #330 for why the encoder must stay single-threaded.
 
     ``files`` may optionally be a pre-scanned list of file paths from
     :func:`scan_project`. When provided, the corpus walk is skipped — the
@@ -1718,6 +1962,7 @@ def mine(
             include_ignored=include_ignored,
             files=files,
             max_chunks_per_file=max_chunks_per_file,
+            workers=workers,
             collection=collection,
             closets_collection=closets_collection,
         )
@@ -1739,6 +1984,7 @@ def mine(
             include_ignored=include_ignored,
             files=files,
             max_chunks_per_file=max_chunks_per_file,
+            workers=workers,
             collection=collection,
             closets_collection=closets_collection,
         )
@@ -1758,7 +2004,110 @@ def mine(
             include_ignored=include_ignored,
             files=files,
             max_chunks_per_file=max_chunks_per_file,
+            workers=workers,
         )
+
+
+def _mine_files_concurrently(
+    *,
+    files: list,
+    workers: int,
+    account: callable,
+    project_path: Path,
+    collection,
+    closets_col,
+    wing: str,
+    agent: str,
+    rooms: list,
+    cfg_chunk_size,
+    cfg_chunk_overlap,
+    cfg_min_chunk_size,
+    effective_chunk_cap,
+    room_resolver,
+) -> None:
+    """Run the parallel-prepare / serial-write mine loop.
+
+    Embedding-free prep (:func:`_prepare_file`) runs across a
+    ``ThreadPoolExecutor``; the backend write (:func:`_write_prepared`) runs
+    on THIS (main) thread as each future completes. Because every
+    ``collection.upsert`` — and therefore every embedding forward pass —
+    stays on the main thread, the encoder is single-threaded no matter how
+    many workers prepare files in parallel (issue #330).
+
+    ``account`` is the per-file folding callback from ``_mine_impl``; it
+    returns True once the newly-mined ``limit`` is reached, at which point
+    we stop draining further results.
+
+    A file that raises during PREP is logged and skipped (counted via
+    ``account`` with ``drawers == 0``) so one unreadable/oversized file
+    cannot abort the whole mine. A failure during the serial WRITE
+    propagates, mirroring the sequential path where an unexpected
+    ``process_file`` exception aborts the mine with a partial-progress
+    summary and a non-zero exit (data-integrity signal, not silent loss).
+    """
+    import concurrent.futures
+
+    # 1-based completion index for progress parity with the sequential
+    # path. Futures complete out of order, so this is "how many we've
+    # drained so far", not the file's position in ``files``.
+    completed = 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=workers) as pool:
+        future_to_file = {
+            pool.submit(
+                _prepare_file,
+                filepath,
+                project_path,
+                rooms,
+                chunk_size=cfg_chunk_size,
+                chunk_overlap=cfg_chunk_overlap,
+                min_chunk_size=cfg_min_chunk_size,
+                max_chunks_per_file=effective_chunk_cap,
+                room_resolver=room_resolver,
+            ): filepath
+            for filepath in files
+        }
+        try:
+            for future in concurrent.futures.as_completed(future_to_file):
+                filepath = future_to_file[future]
+                completed += 1
+                try:
+                    prepared, skip_reason = future.result()
+                except concurrent.futures.CancelledError:
+                    # Cancelled after a limit-hit break drained enough files.
+                    continue
+                except Exception:
+                    # Prep failure for one file must not sink the others. The
+                    # room label is unused for a zero-drawer skip; "general"
+                    # mirrors process_file's skip return shape.
+                    logger.warning(
+                        "Concurrent prep failed for %s — skipping", filepath, exc_info=True
+                    )
+                    account(completed, filepath, 0, "general", None)
+                    continue
+
+                if prepared is None:
+                    # Ordinary skip (unreadable / too short / over chunk cap).
+                    account(completed, filepath, 0, "general", skip_reason)
+                    continue
+
+                # Serial write on the main thread — keeps embedding single-threaded.
+                drawers, room = _write_prepared(
+                    prepared,
+                    collection=collection,
+                    wing=wing,
+                    agent=agent,
+                    closets_col=closets_col,
+                )
+                if account(completed, filepath, drawers, room, None):
+                    # Limit reached — stop draining. The finally block cancels
+                    # any not-yet-started prep so we don't read files we'll
+                    # never write.
+                    break
+        finally:
+            # Don't wait on outstanding prep when bailing early — cancelled
+            # futures return immediately, running ones are bounded by a
+            # single file read+chunk.
+            pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one tick over the pre-existing ceiling; see issue #261
@@ -1772,6 +2121,7 @@ def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one t
     include_ignored: list = None,
     files: list = None,
     max_chunks_per_file: Optional[int] = None,
+    workers: int = 1,
     *,
     collection=None,
     closets_collection=None,
@@ -1838,52 +2188,90 @@ def _mine_impl(  # noqa: C901 — injected-handle branches push complexity one t
     room_counts = defaultdict(int)
     effective_chunk_cap = _resolve_max_chunks_per_file(max_chunks_per_file)
 
+    # Concurrency is opt-in (workers > 1) and never applies to dry-run, which
+    # is a pure read/print path with no backend writes to serialize. workers
+    # <= 1 keeps the exact original sequential code path below — zero
+    # behaviour change for every existing caller.
+    use_workers = workers and workers > 1 and not dry_run
+
+    def _account(i: int, filepath: Path, drawers: int, room: str, skip_reason) -> bool:
+        """Fold one file's outcome into the running counters.
+
+        Shared by both the sequential and concurrent paths so the summary
+        arithmetic is identical regardless of worker count. Returns True
+        when the ``limit`` of newly-mined files has been reached and the
+        caller should stop submitting/processing more files.
+        """
+        nonlocal total_drawers, files_mined, files_skipped
+        nonlocal files_skipped_chunk_cap, files_processed, last_file
+        files_processed = i
+        last_file = filepath.name
+        # All zero-drawer outcomes increment ``files_skipped`` in both
+        # modes so the summary "Files processed" arithmetic and the
+        # residual-skip counter stay honest under ``--dry-run`` too. The
+        # chunk-cap counter is partitioned out for its dedicated
+        # summary line (see #1455 + Gemini review on PR #1554).
+        if drawers == 0:
+            files_skipped += 1
+            if skip_reason == "chunk_cap":
+                files_skipped_chunk_cap += 1
+        else:
+            total_drawers += drawers
+            room_counts[room] += 1
+            files_mined += 1
+            if not dry_run:
+                print(f"  + [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers}")
+            if limit > 0 and files_mined >= limit:
+                return True
+        return False
+
     try:
-        for i, filepath in enumerate(files, 1):
-            try:
-                drawers, room, skip_reason = process_file(
-                    filepath=filepath,
-                    project_path=project_path,
-                    collection=collection,
-                    wing=wing,
-                    rooms=rooms,
-                    agent=agent,
-                    dry_run=dry_run,
-                    closets_col=closets_col,
-                    chunk_size=cfg_chunk_size,
-                    chunk_overlap=cfg_chunk_overlap,
-                    min_chunk_size=cfg_min_chunk_size,
-                    # Pass the already-resolved int so ``process_file``'s
-                    # ``override is not None`` branch skips the env re-read;
-                    # otherwise a malformed env var would emit its warning
-                    # per file.
-                    max_chunks_per_file=effective_chunk_cap,
-                    room_resolver=room_resolver,
-                )
-            except KeyboardInterrupt:
-                # Re-raise so the outer handler prints the summary; we
-                # capture the last-attempted file via last_file below.
-                last_file = filepath.name
-                raise
-            files_processed = i
-            last_file = filepath.name
-            # All zero-drawer outcomes increment ``files_skipped`` in both
-            # modes so the summary "Files processed" arithmetic and the
-            # residual-skip counter stay honest under ``--dry-run`` too. The
-            # chunk-cap counter is partitioned out for its dedicated
-            # summary line (see #1455 + Gemini review on PR #1554).
-            if drawers == 0:
-                files_skipped += 1
-                if skip_reason == "chunk_cap":
-                    files_skipped_chunk_cap += 1
-            else:
-                total_drawers += drawers
-                room_counts[room] += 1
-                files_mined += 1
-                if not dry_run:
-                    print(f"  + [{i:4}/{len(files)}] {filepath.name[:50]:50} +{drawers}")
-                if limit > 0 and files_mined >= limit:
+        if not use_workers:
+            for i, filepath in enumerate(files, 1):
+                try:
+                    drawers, room, skip_reason = process_file(
+                        filepath=filepath,
+                        project_path=project_path,
+                        collection=collection,
+                        wing=wing,
+                        rooms=rooms,
+                        agent=agent,
+                        dry_run=dry_run,
+                        closets_col=closets_col,
+                        chunk_size=cfg_chunk_size,
+                        chunk_overlap=cfg_chunk_overlap,
+                        min_chunk_size=cfg_min_chunk_size,
+                        # Pass the already-resolved int so ``process_file``'s
+                        # ``override is not None`` branch skips the env re-read;
+                        # otherwise a malformed env var would emit its warning
+                        # per file.
+                        max_chunks_per_file=effective_chunk_cap,
+                        room_resolver=room_resolver,
+                    )
+                except KeyboardInterrupt:
+                    # Re-raise so the outer handler prints the summary; we
+                    # capture the last-attempted file via last_file below.
+                    last_file = filepath.name
+                    raise
+                if _account(i, filepath, drawers, room, skip_reason):
                     break
+        else:
+            _mine_files_concurrently(
+                files=files,
+                workers=workers,
+                account=_account,
+                project_path=project_path,
+                collection=collection,
+                closets_col=closets_col,
+                wing=wing,
+                agent=agent,
+                rooms=rooms,
+                cfg_chunk_size=cfg_chunk_size,
+                cfg_chunk_overlap=cfg_chunk_overlap,
+                cfg_min_chunk_size=cfg_min_chunk_size,
+                effective_chunk_cap=effective_chunk_cap,
+                room_resolver=room_resolver,
+            )
 
         if not dry_run:
             # Cross-wing topic tunnels: after every file in this wing has been

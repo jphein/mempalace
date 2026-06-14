@@ -1397,6 +1397,7 @@ def cmd_mine(args):
                 respect_gitignore=not args.no_gitignore,
                 include_ignored=include_ignored,
                 max_chunks_per_file=getattr(args, "max_chunks_per_file", None),
+                workers=getattr(args, "workers", 1),
             )
     except MineAlreadyRunning as exc:
         # A live MCP server or another mine is already writing to this
@@ -5618,8 +5619,12 @@ def main():
     p_mine.add_argument(
         "--workers",
         type=int,
-        default=0,
-        help="Parallel workers for file processing (default: min(8, cpu_count); 1 = sequential)",
+        default=1,
+        help=(
+            "Parallel workers for file read/chunk/route; writes stay serialized "
+            "so embedding is single-threaded. Default 1 (sequential); higher "
+            "parallelizes prep on multi-core cold mines."
+        ),
     )
     from . import miner as _miner_for_default
 
