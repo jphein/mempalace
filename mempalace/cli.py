@@ -3531,6 +3531,14 @@ def cmd_rename_wing(args):
                 print(f"\n  ERROR: {e}", file=sys.stderr)
             sys.exit(2)
 
+        if data.get("success") is False or ("error" in data and "renamed" not in data):
+            error_msg = data.get("error", "Unknown error")
+            if want_json:
+                _emit_json(data)
+            else:
+                print(f"\n  ERROR: {error_msg}", file=sys.stderr)
+            sys.exit(2)
+
         if want_json:
             _emit_json(data)
         else:
