@@ -418,6 +418,36 @@ def test_cmd_rename_wing_daemon_mode(monkeypatch, capsys):
     assert "42" in out
 
 
+def test_cmd_rename_wing_daemon_surfaces_error(monkeypatch, capsys):
+    """When the daemon returns success=False, the CLI must surface the error
+    and exit non-zero instead of silently printing 'Renamed 0'. #350."""
+    from mempalace.cli import cmd_rename_wing
+
+    args = argparse.Namespace(
+        from_wing="storyvox",
+        to_wing="candela",
+        dry_run=False,
+        batch_size=500,
+        json=False,
+        quiet=False,
+    )
+    with (
+        patch("mempalace.cli._daemon_strict", return_value=True),
+        patch(
+            "mempalace.cli._call_daemon_tool",
+            return_value={
+                "success": False,
+                "error": "canceling statement due to statement timeout",
+            },
+        ),
+        pytest.raises(SystemExit, match="2"),
+    ):
+        cmd_rename_wing(args)
+
+    err = capsys.readouterr().err
+    assert "statement timeout" in err
+
+
 # ── cmd_mined ──────────────────────────────────────────────────────────
 
 

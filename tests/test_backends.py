@@ -933,6 +933,69 @@ def test_base_collection_rename_wing_empty_source(tmp_path):
     assert result["errors"] == 0
 
 
+def test_postgres_rename_wing_uses_batched_update(monkeypatch):
+    """rename_wing() batches the UPDATE via LIMIT subquery so each batch
+    stays within statement_timeout. Regression for #350."""
+    events = []
+    call_count = [0]
+
+    class FakeCursor:
+        rowcount = 0
+
+        def execute(self, sql, params=None):
+            call_count[0] += 1
+            events.append(("execute", str(sql), params))
+            # First call: 42 rows updated; second call: 0 (done)
+            self.rowcount = 42 if call_count[0] == 1 else 0
+
+    class FakeConnection:
+        autocommit = True
+
+        def cursor(self):
+            return FakeCursor()
+
+    collection = PostgresCollection("postgresql://example")
+    collection._setup_done = True
+    monkeypatch.setattr(PostgresCollection, "_sql", property(lambda self: _FakeSql))
+    monkeypatch.setattr(PostgresCollection, "_get_conn", lambda self: FakeConnection())
+
+    result = collection.rename_wing(from_wing="old", to_wing="new", batch_size=100)
+
+    assert result == {"renamed": 42, "errors": 0}
+    assert len(events) == 2
+    assert "UPDATE" in events[0][1]
+    assert "LIMIT" in events[0][1]
+    assert events[0][2] == ["new", "old", 100]
+
+
+def test_postgres_rename_wing_accumulates_across_batches(monkeypatch):
+    """rename_wing() sums rowcount across all batches."""
+    call_count = [0]
+
+    class FakeCursor:
+        rowcount = 0
+
+        def execute(self, sql, params=None):
+            call_count[0] += 1
+            # Three batches of 500, then 0
+            self.rowcount = 500 if call_count[0] <= 3 else 0
+
+    class FakeConnection:
+        autocommit = True
+
+        def cursor(self):
+            return FakeCursor()
+
+    collection = PostgresCollection("postgresql://example")
+    collection._setup_done = True
+    monkeypatch.setattr(PostgresCollection, "_sql", property(lambda self: _FakeSql))
+    monkeypatch.setattr(PostgresCollection, "_get_conn", lambda self: FakeConnection())
+
+    result = collection.rename_wing(from_wing="old", to_wing="new")
+
+    assert result == {"renamed": 1500, "errors": 0}
+
+
 def test_chroma_backend_accepts_palace_ref_kwarg(tmp_path):
     palace_path = tmp_path / "palace"
     backend = ChromaBackend()

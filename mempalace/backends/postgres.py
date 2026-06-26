@@ -651,13 +651,23 @@ class PostgresCollection(BaseCollection):
     def rename_wing(self, *, from_wing: str, to_wing: str, batch_size: int = 500) -> dict:
         self._ensure_setup(create=True)
         cur = self._get_conn().cursor()
-        cur.execute(
-            self._sql.SQL("UPDATE {} SET wing = %s WHERE wing = %s").format(
-                self._table_id,
-            ),
-            [to_wing, from_wing],
-        )
-        return {"renamed": cur.rowcount, "errors": 0}
+        renamed = 0
+        # Batch the UPDATE to stay within statement_timeout. Each batch
+        # auto-commits independently (connection has autocommit=True).
+        while True:
+            cur.execute(
+                self._sql.SQL(
+                    "UPDATE {} SET wing = %s"
+                    " WHERE id IN ("
+                    "   SELECT id FROM {} WHERE wing = %s LIMIT %s"
+                    " )"
+                ).format(self._table_id, self._table_id),
+                [to_wing, from_wing, batch_size],
+            )
+            if cur.rowcount == 0:
+                break
+            renamed += cur.rowcount
+        return {"renamed": renamed, "errors": 0}
 
     def count(self) -> int:
         self._ensure_setup(create=True)
