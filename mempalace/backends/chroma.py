@@ -1324,7 +1324,8 @@ def _fix_blob_seq_ids(palace_path: str) -> None:
     if os.path.isfile(marker):
         return
     try:
-        with contextlib.closing(sqlite3.connect(db_path)) as conn:
+        conn = sqlite3.connect(db_path)
+        with conn, contextlib.closing(conn):
             try:
                 rows = conn.execute(
                     "SELECT rowid, seq_id FROM embeddings WHERE typeof(seq_id) = 'blob'"

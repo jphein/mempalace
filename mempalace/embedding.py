@@ -208,6 +208,14 @@ def _build_ef_class():
             if not cap or cap <= 0:
                 return super().model
             try:
+                model_file = os.path.join(
+                    self.DOWNLOAD_PATH, self.EXTRACTED_FOLDER_NAME, "model.onnx"
+                )
+                if not os.path.exists(model_file):
+                    # Trigger upstream's lazy download before we build our own session.
+                    # Without this, the FileNotFoundError fallback caches the uncapped
+                    # model via cached_property, permanently bypassing the thread cap.
+                    super().model  # noqa: B018 — side-effect: downloads model
                 ort = self.ort
                 providers = self._preferred_providers or ort.get_available_providers()
                 providers = [p for p in providers if p != "CoreMLExecutionProvider"]
@@ -216,7 +224,7 @@ def _build_ef_class():
                 so.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
                 so.intra_op_num_threads = cap
                 return ort.InferenceSession(
-                    os.path.join(self.DOWNLOAD_PATH, self.EXTRACTED_FOLDER_NAME, "model.onnx"),
+                    model_file,
                     providers=providers,
                     sess_options=so,
                 )

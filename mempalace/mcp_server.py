@@ -3228,7 +3228,7 @@ def _purge_source_closets(source_file: str, *, commit: bool) -> int:
     if closets_col is None:
         return 0
     try:
-        ids = closets_col.get(where={"source_file": source_file}, include=[]).get("ids") or []
+        ids = _get_result_ids(closets_col.get(where={"source_file": source_file}, include=[]))
         count = len(ids)
         if commit and count:
             closets_col.delete(where={"source_file": source_file})
@@ -5291,10 +5291,7 @@ TOOLS = {
                     "description": "Alias for 'entry' — accepted because add_drawer uses 'content'. Provide either 'entry' or 'content'; 'entry' wins if both are given.",
                 },
             },
-            # 'entry' (or its alias 'content') is enforced at dispatch, not via a
-            # top-level anyOf: Anthropic rejects schemas with a top-level
-            # anyOf/oneOf/allOf and drops the whole tools array (400).
-            "required": ["agent_name"],
+            "required": ["agent_name", "entry"],
         },
         "handler": tool_diary_write,
     },
