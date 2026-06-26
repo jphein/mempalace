@@ -21,15 +21,17 @@ Raised when search cannot proceed (e.g. no palace found).
 ### `build_where_filter`
 
 ```python
-def build_where_filter(wing: str = None, room: str = None, tags: list = None) -> dict
+def build_where_filter(wing: str = None, room: str = None, tags: list = None, source_file: str = None) -> dict
 ```
 
-Build ChromaDB-style where filter for wing/room/tag filtering.
+Build ChromaDB-style where filter for wing/room/tag/source_file filtering.
 
 ``tags`` requires drawers to carry EVERY listed tag (AND logic). On the
 postgres backend the filter is pushed down via the ``$contains_all``
 JSONB operator; for chroma it's stripped here and applied as a
-post-filter by the caller (see ``search_memories``).
+post-filter by the caller (see ``search_memories``). ChromaDB needs a
+``$and`` only when ≥2 clauses are present; a single clause is returned
+bare and zero clauses yield an empty filter (#1815).
 
 ### `search`
 
@@ -46,7 +48,7 @@ hybrid ranking, sqlite-BM25 fallback, and scope-aware warnings.
 ### `search_memories`
 
 ```python
-def search_memories(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, n_results: int = 5, max_distance: float = 0.0, vector_disabled: bool = False, candidate_strategy: str = 'vector', fusion_mode: str = 'convex', collection_name: str = None) -> dict
+def search_memories(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, source_file: str = None, n_results: int = 5, max_distance: float = 0.0, vector_disabled: bool = False, candidate_strategy: str = 'vector', fusion_mode: str = 'convex', collection_name: str = None) -> dict
 ```
 
 Programmatic search — returns a dict instead of printing.
@@ -62,6 +64,8 @@ Args:
     palace_path: Path to the ChromaDB palace directory.
     wing: Optional wing filter.
     room: Optional room filter.
+    source_file: Optional exact source_file filter. Matches the full
+        stored source_file value verbatim (#1815).
     n_results: Max results to return.
     max_distance: Max cosine distance threshold. The palace collection uses
         cosine distance (hnsw:space=cosine) — 0 = identical, 2 = opposite.

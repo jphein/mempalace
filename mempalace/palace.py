@@ -840,36 +840,183 @@ def mine_lock(source_file: str):
     Prevents multiple agents from mining the same file simultaneously,
     which causes duplicate drawers when the delete+insert cycle interleaves.
     """
-    lock_dir = os.path.join(os.path.expanduser("~"), ".mempalace", "locks")
-    os.makedirs(lock_dir, exist_ok=True)
-    lock_path = os.path.join(
-        lock_dir, hashlib.sha256(source_file.encode()).hexdigest()[:16] + ".lock"
-    )
-
-    lf = open(lock_path, "w")
+    lock_path = _mine_lock_path(source_file)
+    lf = _acquire_mine_lock_file(lock_path)
     try:
-        if os.name == "nt":
-            import msvcrt
-
-            msvcrt.locking(lf.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-
-            fcntl.flock(lf, fcntl.LOCK_EX)
         yield
     finally:
         try:
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(lf.fileno(), msvcrt.LK_UNLCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(lf, fcntl.LOCK_UN)
+            _unlock_mine_lock_file(lf)
         except Exception:
             logger.debug("Mine-lock release failed", exc_info=True)
+        try:
+            lf.close()
+        except Exception:
+            logger.debug("Mine-lock close failed", exc_info=True)
+        _cleanup_mine_lock_file(lock_path)
+
+
+def _mine_lock_path(source_file: str) -> str:
+    lock_dir = os.path.join(os.path.expanduser("~"), ".mempalace", "locks")
+    os.makedirs(lock_dir, exist_ok=True)
+    return os.path.join(lock_dir, hashlib.sha256(source_file.encode()).hexdigest()[:16] + ".lock")
+
+
+def _open_mine_lock_file(lock_path: str, *, create: bool):
+    flags = os.O_RDWR
+    if create:
+        flags |= os.O_CREAT
+    fd = os.open(lock_path, flags, 0o600)
+    return os.fdopen(fd, "r+b")
+
+
+def _lock_mine_lock_file(lock_file, *, blocking: bool) -> bool:
+    lock_file.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        mode = msvcrt.LK_LOCK if blocking else msvcrt.LK_NBLCK
+        try:
+            msvcrt.locking(lock_file.fileno(), mode, 1)
+        except OSError:
+            if not blocking:
+                return False
+            raise
+        return True
+
+    import fcntl
+
+    flags = fcntl.LOCK_EX
+    if not blocking:
+        flags |= fcntl.LOCK_NB
+    try:
+        fcntl.flock(lock_file, flags)
+    except BlockingIOError:
+        if not blocking:
+            return False
+        raise
+    return True
+
+
+def _unlock_mine_lock_file(lock_file) -> None:
+    lock_file.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+def _mine_lock_file_is_current(lock_file, lock_path: str) -> bool:
+    """Return whether ``lock_file`` is still the inode reached by ``lock_path``.
+
+    POSIX advisory locks attach to the opened inode, not the pathname. If a
+    lock file is unlinked while a contender is waiting, that contender can later
+    acquire a lock on an inode no new process will use. We reject that stale
+    handle and retry on the current pathname.
+    """
+    if os.name == "nt":
+        return True
+    try:
+        path_stat = os.stat(lock_path)
+        file_stat = os.fstat(lock_file.fileno())
+    except OSError:
+        return False
+    return (path_stat.st_dev, path_stat.st_ino) == (file_stat.st_dev, file_stat.st_ino)
+
+
+def _acquire_open_mine_lock_file(lock_file, lock_path: str) -> bool:
+    """Acquire ``lock_file`` and return False if cleanup made it stale."""
+    _lock_mine_lock_file(lock_file, blocking=True)
+    if _mine_lock_file_is_current(lock_file, lock_path):
+        return True
+    try:
+        _unlock_mine_lock_file(lock_file)
+    except Exception:
+        logger.debug("Mine-lock stale-handle release failed", exc_info=True)
+    return False
+
+
+def _acquire_mine_lock_file(lock_path: str):
+    while True:
+        lf = _open_mine_lock_file(lock_path, create=True)
+        try:
+            if _acquire_open_mine_lock_file(lf, lock_path):
+                return lf
+        except Exception:
+            lf.close()
+            raise
         lf.close()
+
+
+def _cleanup_mine_lock_file(lock_path: str) -> None:
+    """Best-effort removal that preserves flock rendezvous semantics.
+
+    A plain ``os.remove(lock_path)`` after closing the critical-section lock is
+    unsafe on POSIX: a waiter may already be blocked on the old inode while a
+    later process creates and locks a new inode at the same pathname. Instead,
+    cleanup briefly re-acquires the current file nonblocking. If it wins, it can
+    unlink that inode as cleanup-only work; waiters on the old inode will detect
+    the stale handle after waking and retry on the current path.
+    """
+    try:
+        lf = _open_mine_lock_file(lock_path, create=False)
+    except FileNotFoundError:
+        return
+    except OSError:
+        logger.debug("Mine-lock cleanup open failed for %s", lock_path, exc_info=True)
+        return
+
+    acquired = False
+    closed = False
+    try:
+        try:
+            acquired = _lock_mine_lock_file(lf, blocking=False)
+        except OSError:
+            logger.debug("Mine-lock cleanup acquire failed for %s", lock_path, exc_info=True)
+            return
+        if not acquired:
+            return
+        if not _mine_lock_file_is_current(lf, lock_path):
+            return
+
+        if os.name == "nt":
+            # Windows generally cannot unlink an open locked file. Release and
+            # close first; if another process opens the file in the gap,
+            # os.remove should fail and we leave the rendezvous file in place.
+            try:
+                _unlock_mine_lock_file(lf)
+            except Exception:
+                logger.debug("Mine-lock cleanup release failed", exc_info=True)
+                acquired = False
+                return
+            acquired = False
+            lf.close()
+            closed = True
+            try:
+                os.remove(lock_path)
+            except OSError:
+                pass
+            return
+
+        try:
+            os.remove(lock_path)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            logger.debug("Mine-lock cleanup remove failed for %s", lock_path, exc_info=True)
+    finally:
+        if not closed:
+            if acquired:
+                try:
+                    _unlock_mine_lock_file(lf)
+                except Exception:
+                    logger.debug("Mine-lock cleanup release failed", exc_info=True)
+            lf.close()
 
 
 class MineAlreadyRunning(RuntimeError):

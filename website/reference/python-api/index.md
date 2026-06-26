@@ -23,6 +23,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.convo_scanner`](./convo_scanner) — convo_scanner.py — Parse Claude Code conversation directories into ProjectInfo.
 - [`mempalace.corpus_origin`](./corpus_origin) — corpus_origin.py — Detect whether a corpus is an AI-dialogue record and,
 - [`mempalace.cross_encoder_rerank`](./cross_encoder_rerank) — Optional cross-encoder reranking for the retrieval path.
+- [`mempalace.daemon`](./daemon) — Long-lived local daemon for queued MemPalace writes.
 - [`mempalace.dedup`](./dedup) — dedup.py — Detect and remove near-duplicate drawers
 - [`mempalace.dialect`](./dialect) — AAAK Dialect -- Structured Symbolic Summary Format
 - [`mempalace.diary_ingest`](./diary_ingest) — diary_ingest.py — Ingest daily summary files into the palace.
@@ -35,7 +36,8 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.format_miner`](./format_miner) — format_miner.py — proposed for mempalace 3.3.6.
 - [`mempalace.general_extractor`](./general_extractor) — general_extractor.py — Extract 5 types of memories from text.
 - [`mempalace.hallways`](./hallways) — Hallways — within-wing entity-to-entity connectors.
-- [`mempalace.hooks_cli`](./hooks_cli) — Hook logic for MemPalace — Python implementation of session-start, stop, and precompact hooks.
+- [`mempalace.hook_shell`](./hook_shell) — Compatibility helpers for legacy shell hooks.
+- [`mempalace.hooks_cli`](./hooks_cli) — Hook logic for MemPalace — Python implementation of session-start, stop, session-end, and precompact hooks.
 - [`mempalace.ids`](./ids) — Centralized drawer/triple ID construction with collision-safe delimiter.
 - [`mempalace.instructions_cli`](./instructions_cli) — Instruction text output for MemPalace CLI commands.
 - [`mempalace.kg_canonical_vocab`](./kg_canonical_vocab) — Closed-vocabulary predicate mapping spike (issue #72).
@@ -71,6 +73,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.room_taxonomy`](./room_taxonomy) — Canonical room taxonomy — soft-warn validation.
 - [`mempalace.rrf`](./rrf) — Reciprocal Rank Fusion — combine ranked lists from N retrievers.
 - [`mempalace.searcher`](./searcher) — searcher.py — Find anything. Exact words.
+- [`mempalace.service`](./service) — Shared service operations used by daemon-backed entry points.
 - [`mempalace.sources`](./sources) — Source adapter subsystem (RFC 002).
 - [`mempalace.spellcheck`](./spellcheck) — spellcheck.py — Spell-correct user messages before palace filing.
 - [`mempalace.split_mega_files`](./split_mega_files) — split_mega_files.py — Split concatenated transcript files into per-session files
@@ -79,6 +82,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.tag_extraction`](./tag_extraction) — TF-IDF auto-tag extraction for drawer write time (#201).
 - [`mempalace.tags`](./tags) — Multi-label tags for drawers (techempower-org/mempalace#39).
 - [`mempalace.version`](./version) — Single source of truth for the MemPalace package version.
+- [`mempalace.wal`](./wal) — Side-effect-free write-ahead log for MemPalace write operations.
 - [`mempalace.write_sanitizer`](./write_sanitizer) — write_sanitizer.py — Observation-grade input hygiene for the write path (#40).
 
 ### auto_query

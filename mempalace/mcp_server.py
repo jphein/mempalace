@@ -9,12 +9,13 @@ Tools (read):
   mempalace_list_wings      — all wings with drawer counts
   mempalace_list_rooms      — rooms within a wing
   mempalace_get_taxonomy    — full wing → room → count tree
-  mempalace_search          — semantic search, optional wing/room filter
+  mempalace_search          — semantic search, optional wing/room/source_file filter
   mempalace_check_duplicate — check if content already exists before filing
 
 Tools (write):
   mempalace_add_drawer      — file verbatim content into a wing/room
   mempalace_delete_drawer   — remove a drawer by ID
+  mempalace_delete_by_source — bulk-remove all drawers mined from one source_file
 
 Tools (maintenance):
   mempalace_reconnect       — force cache invalidation and reconnect after external writes
@@ -47,6 +48,7 @@ import json  # noqa: E402
 import logging  # noqa: E402
 import re  # noqa: E402
 import hashlib  # noqa: E402
+import hmac  # noqa: E402
 import sqlite3  # noqa: E402
 import threading  # noqa: E402
 import time  # noqa: E402
@@ -60,6 +62,7 @@ from .config import (  # noqa: E402
     sanitize_name,
     sanitize_content,
     sanitize_iso_temporal,
+    sqlite_read_uri,
     strip_lone_surrogates,
 )
 from .version import __version__  # noqa: E402
@@ -165,6 +168,21 @@ _init_logging()
 logger = logging.getLogger("mempalace_mcp")
 
 
+def _get_result_ids(result) -> list:
+    """Return ``get()`` result ids for both typed and dict-like collection results."""
+    if result is None:
+        return []
+    ids = getattr(result, "ids", None)
+    if ids is not None:
+        return ids
+    if isinstance(result, dict):
+        return result.get("ids") or []
+    getter = getattr(result, "get", None)
+    if callable(getter):
+        return getter("ids") or []
+    return []
+
+
 def _parse_args():
     parser = argparse.ArgumentParser(description="MemPalace MCP Server")
     parser.add_argument(
@@ -176,6 +194,23 @@ def _parse_args():
         "--backend",
         metavar="NAME",
         help="Storage backend to use (default: config/env/detected/chroma)",
+    )
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "http"],
+        default="stdio",
+        help="Serve MCP over stdio (default) or in-process HTTP",
+    )
+    parser.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="HTTP host to bind when --transport=http (default: 127.0.0.1)",
+    )
+    parser.add_argument(
+        "--port",
+        type=int,
+        default=8765,
+        help="HTTP port to bind when --transport=http (default: 8765)",
     )
     args, unknown = parser.parse_known_args()
     if unknown:
@@ -209,6 +244,245 @@ _palace_flag_given: bool = bool(_args.palace)
 _MCP_IDLE_HOURS_ENV = "MEMPALACE_MCP_IDLE_HOURS"
 _MCP_IDLE_HOURS_DEFAULT = 8.0
 _last_request_time: float = time.monotonic()
+
+# MCP startup/open SQLite integrity gate (#1818).
+#
+# The peer-writer guard prevents new concurrent writers, but an MCP server can
+# still start against a palace that was already left corrupt by a prior writer
+# crash/kill. Run the existing read-only SQLite quick_check once on startup/open
+# and fail loudly instead of silently serving a malformed FTS5/HNSW index.
+_sqlite_integrity_checked = False
+_sqlite_integrity_errors: list[str] = []
+_sqlite_integrity_check_error = ""
+_SQLITE_INTEGRITY_ERROR_CODE = -32002
+_SQLITE_INTEGRITY_ALLOWED_TOOLS = frozenset(
+    {
+        "mempalace_status",
+        "mempalace_reconnect",
+    }
+)
+
+
+# MCP peer-writer guard (#1818).
+#
+# The existing per-operation palace lock serializes individual writes, but it
+# cannot make another long-lived Chroma PersistentClient forget stale in-memory
+# HNSW/FTS state. Hold the same per-palace mine lock for this MCP process
+# lifetime. A peer MCP process can still serve read tools, but mutating tools
+# refuse before touching Chroma or the knowledge graph.
+_MCP_WRITER_LOCK_CM = None
+_MCP_WRITER_READ_ONLY = False
+_MCP_WRITER_LOCK_FAILED = False
+_MCP_WRITER_LOCK_ERROR = ""
+_MCP_ALLOW_PEER_WRITER_ENV = "MEMPALACE_MCP_ALLOW_PEER_WRITER"
+
+_MUTATING_TOOLS = frozenset(
+    {
+        "mempalace_kg_add",
+        "mempalace_kg_invalidate",
+        "mempalace_create_tunnel",
+        "mempalace_delete_tunnel",
+        "mempalace_delete_hallway",
+        "mempalace_add_drawer",
+        "mempalace_delete_drawer",
+        "mempalace_mine",
+        "mempalace_sync",
+        "mempalace_update_drawer",
+        "mempalace_diary_write",
+    }
+)
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _acquire_mcp_writer_lock() -> tuple[bool, str]:
+    """Acquire this process's per-palace MCP writer lease.
+
+    Returns (True, "") when this process may write. Returns (False, reason)
+    when another live writer already owns the per-palace lease. Once a server
+    starts read-only it stays read-only for its lifetime; restarting is the
+    safe way to become the writer after the original holder exits.
+    """
+
+    global _MCP_WRITER_LOCK_CM, _MCP_WRITER_READ_ONLY, _MCP_WRITER_LOCK_FAILED
+    global _MCP_WRITER_LOCK_ERROR
+
+    if _truthy_env(_MCP_ALLOW_PEER_WRITER_ENV):
+        return True, ""
+
+    if _MCP_WRITER_LOCK_CM is not None:
+        return True, ""
+
+    if _MCP_WRITER_READ_ONLY:
+        return False, _MCP_WRITER_LOCK_ERROR
+
+    if _MCP_WRITER_LOCK_FAILED:
+        return True, _MCP_WRITER_LOCK_ERROR
+
+    try:
+        from .palace import MineAlreadyRunning, mine_palace_lock
+
+        lock_cm = mine_palace_lock(_config.palace_path)
+        lock_cm.__enter__()
+    except MineAlreadyRunning as exc:
+        _MCP_WRITER_READ_ONLY = True
+        _MCP_WRITER_LOCK_ERROR = (
+            "another mempalace writer already holds the palace lock for "
+            f"{_config.palace_path!r}: {exc}"
+        )
+        return False, _MCP_WRITER_LOCK_ERROR
+    except Exception as exc:
+        _MCP_WRITER_LOCK_FAILED = True
+        _MCP_WRITER_LOCK_ERROR = (
+            "could not acquire MCP peer-writer lock for "
+            f"{_config.palace_path!r}: {exc!r}; continuing without "
+            "peer-writer protection"
+        )
+        logger.warning(_MCP_WRITER_LOCK_ERROR)
+        return True, _MCP_WRITER_LOCK_ERROR
+
+    _MCP_WRITER_LOCK_CM = lock_cm
+    import atexit
+
+    atexit.register(lambda: lock_cm.__exit__(None, None, None))
+    _MCP_WRITER_READ_ONLY = False
+    _MCP_WRITER_LOCK_FAILED = False
+    _MCP_WRITER_LOCK_ERROR = ""
+    return True, ""
+
+
+def _mcp_peer_writer_refusal(req_id, tool_name: str):
+    if tool_name not in _MUTATING_TOOLS:
+        return None
+
+    ok, reason = _acquire_mcp_writer_lock()
+    if ok:
+        return None
+
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "error": {
+            "code": -32001,
+            "message": "Peer MCP writer active; this server is read-only for mutating tools",
+            "data": {
+                "tool": tool_name,
+                "palace": _config.palace_path,
+                "reason": reason,
+                "override_env": _MCP_ALLOW_PEER_WRITER_ENV,
+            },
+        },
+    }
+
+
+def _refresh_sqlite_integrity_status() -> None:
+    """Refresh the MCP startup SQLite/FTS5 integrity gate.
+
+    Uses repair.sqlite_integrity_errors(), which is read-only and already backs
+    repair preflight. A failure here is treated as an integrity failure so the
+    server does not proceed silently after a malformed FTS5 index or other
+    SQLite-layer corruption (#1818).
+    """
+
+    global _sqlite_integrity_checked
+    global _sqlite_integrity_errors
+    global _sqlite_integrity_check_error
+
+    if not _config.palace_path or not _is_chroma_backend():
+        _sqlite_integrity_checked = True
+        _sqlite_integrity_errors = []
+        _sqlite_integrity_check_error = ""
+        return
+
+    try:
+        from .repair import sqlite_integrity_errors
+
+        errors = sqlite_integrity_errors(_config.palace_path)
+    except Exception as exc:
+        _sqlite_integrity_check_error = (
+            f"sqlite integrity probe failed: {type(exc).__name__}: {exc}"
+        )
+        _sqlite_integrity_errors = [_sqlite_integrity_check_error]
+    else:
+        _sqlite_integrity_errors = [str(error) for error in errors if str(error)]
+        _sqlite_integrity_check_error = ""
+
+    _sqlite_integrity_checked = True
+
+    if _sqlite_integrity_errors:
+        logger.error(
+            "SQLite integrity check failed for palace=%s: %s",
+            _config.palace_path,
+            "; ".join(_sqlite_integrity_errors[:3]),
+        )
+
+
+def _ensure_sqlite_integrity_status() -> None:
+    if not _sqlite_integrity_checked:
+        _refresh_sqlite_integrity_status()
+
+
+def _sqlite_integrity_payload() -> dict:
+    _ensure_sqlite_integrity_status()
+
+    payload = {
+        "checked": _sqlite_integrity_checked,
+        "ok": not _sqlite_integrity_errors,
+        "palace": _config.palace_path,
+        "sqlite_path": os.path.join(_config.palace_path, "chroma.sqlite3")
+        if _config.palace_path
+        else "",
+        "error_count": len(_sqlite_integrity_errors),
+        "errors": _sqlite_integrity_errors[:10],
+    }
+
+    if len(_sqlite_integrity_errors) > 10:
+        payload["truncated"] = len(_sqlite_integrity_errors) - 10
+
+    if _sqlite_integrity_check_error:
+        payload["check_error"] = _sqlite_integrity_check_error
+
+    return payload
+
+
+def _mcp_sqlite_integrity_refusal(req_id, tool_name: str):
+    if tool_name in _SQLITE_INTEGRITY_ALLOWED_TOOLS:
+        return None
+
+    _ensure_sqlite_integrity_status()
+
+    if not _sqlite_integrity_errors:
+        return None
+
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "error": {
+            "code": _SQLITE_INTEGRITY_ERROR_CODE,
+            "message": (
+                "Palace SQLite integrity check failed; refusing tool call "
+                "until the palace is repaired"
+            ),
+            "data": {
+                "tool": tool_name,
+                "palace": _config.palace_path or "",
+                "sqlite_path": (
+                    os.path.join(_config.palace_path, "chroma.sqlite3")
+                    if _config.palace_path
+                    else ""
+                ),
+                "errors": _sqlite_integrity_errors[:10],
+                "error_count": len(_sqlite_integrity_errors),
+                "hint": (
+                    "Stop all MemPalace MCP clients/writers, back up the palace, "
+                    "repair the SQLite/FTS5 corruption offline, then run "
+                    "mempalace_reconnect or restart the MCP server."
+                ),
+            },
+        },
+    }
 
 
 def _mcp_idle_timeout_secs() -> float:
@@ -402,6 +676,7 @@ def _force_chroma_cache_reset() -> None:
         _palace_db_mtime, \
         _metadata_cache, \
         _metadata_cache_time
+    cached_client = _client_cache
     _client_cache = None
     _collection_cache = None
     _collection_cache_backend = None
@@ -417,7 +692,24 @@ def _force_chroma_cache_reset() -> None:
         backend = get_backend_for_palace(_config.palace_path)
         backend.close_palace(PalaceRef(id=_config.palace_path, local_path=_config.palace_path))
     except Exception:
-        pass
+        logger.debug("Failed to close cached Chroma backend during cache reset", exc_info=True)
+    if cached_client is not None:
+        try:
+            close = getattr(cached_client, "close", None)
+            if callable(close):
+                close()
+        except Exception:
+            logger.debug(
+                "Failed to close MCP-local Chroma client during cache reset", exc_info=True
+            )
+    try:
+        from chromadb.api.client import SharedSystemClient
+
+        clear_system_cache = getattr(SharedSystemClient, "clear_system_cache", None)
+        if callable(clear_system_cache):
+            clear_system_cache()
+    except Exception:
+        logger.debug("Failed to clear Chroma shared system cache during cache reset", exc_info=True)
 
 
 # ── Vector-search disabled flag (#1222) ──────────────────────────────────
@@ -550,83 +842,12 @@ def _forward_to_daemon(request: dict) -> dict:
 # Every write operation is logged to a JSONL file before execution.
 # This provides an audit trail for detecting memory poisoning and
 # enables review/rollback of writes from external or untrusted sources.
-
-_WAL_FILE = Path(os.path.expanduser("~/.mempalace/wal")) / "write_log.jsonl"
-_WAL_INITIALIZED_DIR = None
-
-
-def _ensure_wal() -> None:
-    """Create (and re-harden) the WAL directory lazily, on the first write.
-
-    This must NOT run at import time: a user who removed ``~/.mempalace`` has
-    engaged the documented kill-switch (``hooks_cli._palace_root_exists()``,
-    #1305), and recreating the directory just by importing this module would
-    silently re-arm the autosave/mining hooks they disabled (#1676). Creating
-    it on the first real write keeps the kill-switch contract intact.
-
-    It is deliberately not gated on ``_palace_root_exists()``: by the time a
-    write reaches here the palace is already being recreated by the ChromaDB/KG
-    layer regardless, so gating would only drop audit records, not prevent
-    recreation. Runtime kill-switch enforcement for MCP writes is the broader
-    question tracked in #504.
-
-    Hardening is attempted once per directory and the path cached in
-    ``_WAL_INITIALIZED_DIR`` regardless of outcome (keyed on the path, so a
-    test repointing ``_WAL_FILE`` re-initialises), so a persistent failure on a
-    restricted filesystem does not retry on every write. ``mkdir`` runs only
-    when the initial ``chmod`` raises ``FileNotFoundError`` (EAFP). The parent
-    ``~/.mempalace`` keeps its umask mode, like the other palace directories;
-    the WAL file is created atomically with mode 0o600 by ``_wal_log``.
-    """
-    global _WAL_INITIALIZED_DIR
-    wal_dir = _WAL_FILE.parent
-    if _WAL_INITIALIZED_DIR == wal_dir:
-        return
-    try:
-        wal_dir.chmod(0o700)
-    except FileNotFoundError:
-        try:
-            wal_dir.mkdir(parents=True, exist_ok=True)
-            wal_dir.chmod(0o700)
-        except (OSError, NotImplementedError):
-            pass
-    except (OSError, NotImplementedError):
-        pass
-    # Cache regardless of outcome: one attempt per directory, so a persistent
-    # chmod/mkdir failure (restricted FS) is not retried on every write.
-    _WAL_INITIALIZED_DIR = wal_dir
-
-
-# Keys whose values should be redacted in WAL entries to avoid logging sensitive content
-_WAL_REDACT_KEYS = frozenset(
-    {"content", "content_preview", "document", "entry", "entry_preview", "query", "text"}
-)
-
-
-def _wal_log(operation: str, params: dict, result: dict = None):
-    """Append a write operation to the write-ahead log."""
-    # Redact sensitive content from params before logging
-    safe_params = {}
-    for k, v in params.items():
-        if k in _WAL_REDACT_KEYS:
-            safe_params[k] = f"[REDACTED {len(v)} chars]" if isinstance(v, str) else "[REDACTED]"
-        else:
-            safe_params[k] = v
-    entry = {
-        "timestamp": datetime.now().isoformat(),
-        "operation": operation,
-        "params": safe_params,
-        "result": result,
-    }
-    try:
-        # Dir setup shares the append's exception handler below: any WAL
-        # failure is logged and non-fatal, never crashing the tool call.
-        _ensure_wal()
-        fd = os.open(str(_WAL_FILE), os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-        with os.fdopen(fd, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, default=str) + "\n")
-    except Exception as e:
-        logger.error(f"WAL write failed: {e}")
+#
+# The implementation lives in mempalace.wal — a side-effect-free module — so the
+# CLI sync path and the daemon service layer can audit writes without importing
+# this module, whose import installs MCP stdio protection (os.dup2(2, 1) and
+# sys.stdout = sys.stderr) that would misroute their output.
+from .wal import _wal_log  # noqa: E402
 
 
 def _get_client():
@@ -941,6 +1162,17 @@ def _get_collection_chroma(create=False):
             "ts": time.time(),
         }
         return None
+
+    db_path = os.path.join(_config.palace_path, "chroma.sqlite3")
+    if not create and not os.path.isfile(db_path):
+        _force_chroma_cache_reset()
+        _collection_open_error = {
+            "error": "Chroma database missing",
+            "details": f"Could not open missing database at {db_path}.",
+            "hint": "Run: mempalace status or mempalace repair-status for diagnostics.",
+        }
+        return None
+
     for attempt in range(2):
         try:
             if _collection_cache is not None and (
@@ -1179,7 +1411,22 @@ def _safe_meta(meta):
 
 
 def _fetch_all_metadata(col, where=None):
-    """Paginate col.get() to avoid the 10K silent truncation limit."""
+    """Fetch every matching record's metadata via the backend's best strategy.
+
+    Delegates to BaseCollection.get_all_metadata() (#1796), which Chroma
+    satisfies with the same offset-paginated loop this function used to do
+    inline, and which Qdrant overrides with a single _scroll_all() pass.
+    Routing through one contract method means every backend gets its own
+    correct strategy without this caller needing to know which backend it's
+    talking to.
+    """
+    get_all = getattr(col, "get_all_metadata", None)
+    if callable(get_all):
+        return get_all(where=where)
+
+    # Defensive fallback for any collection object that predates the
+    # get_all_metadata() contract method (e.g. a third-party backend not yet
+    # updated). Preserves the exact previous behavior.
     total = col.count()
     all_meta = []
     offset = 0
@@ -1271,6 +1518,41 @@ def _resolve_room_alias(value: str = None) -> str:
     return _config.resolve_room(sanitized)
 
 
+# Bounds the whole stored source_file string (often an absolute path), so it is
+# Linux PATH_MAX rather than the 128-char wing/room NAME limit.
+_MAX_SOURCE_FILE_LENGTH = 4096
+
+
+def _sanitize_optional_source_file(value: str = None) -> str:
+    """Validate an optional source_file search filter (#1815).
+
+    Unlike wing/room, a source_file is a path: ``/``, ``\\`` and ``.`` are
+    legal, so it is NOT run through ``sanitize_name`` (which rejects path
+    characters as traversal attempts). The value is matched verbatim as a
+    ChromaDB metadata-equality / parameterized-SQL value — never used as a
+    filesystem path — so there is no traversal risk to guard against. A null
+    byte or a pathological length can still upset the backend (chromadb
+    add/upsert chokes on null bytes / lone surrogates, #1235), so guard those
+    for parity with ``sanitize_name``. Blank / whitespace-only is "no filter".
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("source_file must be a string")
+    value = value.strip()
+    if not value:
+        return None
+    if "\x00" in value:
+        raise ValueError("source_file contains null bytes")
+    if value != strip_lone_surrogates(value):
+        raise ValueError("source_file contains invalid surrogate characters")
+    if len(value) > _MAX_SOURCE_FILE_LENGTH:
+        raise ValueError(
+            f"source_file exceeds maximum length of {_MAX_SOURCE_FILE_LENGTH} characters"
+        )
+    return value
+
+
 # ==================== READ TOOLS ====================
 
 
@@ -1294,7 +1576,7 @@ def _tool_status_via_sqlite() -> dict:
     rooms: dict = {}
     total = 0
     try:
-        conn = _sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        conn = _sqlite3.connect(sqlite_read_uri(db_path), uri=True)
         try:
             row = conn.execute(
                 """
@@ -1401,13 +1683,185 @@ def _tool_status_via_postgres() -> Optional[dict]:
     }
 
 
+def _sqlite_taxonomy():
+    """Fast wing→room tally straight from ``chroma.sqlite3`` (#1748 / #1379).
+
+    Returns ``(total, {wing: {room: count}})`` or ``None`` to signal the
+    caller to fall back to the ChromaDB client pagination path. ``None`` means
+    a non-chroma backend, a missing/unbootstrapped palace, or a sqlite error —
+    exactly the cases ``backends.chroma._sqlite_wing_room_counts`` already
+    handles for the CLI ``miner.status()``. The point is to answer the
+    overview tools from the relational metadata without cold-loading the HNSW
+    index, which costs tens of seconds per call on large palaces and is what
+    times them out under the MCP host limit.
+    """
+    if not _is_chroma_backend():
+        return None
+    try:
+        from .backends.chroma import _sqlite_wing_room_counts
+
+        counts = _sqlite_wing_room_counts(_config.palace_path, _config.collection_name)
+    except Exception:
+        logger.debug("sqlite taxonomy fast path failed; falling back", exc_info=True)
+        return None
+    if counts is None:
+        return None
+
+    # Preserve the client path's output contract: drawers missing wing/room
+    # read as "unknown" (the ``m.get("wing", "unknown")`` default), not the
+    # sqlite COALESCE placeholder "?". Without this, the fast path would be an
+    # observable API change for MCP clients on legacy/partial drawers.
+    def _norm(key):
+        return "unknown" if key in (None, "?") else key
+
+    total, wing_rooms = counts
+    normalized: dict = {}
+    for wing, room_counts in wing_rooms.items():
+        dest = normalized.setdefault(_norm(wing), {})
+        for room, n in room_counts.items():
+            rkey = _norm(room)
+            dest[rkey] = dest.get(rkey, 0) + n
+    return total, normalized
+
+
+def _sqlite_graph_stats():
+    """Compute ``graph_stats`` from one grouped sqlite read (#1379, graph_stats
+    half; follow-up to #1748).
+
+    ``graph_stats`` only needs grouped counts, but the client path builds the
+    whole graph by paging every metadata row (``build_graph`` →
+    ``col.get(limit, offset)``) and cold-loads the HNSW index — which times out
+    on six-figure palaces. This reads the same wing/room/hall grouping straight
+    from ``chroma.sqlite3`` and reconstructs the stats.
+
+    Returns the stats dict, or ``None`` to fall back to the client path
+    (non-chroma backend, missing/unbootstrapped palace, sqlite error). The
+    reconstruction mirrors ``palace_graph.build_graph`` /
+    ``palace_graph.graph_stats`` exactly: a node is a room with a non-empty
+    wing and a usable room name (the catch-all ``"general"`` is excluded), and
+    edges are the per-hall cross-wing crossings of multi-wing rooms.
+    """
+    if not _is_chroma_backend():
+        return None
+    import sqlite3 as _sqlite3
+    from collections import Counter, defaultdict
+
+    if not _config.palace_path:
+        return None
+    db_path = os.path.join(_config.palace_path, "chroma.sqlite3")
+    if not os.path.isfile(db_path):
+        return None
+    collection_name = _config.collection_name
+    # Treat any failure as a soft fallback to the client path (sqlite errors,
+    # but also an unexpected schema shape tripping the reconstruction) so
+    # graph_stats degrades to build_graph() rather than raising — mirroring the
+    # sibling sqlite fast paths (_sqlite_taxonomy / _sqlite_wing_room_counts).
+    try:
+        conn = _sqlite3.connect(sqlite_read_uri(db_path), uri=True)
+        try:
+            conn.execute("PRAGMA busy_timeout = 3000")
+            if (
+                conn.execute(
+                    "SELECT 1 FROM collections WHERE name = ?", (collection_name,)
+                ).fetchone()
+                is None
+            ):
+                return None
+            rows = conn.execute(
+                """
+                SELECT
+                    COALESCE(rm.string_value, CAST(rm.int_value AS TEXT),
+                             CAST(rm.float_value AS TEXT), '') AS room,
+                    COALESCE(wm.string_value, CAST(wm.int_value AS TEXT),
+                             CAST(wm.float_value AS TEXT), '') AS wing,
+                    COALESCE(hm.string_value, CAST(hm.int_value AS TEXT),
+                             CAST(hm.float_value AS TEXT), '') AS hall,
+                    COUNT(*) AS n
+                FROM embeddings e
+                JOIN segments s ON e.segment_id = s.id AND s.scope = 'METADATA'
+                JOIN collections c ON s.collection = c.id
+                LEFT JOIN embedding_metadata rm ON rm.id = e.id AND rm.key = 'room'
+                LEFT JOIN embedding_metadata wm ON wm.id = e.id AND wm.key = 'wing'
+                LEFT JOIN embedding_metadata hm ON hm.id = e.id AND hm.key = 'hall'
+                WHERE c.name = ?
+                GROUP BY room, wing, hall
+                """,
+                (collection_name,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+        # Reconstruct build_graph()'s room_data, applying its per-drawer filter
+        # (`if room and room != "general" and wing`).
+        room_data = defaultdict(lambda: {"wings": set(), "halls": set(), "count": 0})
+        for room, wing, hall, n in rows:
+            if not room or room == "general" or not wing:
+                continue
+            node = room_data[room]
+            node["wings"].add(wing)
+            if hall:
+                node["halls"].add(hall)
+            node["count"] += int(n)
+
+        tunnel_rooms = 0
+        total_edges = 0
+        wing_counts = Counter()
+        for data in room_data.values():
+            n_wings = len(data["wings"])
+            for wing in data["wings"]:
+                wing_counts[wing] += 1
+            if n_wings >= 2:
+                tunnel_rooms += 1
+                # Edges per multi-wing room: one per wing-pair per hall, matching
+                # build_graph's nested wa<wb × hall expansion.
+                total_edges += (n_wings * (n_wings - 1) // 2) * len(data["halls"])
+
+        top_tunnels = [
+            {"room": room, "wings": sorted(data["wings"]), "count": data["count"]}
+            # build_graph's graph_stats slices the top 10 by wing-count first,
+            # then keeps the multi-wing ones. An explicit room-name tiebreaker
+            # keeps the fast path deterministic across runs — preferable to
+            # leaning on SQLite's unspecified GROUP BY order. (Exact membership
+            # parity with the client path is unattainable anyway; the two never
+            # run on the same palace, since the backend picks one.)
+            for room, data in sorted(
+                room_data.items(), key=lambda kv: (-len(kv[1]["wings"]), kv[0])
+            )[:10]
+            if len(data["wings"]) >= 2
+        ]
+
+        return {
+            "total_rooms": len(room_data),
+            "tunnel_rooms": tunnel_rooms,
+            "total_edges": total_edges,
+            "rooms_per_wing": dict(wing_counts.most_common()),
+            "top_tunnels": top_tunnels,
+        }
+    except Exception:
+        logger.debug("sqlite graph_stats fast path failed; falling back", exc_info=True)
+        return None
+
+
 def tool_status():
+    _ensure_sqlite_integrity_status()
+    if _sqlite_integrity_errors:
+        result = _tool_status_via_sqlite()
+        if isinstance(result, dict):
+            result["sqlite_integrity"] = _sqlite_integrity_payload()
+            result["sqlite_integrity_failed"] = True
+            result["error"] = "SQLite integrity check failed"
+            result["partial"] = True
+        return result
+
     # Run the safe sqlite/pickle probe before we touch chromadb. In the
     # #1222 failure mode, opening the persistent client to call .count()
     # can segfault — short-circuit to a pure-sqlite path when divergence
     # is detected so status stays reachable.
     db_exists = _backend_db_exists()
     _refresh_vector_disabled_flag()
+    writer_ok, writer_reason = _acquire_mcp_writer_lock()
+    if not writer_ok:
+        logger.warning("%s; mutating MCP tools will run read-only", writer_reason)
 
     if _vector_disabled:
         return _tool_status_via_sqlite()
@@ -1422,6 +1876,29 @@ def tool_status():
         # Fast path unavailable (no DSN, driver missing, query failed) —
         # fall through to the legacy metadata sweep so the caller still
         # gets a response.
+
+    # Fast path: tally wing/room straight from sqlite so overview tools stay
+    # responsive on large palaces instead of cold-loading the HNSW index or
+    # paging hundreds of MB of metadata through the client (#1748 / #1379).
+    # ``None`` (non-chroma backend / non-standard layout) falls through to the
+    # client path below.
+    fast = _sqlite_taxonomy()
+    if fast is not None:
+        total, wing_rooms = fast
+        wings = {}
+        rooms = {}
+        for w, room_counts in wing_rooms.items():
+            wings[w] = wings.get(w, 0) + sum(room_counts.values())
+            for r, n in room_counts.items():
+                rooms[r] = rooms.get(r, 0) + n
+        return {
+            "total_drawers": total,
+            "wings": wings,
+            "rooms": rooms,
+            "protocol": PALACE_PROTOCOL,
+            "aaak_dialect": AAAK_SPEC,
+            "backend": _selected_backend_name(),
+        }
 
     # Use create=True only when a palace DB already exists on disk -- this
     # bootstraps the ChromaDB collection on a valid-but-empty palace without
@@ -1489,6 +1966,13 @@ When WRITING AAAK: use entity codes, mark emotions, keep structure tight."""
 
 
 def tool_list_wings():
+    fast = _sqlite_taxonomy()
+    if fast is not None:
+        _total, wing_rooms = fast
+        wings = {}
+        for w, room_counts in wing_rooms.items():
+            wings[w] = wings.get(w, 0) + sum(room_counts.values())
+        return {"wings": wings}
     col = _get_collection()
     if not col:
         return _collection_error_or_no_palace()
@@ -1512,6 +1996,16 @@ def tool_list_rooms(wing: str = None):
         wing = _sanitize_optional_name(wing, "wing")
     except ValueError as e:
         return {"error": str(e)}
+    fast = _sqlite_taxonomy()
+    if fast is not None:
+        _total, wing_rooms = fast
+        rooms = {}
+        for w, room_counts in wing_rooms.items():
+            if wing and w != wing:
+                continue
+            for r, n in room_counts.items():
+                rooms[r] = rooms.get(r, 0) + n
+        return {"wing": wing or "all", "rooms": rooms}
     col = _get_collection()
     if not col:
         return _collection_error_or_no_palace()
@@ -1532,6 +2026,10 @@ def tool_list_rooms(wing: str = None):
 
 
 def tool_get_taxonomy():
+    fast = _sqlite_taxonomy()
+    if fast is not None:
+        _total, wing_rooms = fast
+        return {"taxonomy": {w: dict(room_counts) for w, room_counts in wing_rooms.items()}}
     col = _get_collection()
     if not col:
         return _collection_error_or_no_palace()
@@ -1559,6 +2057,7 @@ def tool_search(
     wing: str = None,
     room: str = None,
     tags: list = None,
+    source_file: str = None,
     max_distance: float = 1.5,
     min_similarity: float = None,
     context: str = None,
@@ -1570,6 +2069,7 @@ def tool_search(
     try:
         wing = _sanitize_optional_name(wing, "wing")
         room = _resolve_room_alias(room)
+        source_file = _sanitize_optional_source_file(source_file)
     except ValueError as e:
         return {"error": str(e)}
     from .tags import normalise_tags
@@ -1591,6 +2091,7 @@ def tool_search(
         wing=wing,
         room=room,
         tags=normalised_tags or None,
+        source_file=source_file,
         n_results=limit,
         max_distance=dist,
         vector_disabled=_vector_disabled,
@@ -1623,6 +2124,7 @@ def tool_search(
             wing=wing,
             room=room,
             tags=normalised_tags or None,
+            source_file=source_file,
             n_results=limit,
             max_distance=dist,
             vector_disabled=_vector_disabled,
@@ -1892,6 +2394,12 @@ def tool_find_tunnels(wing_a: str = None, wing_b: str = None):
 
 def tool_graph_stats():
     """Palace graph overview: nodes, tunnels, edges, connectivity."""
+    # Fast path: grouped sqlite read instead of paging all metadata and
+    # cold-loading HNSW via build_graph(), which times out on large palaces
+    # (#1379). Falls through to the client path for non-chroma backends.
+    fast = _sqlite_graph_stats()
+    if fast is not None:
+        return fast
     col = _get_collection()
     if not col:
         return _collection_error_or_no_palace()
@@ -1991,6 +2499,250 @@ def tool_follow_tunnels(wing: str, room: str):
 
 
 # ==================== WRITE TOOLS ====================
+
+
+def _chroma_field(result, name, default=None):
+    if result is None:
+        return default
+    if isinstance(result, dict):
+        return result.get(name, default)
+    return getattr(result, name, default)
+
+
+def _chunk_index(meta):
+    try:
+        return int((meta or {}).get("chunk_index", 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _response_safe_meta(meta):
+    safe_meta = _safe_meta(meta)
+    if safe_meta.get("source_file"):
+        safe_meta["source_file"] = Path(safe_meta["source_file"]).name
+    return safe_meta
+
+
+def _content_preview(content):
+    return content[:200] + "..." if len(content) > 200 else content
+
+
+def _single_drawer_record(col, drawer_id: str):
+    result = col.get(ids=[drawer_id], include=["documents", "metadatas"])
+    ids = _chroma_field(result, "ids", []) or []
+    if not ids:
+        return None
+
+    docs = _chroma_field(result, "documents", []) or []
+    metas = _chroma_field(result, "metadatas", []) or []
+    doc = docs[0] if docs else ""
+    meta = _safe_meta(metas[0] if metas else {})
+
+    return {
+        "drawer_id": ids[0],
+        "ids": [ids[0]],
+        "documents": [doc or ""],
+        "metadatas": [meta],
+        "content": doc or "",
+        "metadata": meta,
+        "chunked": False,
+    }
+
+
+def _logical_chunk_group(col, drawer_id: str):
+    try:
+        result = col.get(
+            where={"parent_drawer_id": drawer_id},
+            include=["documents", "metadatas"],
+        )
+    except Exception:
+        logger.debug("chunk group lookup failed for %s", drawer_id, exc_info=True)
+        return None
+
+    ids = _chroma_field(result, "ids", []) or []
+    if not ids:
+        return None
+
+    docs = _chroma_field(result, "documents", []) or []
+    metas = _chroma_field(result, "metadatas", []) or []
+
+    rows = []
+    for idx, chunk_id in enumerate(ids):
+        doc = docs[idx] if idx < len(docs) else ""
+        meta = _safe_meta(metas[idx] if idx < len(metas) else {})
+        rows.append((_chunk_index(meta), chunk_id, doc or "", meta))
+
+    rows.sort(key=lambda row: (row[0], row[1]))
+
+    chunk_ids = [row[1] for row in rows]
+    chunk_docs = [row[2] for row in rows]
+    chunk_metas = [row[3] for row in rows]
+    first_meta = chunk_metas[0] if chunk_metas else {}
+
+    return {
+        "drawer_id": drawer_id,
+        "ids": chunk_ids,
+        "documents": chunk_docs,
+        "metadatas": chunk_metas,
+        "content": "".join(chunk_docs),
+        "metadata": first_meta,
+        "chunked": True,
+    }
+
+
+def _logical_drawer_record(col, drawer_id: str):
+    direct = _single_drawer_record(col, drawer_id)
+    if direct is not None:
+        return direct
+    return _logical_chunk_group(col, drawer_id)
+
+
+def _drawer_payload(record):
+    safe_meta = _response_safe_meta(record["metadata"])
+
+    payload = {
+        "drawer_id": record["drawer_id"],
+        "content": record["content"],
+        "wing": safe_meta.get("wing", ""),
+        "room": safe_meta.get("room", ""),
+        "metadata": safe_meta,
+    }
+
+    if record.get("chunked"):
+        payload["chunks"] = len(record["ids"])
+        payload["chunk_ids"] = record["ids"]
+        payload["metadata"]["chunks"] = len(record["ids"])
+        payload["metadata"]["chunk_ids"] = record["ids"]
+
+    return payload
+
+
+def _fetch_drawer_rows(col, where=None, page_size: int = 1000):
+    ids = []
+    documents = []
+    metadatas = []
+    offset = 0
+
+    while True:
+        kwargs = {
+            "include": ["documents", "metadatas"],
+            "limit": page_size,
+            "offset": offset,
+        }
+        if where:
+            kwargs["where"] = where
+
+        result = col.get(**kwargs)
+        batch_ids = _chroma_field(result, "ids", []) or []
+        if not batch_ids:
+            break
+
+        batch_docs = _chroma_field(result, "documents", []) or []
+        batch_metas = _chroma_field(result, "metadatas", []) or []
+
+        ids.extend(batch_ids)
+
+        for idx in range(len(batch_ids)):
+            documents.append(batch_docs[idx] if idx < len(batch_docs) else "")
+            metadatas.append(batch_metas[idx] if idx < len(batch_metas) else {})
+
+        offset += len(batch_ids)
+        if len(batch_ids) < page_size:
+            break
+
+    return ids, documents, metadatas
+
+
+def _collapse_drawer_rows(ids, documents, metadatas):
+    groups = {}
+    singles = []
+
+    for idx, drawer_id in enumerate(ids):
+        doc = documents[idx] if idx < len(documents) else ""
+        meta = _safe_meta(metadatas[idx] if idx < len(metadatas) else {})
+        parent_id = meta.get("parent_drawer_id")
+
+        if parent_id:
+            groups.setdefault(parent_id, []).append(
+                (_chunk_index(meta), drawer_id, doc or "", meta)
+            )
+        else:
+            singles.append((drawer_id, doc or "", meta))
+
+    grouped_ids = set(groups)
+    drawers = []
+
+    for drawer_id, doc, meta in singles:
+        # If both a legacy logical row and chunks exist, display one logical row.
+        if drawer_id in grouped_ids:
+            continue
+
+        safe_meta = _response_safe_meta(meta)
+        drawers.append(
+            {
+                "drawer_id": drawer_id,
+                "wing": safe_meta.get("wing", ""),
+                "room": safe_meta.get("room", ""),
+                "content_preview": _content_preview(doc),
+                "metadata": safe_meta,
+            }
+        )
+
+    for parent_id, parts in groups.items():
+        parts.sort(key=lambda row: (row[0], row[1]))
+        chunk_ids = [row[1] for row in parts]
+        content = "".join(row[2] for row in parts)
+
+        safe_meta = _response_safe_meta(parts[0][3] if parts else {})
+        safe_meta["chunks"] = len(chunk_ids)
+        safe_meta["chunk_ids"] = chunk_ids
+
+        drawers.append(
+            {
+                "drawer_id": parent_id,
+                "wing": safe_meta.get("wing", ""),
+                "room": safe_meta.get("room", ""),
+                "content_preview": _content_preview(content),
+                "metadata": safe_meta,
+                "chunks": len(chunk_ids),
+                "chunk_ids": chunk_ids,
+            }
+        )
+
+    drawers.sort(key=lambda item: item["drawer_id"])
+    return drawers
+
+
+def _build_chunk_rows(drawer_id: str, content: str, meta: dict, chunk_size: int):
+    chunk_size = max(1, int(chunk_size or 1))
+
+    base_meta = _safe_meta(meta)
+    base_meta.pop("chunk_index", None)
+    base_meta["parent_drawer_id"] = drawer_id
+
+    spans = (
+        [(0, "")]
+        if content == ""
+        else [
+            (start, content[start : start + chunk_size])
+            for start in range(0, len(content), chunk_size)
+        ]
+    )
+
+    chunk_ids = []
+    chunk_docs = []
+    chunk_metas = []
+
+    for start, chunk_doc in spans:
+        chunk_index = start // chunk_size
+        chunk_ids.append(f"{drawer_id}_chunk_{chunk_index:06d}")
+        chunk_docs.append(chunk_doc)
+
+        chunk_meta = dict(base_meta)
+        chunk_meta["chunk_index"] = chunk_index
+        chunk_metas.append(chunk_meta)
+
+    return chunk_ids, chunk_docs, chunk_metas
 
 
 def tool_add_drawer(
@@ -2121,16 +2873,18 @@ def tool_add_drawer(
         idempotency_probe_ids = [drawer_id, f"{drawer_id}_chunk_{last_chunk_idx:06d}"]
     try:
         existing = col.get(ids=idempotency_probe_ids, include=[])
-        if existing.ids:
+        if _get_result_ids(existing):
             return {
                 "success": True,
                 "reason": "already_exists",
                 "drawer_id": drawer_id,
+                "tags": normalised_tags,
                 "warnings": warnings,
                 "sanitize_flags": sanitize_flags,
             }
-    except Exception:
-        logger.debug("Idempotency pre-check failed for %s", idempotency_probe_ids, exc_info=True)
+    except Exception as e:
+        logger.warning("Idempotency pre-check failed for %s", idempotency_probe_ids, exc_info=True)
+        return {"success": False, "error": f"Idempotency check failed before write: {e}"}
 
     try:
         if len(content) <= chunk_size:
@@ -2140,7 +2894,7 @@ def tool_add_drawer(
                 metadatas=[{**base_meta, "chunk_index": 0}],
             )
             inserted = col.get(ids=[drawer_id], include=[])
-            if not inserted.ids:
+            if not _get_result_ids(inserted):
                 raise RuntimeError(
                     "Drawer write was acknowledged but the new ID is not readable. "
                     "The palace index may be stale; run reconnect or repair."
@@ -2180,7 +2934,7 @@ def tool_add_drawer(
         # Probe the LAST chunk id, not the first — its presence confirms
         # the whole batch landed, not just the leading row.
         inserted = col.get(ids=[chunk_ids[-1]], include=[])
-        if not inserted.ids:
+        if not _get_result_ids(inserted):
             raise RuntimeError(
                 "Drawer write was acknowledged but the new ID is not readable. "
                 "The palace index may be stale; run reconnect or repair."
@@ -2205,34 +2959,39 @@ def tool_add_drawer(
 
 
 def tool_delete_drawer(drawer_id: str):
-    """Delete a single drawer by ID."""
+    """Delete a single logical drawer by ID."""
     global _metadata_cache
+
     col = _get_collection()
     if not col:
         return _collection_error_or_no_palace()
-    existing = col.get(ids=[drawer_id])
-    if not existing["ids"]:
-        return {"success": False, "error": f"Drawer not found: {drawer_id}"}
-
-    # Log the deletion with the content being removed for audit trail
-    deleted_content = existing.get("documents", [""])[0] if existing.get("documents") else ""
-    deleted_meta = _safe_meta(
-        existing.get("metadatas", [{}])[0] if existing.get("metadatas") else {}
-    )
-    _wal_log(
-        "delete_drawer",
-        {
-            "drawer_id": drawer_id,
-            "deleted_meta": deleted_meta,
-            "content_preview": deleted_content[:200],
-        },
-    )
 
     try:
-        col.delete(ids=[drawer_id])
+        record = _logical_drawer_record(col, drawer_id)
+        if record is None:
+            return {"success": False, "error": f"Drawer not found: {drawer_id}"}
+
+        _wal_log(
+            "delete_drawer",
+            {
+                "drawer_id": drawer_id,
+                "deleted_ids": record["ids"],
+                "deleted_meta": record["metadata"],
+                "content_preview": record["content"][:200],
+            },
+        )
+
+        col.delete(ids=record["ids"])
         _metadata_cache = None
-        logger.info(f"Deleted drawer: {drawer_id}")
-        return {"success": True, "drawer_id": drawer_id}
+
+        logger.info("Deleted drawer: %s (%s rows)", drawer_id, len(record["ids"]))
+
+        return {
+            "success": True,
+            "drawer_id": drawer_id,
+            "deleted_ids": record["ids"],
+            "chunks_deleted": len(record["ids"]),
+        }
     except Exception as e:
         return {"success": False, "error": str(e)}
 
@@ -2444,6 +3203,158 @@ def tool_mine(
             _metadata_cache = None
 
 
+def _purge_source_closets(source_file: str, *, commit: bool) -> int:
+    """Count, and optionally delete, closets matching ``source_file`` exactly.
+
+    The closets collection is the searchable AAAK index layer; it is keyed by
+    ``source_file`` independently of the drawers collection, so a drawer-only
+    delete would strand stale index pointers at the deleted source (#1722).
+    Mirrors the closet-purge step in :func:`mempalace.sync.sync_palace` and the
+    re-mine purge in :func:`mempalace.palace.purge_file_closets`.
+
+    Best-effort: a missing or unavailable closet collection yields 0 and never
+    raises, so it can never abort a drawer delete that has already committed.
+    Deletion is pushed down via ``delete(where=...)`` so it survives palaces
+    larger than the 10k ``get()`` truncation; the returned count is the (best
+    effort) number of matching closets observed before the delete.
+    """
+    from .palace import get_closets_collection
+
+    try:
+        closets_col = get_closets_collection(_config.palace_path, create=False)
+    except Exception as exc:
+        logger.warning("Closet purge skipped (collection unavailable): %s", exc)
+        return 0
+    if closets_col is None:
+        return 0
+    try:
+        ids = _get_result_ids(closets_col.get(where={"source_file": source_file}, include=[]))
+        count = len(ids)
+        if commit and count:
+            closets_col.delete(where={"source_file": source_file})
+        return count
+    except Exception as exc:
+        logger.warning("Closet purge failed for %s: %s", source_file, exc)
+        return 0
+
+
+def tool_delete_by_source(source_file: str, dry_run: bool = True):
+    """Delete every drawer whose ``source_file`` metadata matches exactly.
+
+    Bulk cleanup for the contamination case in #1722, where benchmark/eval
+    files (ShareGPT dumps, ``results_mempal_*.jsonl``, language config JSON)
+    get mined into the same wing as real user data and drown out semantic
+    search. Previously the only recourse was hand-rolled SQLite ``DELETE``
+    against ``chroma.sqlite3``.
+
+    Matching is exact on the stored ``source_file`` value and pushed down to
+    the backend via ``delete(where=...)`` — the same idiom used by the miner
+    and diary ingest paths — so there is no client-side id list and the
+    SQLite "too many variables" limit cannot be hit, regardless of how many
+    drawers share the source (the reporter had 55k).
+
+    Also purges the matching closets (the AAAK index layer) so deleting the
+    drawers doesn't strand stale index pointers at the dead source (#1722).
+
+    Defaults to a dry run: it reports the drawer match count, the closet match
+    count, and a small sample so the caller can confirm the blast radius before
+    anything is removed. Pass ``dry_run=False`` to commit the deletion
+    (irreversible).
+    """
+    global _metadata_cache
+    if not isinstance(source_file, str) or not source_file.strip():
+        return {"success": False, "error": "source_file must be a non-empty string"}
+    # Mirror the ingestion-side normalization (tool_add_drawer strips lone
+    # surrogates from source_file before storing) so exact matching still hits
+    # rows mined from non-ASCII paths that arrived via a cp1252 stdin (#1488).
+    source_file = strip_lone_surrogates(source_file)
+
+    col = _get_collection()
+    if not col:
+        return _collection_error_or_no_palace()
+
+    where = {"source_file": source_file}
+    try:
+        # Paginated to survive palaces larger than the 10k get() truncation.
+        metas = _fetch_all_metadata(col, where=where)
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+    match_count = len(metas)
+    # Distinct (wing, room) pairs so the caller sees where the hits live.
+    sample = []
+    seen = set()
+    for meta in metas:
+        meta = _safe_meta(meta)
+        # Default missing wing/room to "" for consistency with the rest of the
+        # file (drawers are always stored with both, but be defensive).
+        wing = meta.get("wing", "")
+        room = meta.get("room", "")
+        key = (wing, room)
+        if key in seen:
+            continue
+        seen.add(key)
+        sample.append({"wing": wing, "room": room})
+        if len(sample) >= 5:
+            break
+
+    if dry_run:
+        closet_match_count = _purge_source_closets(source_file, commit=False)
+        return {
+            "success": True,
+            "dry_run": True,
+            "source_file": source_file,
+            "match_count": match_count,
+            "closet_match_count": closet_match_count,
+            "sample": sample,
+            "hint": (
+                "No drawers were deleted. Re-run with dry_run=false to remove "
+                f"these {match_count} drawer(s) and {closet_match_count} index "
+                "entr(y/ies)."
+                if match_count
+                else "No drawers match this source_file."
+            ),
+        }
+
+    if match_count == 0:
+        # Idempotent: deleting an absent source is a no-op, not an error.
+        return {
+            "success": True,
+            "dry_run": False,
+            "source_file": source_file,
+            "deleted": 0,
+        }
+
+    _wal_log(
+        "delete_by_source",
+        {"source_file": source_file, "match_count": match_count, "sample": sample},
+    )
+    try:
+        col.delete(where=where)
+        _metadata_cache = None
+        # Purge the matching closets too so the AAAK index doesn't keep stale
+        # pointers at the now-deleted drawers (#1722). Done after the drawer
+        # delete and intentionally best-effort: the drawers are already gone,
+        # so a closet-purge hiccup must not turn a successful delete into an
+        # error — it just leaves index cruft a later `repair` / re-mine clears.
+        closets_deleted = _purge_source_closets(source_file, commit=True)
+        logger.info(
+            "Deleted %d drawer(s) and %d closet(s) from source: %s",
+            match_count,
+            closets_deleted,
+            source_file,
+        )
+        return {
+            "success": True,
+            "dry_run": False,
+            "source_file": source_file,
+            "deleted": match_count,
+            "closets_deleted": closets_deleted,
+        }
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 def tool_sync(project_dir: str = None, wing: str = None, apply: bool = False):
     """Prune drawers whose source files are gitignored, missing, or moved (#1252)."""
     global _metadata_cache
@@ -2483,35 +3394,20 @@ def tool_sync(project_dir: str = None, wing: str = None, apply: bool = False):
 
 
 def tool_get_drawer(drawer_id: str):
-    """Fetch a single drawer by ID. Returns full content and metadata."""
+    """Fetch a single logical drawer by ID. Returns full content and metadata."""
     from .tags import extract_tags_from_metadata
 
     col = _get_collection()
     if not col:
         return _collection_error_or_no_palace()
+
     try:
-        result = col.get(ids=[drawer_id], include=["documents", "metadatas"])
-        if not result["ids"]:
+        record = _logical_drawer_record(col, drawer_id)
+        if record is None:
             return {"error": f"Drawer not found: {drawer_id}"}
-        meta = _safe_meta(result["metadatas"][0])
-        doc = result["documents"][0]
-        # source_file is the absolute filesystem path written by the
-        # miners. Reduce to its basename before handing it to the MCP
-        # client — same threat model as the palace_path leak fix:
-        # nested-agent / multi-server topologies treat the client as a
-        # separate trust domain. Basename preserves citation utility.
-        # Mirrors the searcher.search_memories() return shape.
-        safe_meta = dict(meta) if meta else {}
-        if safe_meta.get("source_file"):
-            safe_meta["source_file"] = Path(safe_meta["source_file"]).name
-        return {
-            "drawer_id": drawer_id,
-            "content": doc,
-            "wing": safe_meta.get("wing", ""),
-            "room": safe_meta.get("room", ""),
-            "tags": extract_tags_from_metadata(safe_meta),
-            "metadata": safe_meta,
-        }
+        payload = _drawer_payload(record)
+        payload["tags"] = extract_tags_from_metadata(payload.get("metadata") or {})
+        return payload
     except Exception as e:
         return {"error": str(e)}
 
@@ -2523,11 +3419,12 @@ def tool_list_drawers(
     limit: int = 20,
     offset: int = 0,
 ):
-    """List drawers with pagination. Optional wing/room/tag filter."""
+    """List logical drawers with pagination. Optional wing/room/tag filter."""
     from .tags import extract_tags_from_metadata, normalise_tags
 
     limit = max(1, min(limit, _MAX_RESULTS))
     offset = max(0, offset)
+
     try:
         wing = _sanitize_optional_name(wing, "wing")
         room = _resolve_room_alias(room)
@@ -2537,9 +3434,11 @@ def tool_list_drawers(
     col = _get_collection()
     if not col:
         return _collection_error_or_no_palace()
+
     try:
         where = None
         conditions = []
+
         if wing:
             conditions.append({"wing": wing})
         if room:
@@ -2551,35 +3450,17 @@ def tool_list_drawers(
         elif len(conditions) > 1:
             where = {"$and": conditions}
 
-        kwargs = {"include": ["documents", "metadatas"], "limit": limit, "offset": offset}
-        if where:
-            kwargs["where"] = where
-        result = col.get(**kwargs)
-
-        # Compute total matching drawers for pagination.
-        if where:
-            total_result = col.get(where=where, include=[])
-            total = len(total_result["ids"])
-        else:
-            total = col.count()
-
-        drawers = []
-        for i, did in enumerate(result["ids"]):
-            meta = _safe_meta(result["metadatas"][i])
-            doc = result["documents"][i]
-            drawers.append(
-                {
-                    "drawer_id": did,
-                    "wing": meta.get("wing", ""),
-                    "room": meta.get("room", ""),
-                    "tags": extract_tags_from_metadata(meta),
-                    "content_preview": doc[:200] + "..." if len(doc) > 200 else doc,
-                }
-            )
+        ids, documents, metadatas = _fetch_drawer_rows(col, where=where)
+        drawers = _collapse_drawer_rows(ids, documents, metadatas)
+        page = drawers[offset : offset + limit]
+        # Surface the tag list on each entry without dropping upstream's
+        # logical-drawer shape (wing/room/content_preview/metadata).
+        for entry in page:
+            entry["tags"] = extract_tags_from_metadata(entry.get("metadata") or {})
         return {
-            "drawers": drawers,
-            "total": total,
-            "count": len(drawers),
+            "drawers": page,
+            "total": len(drawers),
+            "count": len(page),
             "offset": offset,
             "limit": limit,
         }
@@ -2594,7 +3475,7 @@ def tool_update_drawer(
     room: str = None,
     tags: list = None,
 ):
-    """Update an existing drawer's content and/or metadata.
+    """Update an existing logical drawer's content and/or metadata.
 
     ``tags`` semantics:
         * ``None`` — leave the existing tag list untouched.
@@ -2612,13 +3493,14 @@ def tool_update_drawer(
     col = _get_collection()
     if not col:
         return _collection_error_or_no_palace()
+
     try:
-        existing = col.get(ids=[drawer_id], include=["documents", "metadatas"])
-        if not existing["ids"]:
+        record = _logical_drawer_record(col, drawer_id)
+        if record is None:
             return {"success": False, "error": f"Drawer not found: {drawer_id}"}
 
-        old_meta = _safe_meta(existing["metadatas"][0])
-        old_doc = existing["documents"][0]
+        old_meta = _safe_meta(record["metadata"])
+        old_doc = record["content"]
 
         # Observation-grade write sanitizer (#40) — see tool_add_drawer for rationale.
         update_sanitize_flags: list[str] = []
@@ -2635,6 +3517,7 @@ def tool_update_drawer(
                 return {"success": False, "error": str(e)}
 
         new_meta = dict(old_meta)
+
         if wing is not None:
             wing_pass = sanitize_write_name(wing, "wing")
             if wing_pass["error"]:
@@ -2644,10 +3527,9 @@ def tool_update_drawer(
                 new_meta["wing"] = sanitize_name(wing_pass["cleaned"], "wing")
             except ValueError as e:
                 return {"success": False, "error": str(e)}
-            # Preserve existing casing when the caller passes a case-only
-            # variant (LLM clients often "autocorrect" acronyms like ps5→PS5).
             if wing.lower() != str(old_meta.get("wing") or "").lower():
                 new_meta["wing"] = wing
+
         if room is not None:
             room = _config.resolve_room(room)
             room_pass = sanitize_write_name(room, "room")
@@ -2658,8 +3540,6 @@ def tool_update_drawer(
                 new_meta["room"] = sanitize_name(room_pass["cleaned"], "room")
             except ValueError as e:
                 return {"success": False, "error": str(e)}
-            # Preserve existing casing when the caller passes a case-only
-            # variant (LLM clients often "autocorrect" acronyms like ps5→PS5).
             if room.lower() != str(old_meta.get("room") or "").lower():
                 new_meta["room"] = room
 
@@ -2683,12 +3563,43 @@ def tool_update_drawer(
             },
         )
 
-        update_kwargs = {"ids": [drawer_id]}
+        chunk_size = max(1, int(getattr(_config, "chunk_size", 800) or 800))
+        should_chunk = bool(record.get("chunked")) or len(new_doc) > chunk_size
+
+        if should_chunk:
+            chunk_ids, chunk_docs, chunk_metas = _build_chunk_rows(
+                drawer_id,
+                new_doc,
+                new_meta,
+                chunk_size,
+            )
+
+            col.upsert(ids=chunk_ids, documents=chunk_docs, metadatas=chunk_metas)
+
+            keep_ids = set(chunk_ids)
+            stale_ids = [old_id for old_id in record["ids"] if old_id not in keep_ids]
+            if stale_ids:
+                col.delete(ids=stale_ids)
+
+            _metadata_cache = None
+
+            logger.info("Updated drawer: %s (%s rows)", drawer_id, len(chunk_ids))
+
+            return {
+                "success": True,
+                "drawer_id": drawer_id,
+                "wing": new_meta.get("wing", ""),
+                "room": new_meta.get("room", ""),
+                "chunks": len(chunk_ids),
+                "chunk_ids": chunk_ids,
+            }
+
+        update_kwargs = {"ids": [record["ids"][0]]}
         if content is not None:
             update_kwargs["documents"] = [new_doc]
         update_kwargs["metadatas"] = [new_meta]
-        col.update(**update_kwargs)
 
+        col.update(**update_kwargs)
         _metadata_cache = None
 
         # Per #86 — if the caller reassigned the room to a non-canonical
@@ -3554,6 +4465,24 @@ def tool_reconnect():
             except Exception:
                 pass
         _kg_by_path.clear()
+    _refresh_sqlite_integrity_status()
+    if _sqlite_integrity_errors:
+        result = {
+            "success": False,
+            "message": "SQLite integrity check failed after reconnect",
+            "sqlite_integrity": _sqlite_integrity_payload(),
+            "vector_disabled": _vector_disabled,
+            "vector_disabled_reason": _vector_disabled_reason,
+            "hint": (
+                "Stop all MemPalace MCP clients/writers, back up the palace, "
+                "repair the SQLite/FTS5 corruption offline, then run "
+                "mempalace_reconnect or restart the MCP server."
+            ),
+        }
+        if close_errors:
+            result["error"] = "; ".join(close_errors)
+        return result
+
     try:
         col = _get_collection()
         if col is None:
@@ -3589,6 +4518,79 @@ def tool_reconnect():
         }
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def tool_checkpoint(items, diary=None, dedup_threshold=0.9):
+    """Batch session save in a single call.
+
+    Semantic-dedups each item, files the non-duplicates as drawers, then
+    writes one diary entry. Collapses the per-item ``check_duplicate`` /
+    ``add_drawer`` / ``diary_write`` sequence into one MCP request so the
+    host UI renders a single tool-call card (and keeps its spinner up for
+    the whole save) instead of one card per underlying call.
+
+    ``items`` is a list of ``{"wing", "room", "content"}`` dicts. ``diary``
+    is an optional ``{"agent_name", "entry", "topic"?, "wing"?}`` dict.
+    Reuses the existing single-item handlers so dedup/idempotency/WAL
+    behaviour is identical to calling them directly.
+    """
+    # Inputs come from MCP clients and handle_request does not validate
+    # nested schemas, so guard every field here. A single malformed item
+    # must record an error and be skipped, never raise and abort the whole
+    # batch (the already-filed items in this call would otherwise be lost
+    # from the response).
+    try:
+        dedup_threshold = float(dedup_threshold)
+    except (ValueError, TypeError):
+        return {"error": "dedup_threshold must be a number"}
+
+    out = {"added": [], "duplicates": [], "errors": []}
+    if not isinstance(items, list):
+        return {"error": "items must be a list of {wing, room, content} objects"}
+    for item in items:
+        if not isinstance(item, dict):
+            out["errors"].append({"item": item, "error": "item must be an object"})
+            continue
+        wing = item.get("wing")
+        room = item.get("room")
+        content = item.get("content")
+        # Non-empty strings only: a non-string here would raise deep in
+        # sanitize_content / strip_lone_surrogates.
+        if not all(isinstance(v, str) and v for v in (wing, room, content)):
+            out["errors"].append(
+                {"item": item, "error": "wing, room, content must be non-empty strings"}
+            )
+            continue
+        dup = tool_check_duplicate(content, threshold=dedup_threshold)
+        if dup.get("is_duplicate"):
+            out["duplicates"].append({"room": room, "matches": dup.get("matches", [])})
+            continue
+        # On a dedup error (genuine index failure — content is guaranteed a
+        # string by the guard above) we still file rather than drop the
+        # memory: verbatim recall is the priority and add_drawer's own
+        # idempotency blocks exact duplicates.
+        res = tool_add_drawer(wing=wing, room=room, content=content, added_by="checkpoint")
+        if res.get("success"):
+            out["added"].append(res)
+        else:
+            out["errors"].append(res)
+    if diary is not None:
+        if not isinstance(diary, dict):
+            out["errors"].append({"diary": diary, "error": "diary must be an object"})
+        else:
+            entry = diary.get("entry") or diary.get("content")
+            if not isinstance(entry, str) or not entry:
+                out["errors"].append(
+                    {"diary": diary, "error": "diary entry must be a non-empty string"}
+                )
+            else:
+                out["diary"] = tool_diary_write(
+                    agent_name=diary.get("agent_name", "cursor-ide"),
+                    entry=entry,
+                    topic=diary.get("topic", "session-checkpoint"),
+                    wing=diary.get("wing", ""),
+                )
+    return out
 
 
 # ==================== MCP PROTOCOL ====================
@@ -3911,6 +4913,15 @@ TOOLS = {
                     "items": {"type": "string"},
                     "description": "Only return drawers carrying ALL of these tags (AND logic). Tags are case-insensitive; spaces become hyphens.",
                 },
+                "source_file": {
+                    "type": "string",
+                    "description": (
+                        "Filter to one exact source_file (optional). Matches the full "
+                        "stored path exactly (leading/trailing whitespace trimmed); no "
+                        "glob or basename matching. Pass the value from a result's "
+                        "'source_path' field; the displayed 'source_file' is only a basename."
+                    ),
+                },
                 "max_distance": {
                     "type": "number",
                     "description": "Max cosine distance threshold (0=identical, 2=opposite). Results further than this are dropped. Lower = stricter. Default 1.5. Set to 0 to disable.",
@@ -4001,6 +5012,52 @@ TOOLS = {
         },
         "handler": tool_list_tags,
     },
+    "mempalace_checkpoint": {
+        "description": "Save a whole session in one call: semantic-dedups each item, files non-duplicates as drawers, then writes one diary entry. Use this instead of many separate check_duplicate/add_drawer/diary_write calls — it renders as a single tool-call card in the host UI.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "description": "Verbatim items to file. Each is {wing, room, content} — content is the exact words, never summarized.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "wing": {"type": "string", "description": "Wing (project name)"},
+                            "room": {
+                                "type": "string",
+                                "description": "Room (short topic: decisions, backend...)",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "Verbatim content to store",
+                            },
+                        },
+                        "required": ["wing", "room", "content"],
+                    },
+                },
+                "diary": {
+                    "type": "object",
+                    "description": "Optional diary entry written after filing: {agent_name, entry, topic?, wing?}. entry is AAAK-format.",
+                    "properties": {
+                        "agent_name": {
+                            "type": "string",
+                            "description": "Agent name (e.g. cursor-ide)",
+                        },
+                        "entry": {"type": "string", "description": "Diary entry in AAAK format"},
+                        "topic": {"type": "string", "description": "Topic tag (optional)"},
+                        "wing": {"type": "string", "description": "Target wing (optional)"},
+                    },
+                },
+                "dedup_threshold": {
+                    "type": "number",
+                    "description": "Similarity threshold 0-1 for the per-item dedup check (default 0.9)",
+                },
+            },
+            "required": ["items"],
+        },
+        "handler": tool_checkpoint,
+    },
     "mempalace_delete_drawer": {
         "description": "Delete a drawer by ID. Irreversible.",
         "input_schema": {
@@ -4065,6 +5122,24 @@ TOOLS = {
             "required": ["source"],
         },
         "handler": tool_mine,
+    },
+    "mempalace_delete_by_source": {
+        "description": "Bulk-delete every drawer mined from one source_file (exact match). Use to clean up benchmark/test data accidentally mined into a user wing (#1722). Returns a dry-run match count and sample by default; pass dry_run=false to commit. Irreversible.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "source_file": {
+                    "type": "string",
+                    "description": "Exact source_file metadata value to remove (e.g. the full path that was mined)",
+                },
+                "dry_run": {
+                    "type": "boolean",
+                    "description": "Preview the match count without deleting; default true. Pass false to actually delete.",
+                },
+            },
+            "required": ["source_file"],
+        },
+        "handler": tool_delete_by_source,
     },
     "mempalace_sync": {
         "description": "Prune drawers whose source files are gitignored, deleted, or moved. Returns dry-run report by default; pass apply=true to commit deletions.",
@@ -4216,13 +5291,7 @@ TOOLS = {
                     "description": "Alias for 'entry' — accepted because add_drawer uses 'content'. Provide either 'entry' or 'content'; 'entry' wins if both are given.",
                 },
             },
-            # agent_name is always required; 'entry' or its alias 'content' must
-            # be present (the server remaps content->entry at dispatch).
-            "required": ["agent_name"],
-            "anyOf": [
-                {"required": ["entry"]},
-                {"required": ["content"]},
-            ],
+            "required": ["agent_name", "entry"],
         },
         "handler": tool_diary_write,
     },
@@ -4309,6 +5378,25 @@ def _internal_tool_error(req_id, tool_name: str, exc: BaseException = None) -> d
         "id": req_id,
         "error": error,
     }
+
+
+def _mcp_tool_preflight_refusal(req_id, tool_name: str):
+    """Run MCP request preflight gates outside handle_request complexity."""
+
+    sqlite_integrity_error = _mcp_sqlite_integrity_refusal(req_id, tool_name)
+    if sqlite_integrity_error is not None:
+        return sqlite_integrity_error
+
+    return _mcp_peer_writer_refusal(req_id, tool_name)
+
+
+def _decorate_mcp_tool_result(tool_name: str, result):
+    """Attach MCP transport-only diagnostics outside handle_request complexity."""
+
+    if tool_name == "mempalace_status" and isinstance(result, dict):
+        result.setdefault("sqlite_integrity", _sqlite_integrity_payload())
+
+    return result
 
 
 def handle_request(request):  # noqa: C901 — merged fork+upstream tool dispatch
@@ -4451,6 +5539,10 @@ def handle_request(request):  # noqa: C901 — merged fork+upstream tool dispatc
                     "error": {"code": -32602, "message": f"Invalid value for parameter '{key}'"},
                 }
         tool_args.pop("wait_for_previous", None)
+        preflight_error = _mcp_tool_preflight_refusal(req_id, tool_name)
+        if preflight_error is not None:
+            return preflight_error
+
         # 'content' is an accepted alias for diary_write's 'entry' (callers often
         # reuse add_drawer's 'content' name). Map it in here, before dispatch, so a
         # content-only call still satisfies the required 'entry' param while the
@@ -4463,7 +5555,8 @@ def handle_request(request):  # noqa: C901 — merged fork+upstream tool dispatc
             if "entry" not in tool_args or tool_args["entry"] is None:
                 tool_args["entry"] = content_val
         try:
-            result = TOOLS[tool_name]["handler"](**tool_args)
+            result = _decorate_mcp_tool_result(tool_name, TOOLS[tool_name]["handler"](**tool_args))
+
             return {
                 "jsonrpc": "2.0",
                 "id": req_id,
@@ -4719,22 +5812,256 @@ def _start_idle_exit_watchdog() -> None:
     t.start()
 
 
-def main():
-    """MCP server entry point for the ``mempalace-mcp`` console script.
+def _json_rpc_parse_error(req_id=None):
+    return {
+        "jsonrpc": "2.0",
+        "id": req_id,
+        "error": {"code": -32700, "message": "Parse error"},
+    }
 
-    Side effect: pops ``PYTHONPATH`` from ``os.environ`` (see #1423) so
-    any subprocess this server spawns inherits a clean env. Host
-    applications that call ``main()`` programmatically should be aware
-    that the parent process loses ``PYTHONPATH`` as well. Library imports
-    (``import mempalace.searcher`` from a host app) do NOT trigger this
-    side effect; only the CLI/MCP entry points pop the env var.
+
+# Module-level constants for the HTTP transport.
+# Defined here (not inside main()) so _serve_http() / _build_http_server()
+# can reference them as free names without a NameError.
+_HTTP_REQUEST_LOCK = threading.Lock()
+_HTTP_MAX_REQUEST_BYTES = 16 * 1024 * 1024
+# Host literals that always denote this machine. Used both to decide whether a
+# bind is loopback (skip the network-exposure warning) and to pin the Host
+# header against DNS rebinding when serving on loopback.
+_HTTP_LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "[::1]")
+_HTTP_ALLOW_INSECURE_NO_TOKEN_ENV = "MEMPALACE_MCP_HTTP_ALLOW_INSECURE_NO_TOKEN"
+
+
+def _http_is_loopback(host: str) -> bool:
+    """Whether ``host`` binds only to this machine."""
+    return (host or "").strip().lower() in _HTTP_LOOPBACK_HOSTS
+
+
+def _http_allowed_host_values(bind_host: str, port: int) -> set:
+    """Host-header values accepted when Host pinning is enforced.
+
+    DNS-rebinding defense: a browser tricked into POSTing to ``127.0.0.1`` by a
+    malicious page still carries the *attacker's* domain in the ``Host`` header,
+    so we pin ``Host`` to the loopback literals (and the bound host) with and
+    without the port. Computed from the *actual* bound port so an ephemeral
+    ``port=0`` bind (tests) still matches.
     """
-    # Drop leaked PYTHONPATH so any subprocess this server spawns starts
-    # with a clean env. The sys.path filter in mempalace/__init__.py
-    # already protects this process from the same ABI mismatch; here we
-    # extend the protection to children.
-    os.environ.pop("PYTHONPATH", None)
+    names = set(_HTTP_LOOPBACK_HOSTS)
+    if bind_host:
+        names.add(bind_host.strip().lower())
+    values = set()
+    for name in names:
+        values.add(name)
+        values.add(f"{name}:{port}")
+    return values
+
+
+def _http_origin_allowed(origin: str) -> bool:
+    """Whether a browser ``Origin`` header may call the transport.
+
+    Non-browser MCP clients omit ``Origin`` entirely (allowed). When an
+    ``Origin`` *is* present it must be a loopback origin — this is what stops a
+    page at ``https://evil.example`` from reaching a DNS-rebound localhost
+    server and reading the palace.
+    """
+    from urllib.parse import urlparse
+
+    try:
+        host = (urlparse(origin).hostname or "").strip().lower()
+    except Exception:
+        return False
+    return host in ("127.0.0.1", "localhost", "::1")
+
+
+def _build_http_server(host: str, port: int):
+    """Construct (but do not start) the MCP HTTP server.
+
+    Split out from :func:`_serve_http` so tests can bind an ephemeral port,
+    exercise the *real* handler, and shut it down — the previous test reached
+    for Starlette/uvicorn (neither a dependency) and so was silently skipped in
+    CI. Returns a bound ``ThreadingHTTPServer`` whose request policy (Host
+    allowlist, Origin check, optional bearer token) is attached as attributes.
+    """
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.parse import urlparse
+
+    auth_token = os.environ.get("MEMPALACE_MCP_HTTP_TOKEN", "").strip()
+    if (
+        not _http_is_loopback(host)
+        and not auth_token
+        and not _truthy_env(_HTTP_ALLOW_INSECURE_NO_TOKEN_ENV)
+    ):
+        raise ValueError(
+            "MEMPALACE_MCP_HTTP_TOKEN is required when binding MCP HTTP to a "
+            f"non-loopback host. Set {_HTTP_ALLOW_INSECURE_NO_TOKEN_ENV}=1 only "
+            "when a trusted fronting layer provides access control."
+        )
+
+    class _MCPHTTPServer(ThreadingHTTPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    class _Handler(BaseHTTPRequestHandler):
+        protocol_version = "HTTP/1.1"
+        timeout = 10
+
+        def log_message(self, fmt, *args):
+            logger.info("HTTP %s - " + fmt, self.client_address[0], *args)
+
+        def _send_bytes(self, status: int, body: bytes, content_type: str) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(body)
+            self.close_connection = True
+
+        def _send_json(self, status: int, payload: dict) -> None:
+            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            self._send_bytes(status, body, "application/json; charset=utf-8")
+
+        def _request_rejected(self, require_auth: bool) -> bool:
+            """Enforce the transport's access policy before any dispatch.
+
+            The palace is the most sensitive data MemPalace holds and ``/mcp``
+            is unauthenticated by default, so this guards the two ways a local
+            HTTP server leaks to the network: DNS rebinding (Host/Origin) and,
+            when the operator opts in, a missing/incorrect bearer token.
+            """
+            srv = self.server
+            if srv.enforce_host_pin:
+                host_hdr = (self.headers.get("Host") or "").strip().lower()
+                if host_hdr not in srv.allowed_hosts:
+                    logger.warning("HTTP request rejected: Host %r not allowed", host_hdr)
+                    self.send_error(403, "Forbidden")
+                    return True
+            origin = self.headers.get("Origin")
+            if origin and not _http_origin_allowed(origin):
+                logger.warning("HTTP request rejected: cross-origin %r", origin)
+                self.send_error(403, "Forbidden")
+                return True
+            if require_auth and srv.auth_token:
+                provided = self.headers.get("Authorization", "")
+                if not hmac.compare_digest(provided, f"Bearer {srv.auth_token}"):
+                    logger.warning("HTTP request rejected: missing/invalid bearer token")
+                    self.send_error(401, "Unauthorized")
+                    return True
+            return False
+
+        def do_GET(self):
+            # Liveness probe is policy-gated for Host/Origin but never requires
+            # the token, so an orchestrator's health check works without creds.
+            if self._request_rejected(require_auth=False):
+                return
+            path = urlparse(self.path).path
+            if path == "/healthz":
+                self._send_bytes(200, b"ok\n", "text/plain; charset=utf-8")
+                return
+
+            self.send_error(404, "Not Found")
+
+        def do_POST(self):
+            if self._request_rejected(require_auth=True):
+                return
+            path = urlparse(self.path).path
+            if path != "/mcp":
+                self.send_error(404, "Not Found")
+                return
+
+            try:
+                content_length = int(self.headers.get("Content-Length", "0") or "0")
+            except (TypeError, ValueError):
+                content_length = 0
+
+            if content_length < 0 or content_length > _HTTP_MAX_REQUEST_BYTES:
+                self._send_json(
+                    413,
+                    {
+                        "jsonrpc": "2.0",
+                        "id": None,
+                        "error": {"code": -32600, "message": "Request too large"},
+                    },
+                )
+                return
+
+            try:
+                raw = self.rfile.read(content_length)
+                request = json.loads(raw.decode("utf-8"))
+            except Exception as exc:
+                logger.warning("HTTP JSON-RPC read or parse error: %s", exc)
+                self._send_json(400, _json_rpc_parse_error())
+                return
+
+            # Preserve the single-process / single-palace-handle behavior that
+            # stdio deployments rely on. HTTP gives us a safer transport, not
+            # concurrent Chroma/HNSW mutation.
+            with _HTTP_REQUEST_LOCK:
+                response = handle_request(request)
+
+            if response is None:
+                # JSON-RPC notifications intentionally have no response body.
+                self.send_response(202)
+                self.send_header("Content-Length", "0")
+                self.send_header("Connection", "close")
+                self.end_headers()
+                self.close_connection = True
+                return
+
+            self._send_json(200, response)
+
+    httpd = _MCPHTTPServer((host, port), _Handler)
+    bound_port = httpd.server_address[1]
+    # Pin Host only on a loopback bind (the security-critical default). A
+    # deliberately network-exposed bind is the operator's call and may sit
+    # behind a proxy that rewrites Host, so we relax the pin there and lean on
+    # the Origin check + optional token instead.
+    httpd.enforce_host_pin = _http_is_loopback(host)
+    httpd.allowed_hosts = _http_allowed_host_values(host, bound_port)
+    httpd.auth_token = auth_token
+    return httpd
+
+
+def _serve_http(host: str, port: int) -> None:
+    """Serve JSON-RPC over HTTP in-process.
+
+    This transport intentionally reuses the same ``handle_request`` dispatcher
+    as stdio. The only change is the framing layer: HTTP mode avoids a
+    long-lived stdout pipe for operators who run MemPalace behind an HTTP MCP
+    client/proxy for days at a time.
+    """
+    try:
+        httpd = _build_http_server(host, port)
+    except (OSError, ValueError) as exc:
+        logger.error("Failed to start MCP HTTP server on %s:%s: %s", host, port, exc)
+        sys.exit(1)
+
+    bound_port = httpd.server_address[1]
+    if not _http_is_loopback(host):
+        if httpd.auth_token:
+            logger.warning(
+                "MemPalace MCP HTTP server bound to non-loopback host %s; /mcp "
+                "requires the configured bearer token.",
+                host,
+            )
+        else:
+            logger.warning(
+                "MemPalace MCP HTTP server bound to non-loopback host %s without "
+                "a bearer token because %s is set.",
+                host,
+                _HTTP_ALLOW_INSECURE_NO_TOKEN_ENV,
+            )
+    with httpd:
+        logger.info("MemPalace MCP HTTP server listening on http://%s:%s/mcp", host, bound_port)
+        try:
+            httpd.serve_forever(poll_interval=0.5)
+        except KeyboardInterrupt:
+            logger.info("MemPalace MCP HTTP server shutting down")
+
+
+def _run_stdio_loop() -> None:
     _restore_stdout()
+
     # Force UTF-8 on stdio. MCP JSON-RPC is UTF-8, but Python on Windows
     # defaults stdin/stdout to the system codepage (e.g. cp1251), which
     # corrupts non-ASCII payloads and surfaces as generic -32000 errors on
@@ -4745,6 +6072,7 @@ def main():
                 stream.reconfigure(encoding="utf-8", errors="replace")
             except (AttributeError, OSError):
                 pass
+
     logger.info("MemPalace MCP Server starting...")
     # Issue #49: always log the routing decision at startup. Previously only
     # the daemon-strict path logged, so an unset/unpropagated env var
@@ -4762,10 +6090,11 @@ def main():
         )
     else:
         logger.info("mempalace-mcp: routing → local palace @ %s", _cfg.palace_path)
-        # Pre-flight: probe HNSW capacity before any tool call so the warning
-        # is visible at startup rather than on first use (#1222). Pure
-        # filesystem read; never opens a chromadb client. Skipped in
-        # daemon-strict mode — the daemon owns its palace's capacity.
+        # Pre-flight: probe SQLite integrity + HNSW capacity before any tool
+        # call so the warning is visible at startup rather than on first use
+        # (#1222). Pure filesystem read; never opens a chromadb client.
+        # Skipped in daemon-strict mode — the daemon owns its palace's state.
+        _refresh_sqlite_integrity_status()
         _refresh_vector_disabled_flag()
         # Opt-in: pre-load the embedder so the first chromadb-write tool call
         # does not pay the ONNX/CoreML cold-load tax under the MCP client
@@ -4782,11 +6111,14 @@ def main():
             line = sys.stdin.readline()
             if not line:
                 break
+
             line = line.strip()
             if not line:
                 continue
+
             request = json.loads(line)
             response = handle_request(request)
+
             if response is not None:
                 sys.stdout.write(json.dumps(response, ensure_ascii=False) + "\n")
                 sys.stdout.flush()
@@ -4794,6 +6126,66 @@ def main():
             break
         except Exception as e:
             logger.error(f"Server error: {e}")
+
+
+def _run_http_loop() -> None:
+    # In HTTP mode there is no JSON-RPC stdio channel. Keeping the import-time
+    # stdout->stderr guard in place means any accidental print from a dependency
+    # still cannot masquerade as an HTTP response.
+    logger.info("MemPalace MCP HTTP server starting...")
+
+    # The HTTP transport exists for long-lived deployments. Do the cheap
+    # filesystem-only probe before binding, but never make the listener wait on
+    # optional embedder/HNSW warmup. Operators and tests should see /healthz as
+    # soon as the process is alive.
+    _refresh_vector_disabled_flag()
+    _start_idle_exit_watchdog()
+
+    raw_warmup = os.environ.get("MEMPALACE_EAGER_WARMUP", "").strip().lower()
+    if raw_warmup in _WARMUP_TRUTHY:
+
+        def _warmup_with_lock():
+            with _HTTP_REQUEST_LOCK:
+                _maybe_eager_warmup_embedder()
+
+        threading.Thread(
+            target=_warmup_with_lock,
+            name="mcp-http-eager-warmup",
+            daemon=True,
+        ).start()
+    elif raw_warmup and raw_warmup not in _WARMUP_FALSY:
+        # Keep the same warning behavior as stdio mode for typo values.
+        _maybe_eager_warmup_embedder()
+
+    _serve_http(_args.host, _args.port)
+
+
+def main():
+    """MCP server entry point for the ``mempalace-mcp`` console script.
+
+    Side effect: pops ``PYTHONPATH`` from ``os.environ`` (see #1423) so any
+    subprocess this server spawns inherits a clean env. Host applications that
+    call ``main()`` programmatically should be aware that the parent process
+    loses ``PYTHONPATH`` as well. Library imports do NOT trigger this side
+    effect; only the CLI/MCP entry point does.
+
+    Transports:
+    - ``stdio`` remains the default for existing Claude/MCP deployments.
+    - ``http`` is opt-in and serves JSON-RPC POSTs at ``/mcp`` in the same
+      process, avoiding the long-lived stdio framing failure surface from
+      #1801.
+    """
+
+    # Drop leaked PYTHONPATH so any subprocess this server spawns starts
+    # with a clean env. The sys.path filter in mempalace/__init__.py
+    # already protects this process from the same ABI mismatch; here we
+    # extend the protection to children.
+    os.environ.pop("PYTHONPATH", None)
+
+    if _args.transport == "http":
+        _run_http_loop()
+    else:
+        _run_stdio_loop()
 
 
 if __name__ == "__main__":

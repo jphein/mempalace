@@ -11,6 +11,7 @@ Same palace as project mining. Different ingest strategy.
 import os
 import sys
 import logging
+import stat
 from pathlib import Path
 from datetime import datetime
 from collections import defaultdict
@@ -75,6 +76,33 @@ MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB — skip files larger than this.
 # more drawers and therefore more embedding/storage work — and content
 # is normalized and loaded fully into memory before chunking, so memory
 # use also scales with source size.
+
+
+def _path_within_root(path: Path, root: Path) -> bool:
+    try:
+        path.expanduser().resolve().relative_to(root.expanduser().resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def _is_regular_source_file(filepath: Path, root: Path) -> bool:
+    if not _path_within_root(filepath, root):
+        return False
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    fd = -1
+    try:
+        fd = os.open(filepath, flags)
+        st = os.fstat(fd)
+        return stat.S_ISREG(st.st_mode) and st.st_size <= MAX_FILE_SIZE
+    except OSError:
+        return False
+    finally:
+        if fd != -1:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 def _register_file(collection, source_file: str, wing: str, agent: str, extract_mode: str):
@@ -440,10 +468,7 @@ def scan_convos(convo_dir: str) -> list:
                     except OSError:
                         pass
                     continue
-                try:
-                    if filepath.stat().st_size > MAX_FILE_SIZE:
-                        continue
-                except OSError:
+                if not _is_regular_source_file(filepath, convo_path):
                     continue
                 files.append(filepath)
     return files
@@ -901,6 +926,10 @@ def _mine_convos_impl(
 
         # Skip if already filed at current NORMALIZE_VERSION
         if not dry_run and source_file in mined_set:
+            files_skipped += 1
+            continue
+
+        if not _is_regular_source_file(filepath, Path(convo_dir).expanduser().resolve()):
             files_skipped += 1
             continue
 

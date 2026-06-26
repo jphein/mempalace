@@ -106,6 +106,20 @@ def tunnel_file(self)
 
 Path to the tunnel file, sibling of palace_path.
 
+#### `hallway_file`
+
+```python
+def hallway_file(self)
+```
+
+Path to the hallway file, sibling of palace_path.
+
+Mirrors ``tunnel_file`` so within-wing hallway state is scoped to the
+configured palace and survives palace rebuilds (it does not live in
+ChromaDB which can be recreated). Prior to this property the path was
+hardcoded under ``~/.mempalace/hallways.json`` and multiple palaces on
+one host silently shared one file (see ``hallways._legacy_hallway_file``).
+
 #### `collection_name`
 
 ```python
@@ -494,6 +508,30 @@ Switching models on an existing palace requires re-embedding
 EF name doesn't match. Run ``mempalace repair rebuild-index`` after
 changing this value.
 
+#### `embedding_threads`
+
+```python
+def embedding_threads(self) -> int
+```
+
+Cap on the embedder's ONNX Runtime intra-op thread pool (#1068).
+
+ChromaDB's ONNX embedder builds its ``InferenceSession`` with no thread
+cap, so the intra-op pool defaults to the physical core count and a
+background ``mine`` pins every core — stacked Stop-hook fires turn into
+thermal events. ``OMP_NUM_THREADS`` is inert here (ORT owns its own
+pool), so the cap is applied via ``SessionOptions`` in
+:mod:`mempalace.embedding`.
+
+Read from env ``MEMPALACE_EMBEDDING_THREADS`` first, then
+``embedding_threads`` in ``config.json``. Semantics:
+
+- unset / ``"auto"`` → half the logical CPUs (min 1), so a background
+  mine leaves the machine usable out of the box.
+- a positive integer → exactly that many intra-op threads.
+- ``0`` or negative → uncapped: ORT's default (physical core count),
+  for users who want maximum indexing throughput.
+
 #### `set_embedding_model`
 
 ```python
@@ -600,6 +638,14 @@ chrome, full Bash commands, full Bash output, full Grep/Glob match
 lists, full Read/Edit/Write results, and uncapped tool inputs.
 Default False — existing behavior is unchanged for upstream-shape
 installs and for users who haven't opted in.
+
+#### `hook_use_daemon`
+
+```python
+def hook_use_daemon(self)
+```
+
+Whether hooks should submit save/mine work to the opt-in daemon.
 
 #### `set_hook_setting`
 
@@ -719,6 +765,20 @@ def sanitize_content(value: str, max_length: int = 100000) -> str
 ```
 
 Validate drawer/diary content length.
+
+### `sqlite_read_uri`
+
+```python
+def sqlite_read_uri(db_path: str) -> str
+```
+
+Return a read-only ``file:`` URI for ``sqlite3.connect(..., uri=True)``.
+
+A bare ``f"file:&#123;db_path}?mode=ro"`` mis-parses paths containing spaces or
+other URI-reserved characters — common in real home directories (a Windows
+user folder like ``First Last``, many macOS paths). ``pathname2url``
+percent-encodes the path and normalizes separators so the database opens on
+every platform.
 
 ### `get_configured_collection_name`
 

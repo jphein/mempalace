@@ -61,6 +61,29 @@ def query(self, *, query_texts = None, query_embeddings = None, n_results = 10, 
 def get(self, *, ids = None, where = None, where_document = None, limit = None, offset = None, include = None) -> GetResult
 ```
 
+#### `get_all_metadata`
+
+```python
+def get_all_metadata(self, where: Optional[dict] = None) -> list[dict]
+```
+
+Return every matching record's metadata in one cursor pass (#1796).
+
+Overrides the default offset-paginated implementation, which would
+call self.get(limit=, offset=) in a loop -- and since self.get() is
+backed by a full _scroll_all() materialization, each page of that
+loop would re-walk the entire collection from the start just to
+discard everything outside its slice (O(n^2) over collection size).
+
+Delegates to self._rows(), the same single-scroll-plus-local-filter
+helper that backs get()/delete(). With ids=None and
+where_document=None, _rows() reduces to exactly one _scroll_all()
+pass followed by an unconditional _matches_where() re-check on every
+row -- the same filter logic get(), delete(), and lexical_search()
+already use, so this can't independently drift from those call
+sites. (Maintainer review on #1832: avoid duplicating the filter
+dance inline.)
+
 #### `delete`
 
 ```python

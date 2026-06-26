@@ -6,8 +6,8 @@ project_scanner.py — Detect projects and people from real signal.
 
 For a codebase with build manifests or git history, this beats regex-based
 entity detection by a wide margin: the project's own name is already written
-down in package.json / pyproject.toml / Cargo.toml / go.mod, and the people
-who worked on it are in `git log`.
+down in package.json / pyproject.toml / Cargo.toml / go.mod / pom.xml /
+Gradle manifests, and the people who worked on it are in `git log`.
 
 This module is used as the primary signal in `mempalace init`. The regex
 detector in entity_detector.py stays as a fallback for prose-only folders
@@ -85,8 +85,8 @@ Returns the same dict shape as ``entity_detector.detect_entities`` so it
 plugs into ``confirm_entities`` unchanged.
 
 Order of signal preference:
-  1. Package manifests (package.json, pyproject.toml, Cargo.toml, go.mod)
-     → canonical project names
+  1. Package manifests (package.json, pyproject.toml, Cargo.toml, go.mod,
+     pom.xml, Gradle manifests) → canonical project names
   2. Git commit authors → real people with real commit counts
   3. Claude Code conversation dirs (~/.claude/projects/) → per-session
      project names (pulled from each session's ``cwd`` metadata)

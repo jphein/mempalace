@@ -97,6 +97,24 @@ def _reset_mcp_cache():
                     mcp_server._collection_cache_palace = None
                 if hasattr(mcp_server, "_collection_open_error"):
                     mcp_server._collection_open_error = None
+                if hasattr(mcp_server, "_palace_db_inode"):
+                    mcp_server._palace_db_inode = 0
+                if hasattr(mcp_server, "_palace_db_mtime"):
+                    mcp_server._palace_db_mtime = 0.0
+                # The metadata cache is keyed by nothing but TTL, so a prior
+                # test's palace contents survive into the next function-scoped
+                # palace and pollute tag/taxonomy reads. Clear it too.
+                if hasattr(mcp_server, "_metadata_cache"):
+                    mcp_server._metadata_cache = None
+                if hasattr(mcp_server, "_metadata_cache_time"):
+                    mcp_server._metadata_cache_time = 0
+                # Postgres backend handle + IDF corpus snapshot are likewise
+                # not palace-keyed: a prior test's backend/corpus could leak
+                # foreign drawers into the next test's tag/auto-extract reads.
+                if hasattr(mcp_server, "_postgres_backend_cache"):
+                    mcp_server._postgres_backend_cache = None
+                if hasattr(mcp_server, "_idf_cache"):
+                    mcp_server._idf_cache = None
         except AttributeError:
             pass
 
@@ -106,6 +124,20 @@ def _reset_mcp_cache():
             from mempalace.backends.chroma import ChromaBackend
 
             ChromaBackend._quarantined_paths.clear()
+        except (ImportError, AttributeError):
+            pass
+
+        try:
+            # ChromaDB keeps a process-global registry of PersistentClient
+            # "systems" keyed by settings. mkdtemp can hand out a path that
+            # collides with a just-deleted one, so a later function-scoped
+            # palace can resolve to a prior test's cached system and read its
+            # drawers (observed as foreign tags leaking into tag/taxonomy
+            # tests under full-suite ordering). Dropping the cache forces a
+            # fresh system per test. No-op if the chromadb internal moves.
+            from chromadb.api.shared_system_client import SharedSystemClient
+
+            SharedSystemClient.clear_system_cache()
         except (ImportError, AttributeError):
             pass
 

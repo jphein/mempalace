@@ -315,11 +315,11 @@ class TestListTags:
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_add_drawer, tool_list_tags
 
-        tool_add_drawer(wing="w", room="r", content="d1 content alpha", tags=["a", "b"])
-        tool_add_drawer(wing="w", room="r", content="d2 content beta", tags=["a"])
-        tool_add_drawer(wing="w", room="r", content="d3 content gamma", tags=["c"])
+        tool_add_drawer(wing="listtags", room="r", content="d1 content alpha", tags=["a", "b"])
+        tool_add_drawer(wing="listtags", room="r", content="d2 content beta", tags=["a"])
+        tool_add_drawer(wing="listtags", room="r", content="d3 content gamma", tags=["c"])
 
-        result = tool_list_tags()
+        result = tool_list_tags(wing="listtags")
         by_tag = {item["tag"]: item["count"] for item in result["tags"]}
         assert by_tag == {"a": 2, "b": 1, "c": 1}
         assert result["total_unique_tags"] == 3
@@ -328,11 +328,11 @@ class TestListTags:
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_add_drawer, tool_list_tags
 
-        tool_add_drawer(wing="w", room="r", content="d1 content one", tags=["popular"])
-        tool_add_drawer(wing="w", room="r", content="d2 content two", tags=["popular"])
-        tool_add_drawer(wing="w", room="r", content="d3 content three", tags=["rare"])
+        tool_add_drawer(wing="mincount", room="r", content="d1 content one", tags=["popular"])
+        tool_add_drawer(wing="mincount", room="r", content="d2 content two", tags=["popular"])
+        tool_add_drawer(wing="mincount", room="r", content="d3 content three", tags=["rare"])
 
-        result = tool_list_tags(min_count=2)
+        result = tool_list_tags(wing="mincount", min_count=2)
         tags_returned = [item["tag"] for item in result["tags"]]
         assert tags_returned == ["popular"]
 
@@ -353,11 +353,17 @@ class TestListDrawersWithTags:
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace.mcp_server import tool_add_drawer, tool_list_drawers
 
-        tool_add_drawer(wing="w", room="r", content="match for tag filter alpha", tags=["a", "b"])
-        tool_add_drawer(wing="w", room="r", content="no match for tag filter beta", tags=["b"])
-        tool_add_drawer(wing="w", room="r", content="alternate match gamma", tags=["a", "b", "c"])
+        tool_add_drawer(
+            wing="tagfilter", room="r", content="match for tag filter alpha", tags=["a", "b"]
+        )
+        tool_add_drawer(
+            wing="tagfilter", room="r", content="no match for tag filter beta", tags=["b"]
+        )
+        tool_add_drawer(
+            wing="tagfilter", room="r", content="alternate match gamma", tags=["a", "b", "c"]
+        )
 
-        result = tool_list_drawers(tags=["a", "b"])
+        result = tool_list_drawers(wing="tagfilter", tags=["a", "b"])
         assert result["total"] == 2
         returned_tags = [set(d["tags"]) for d in result["drawers"]]
         assert all({"a", "b"} <= tags for tags in returned_tags)

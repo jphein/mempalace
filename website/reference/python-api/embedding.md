@@ -63,7 +63,7 @@ def name() -> str
 #### `__init__`
 
 ```python
-def __init__(self, preferred_providers = None)
+def __init__(self, preferred_providers = None, batch_size: int = _EMBEDDINGGEMMA_BATCH_SIZE, intra_op_num_threads: int = 0)
 ```
 
 #### `embed_query`

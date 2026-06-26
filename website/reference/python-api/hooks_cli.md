@@ -2,10 +2,10 @@
 
 Source: [`mempalace/hooks_cli.py`](https://github.com/techempower-org/mempalace/blob/main/mempalace/hooks_cli.py)
 
-Hook logic for MemPalace — Python implementation of session-start, stop, and precompact hooks.
+Hook logic for MemPalace — Python implementation of session-start, stop, session-end, and precompact hooks.
 
 Reads JSON from stdin, outputs JSON to stdout.
-Supported hooks: session-start, stop, precompact
+Supported hooks: session-start, stop, session-end, precompact
 Supported harnesses: claude-code, codex (extensible to cursor, gemini, etc.)
 
 ## Functions
@@ -77,6 +77,34 @@ warning via ``systemMessage`` so the user notices within minutes
 (rather than days, as happened in the 2026-05-17 power-event
 incident). The warning is throttled to once per session via a marker
 in ``STATE_DIR``.
+
+### `hook_session_end`
+
+```python
+def hook_session_end(data: dict, harness: str)
+```
+
+Session end hook: one final flush when a session exits cleanly.
+
+Closes the gap (#1341) where a session that never crosses ``SAVE_INTERVAL``
+on ``Stop`` and never triggers ``PreCompact`` exits with nothing saved —
+the common case for short, useful sessions.
+
+Why background instead of mine inline: Claude Code's hooks reference
+documents a default SessionEnd timeout of 1.5 seconds, and "timeouts set on
+plugin-provided hooks do not raise the budget"
+(https://code.claude.com/docs/en/hooks). A cold ``mempalace`` start alone
+exceeds 1.5s, so this handler must never mine in the hook foreground. The
+shell wrapper backgrounds it and returns immediately; the heavy capture is
+spawned *detached* via ``_ingest_transcript`` / ``_maybe_auto_ingest`` (both
+route through ``_spawn_mine`` / ``_detached_popen_kwargs``). On POSIX that
+detached child reliably outlives the session (verified). On Windows only the
+mine grandchild (spawned with detached-process flags) is designed to break
+away from the session; the backgrounded hook process and the in-process
+diary write are best-effort there (no Windows CI coverage yet). This
+honors the "background everything / hooks under 500ms" budget. SessionEnd
+has no decision control, so this only ever saves; it never emits a block
+payload.
 
 ### `hook_precompact`
 
