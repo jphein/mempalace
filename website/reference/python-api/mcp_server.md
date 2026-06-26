@@ -11,12 +11,13 @@ Tools (read):
   mempalace_list_wings      — all wings with drawer counts
   mempalace_list_rooms      — rooms within a wing
   mempalace_get_taxonomy    — full wing → room → count tree
-  mempalace_search          — semantic search, optional wing/room filter
+  mempalace_search          — semantic search, optional wing/room/source_file filter
   mempalace_check_duplicate — check if content already exists before filing
 
 Tools (write):
   mempalace_add_drawer      — file verbatim content into a wing/room
   mempalace_delete_drawer   — remove a drawer by ID
+  mempalace_delete_by_source — bulk-remove all drawers mined from one source_file
 
 Tools (maintenance):
   mempalace_reconnect       — force cache invalidation and reconnect after external writes
@@ -50,7 +51,7 @@ def tool_get_taxonomy()
 ### `tool_search`
 
 ```python
-def tool_search(query: str, limit: int = 15, wing: str = None, room: str = None, tags: list = None, max_distance: float = 1.5, min_similarity: float = None, context: str = None, candidate_strategy: str = 'hybrid', fusion_mode: str = 'convex', include_trace: bool = False)
+def tool_search(query: str, limit: int = 15, wing: str = None, room: str = None, tags: list = None, source_file: str = None, max_distance: float = 1.5, min_similarity: float = None, context: str = None, candidate_strategy: str = 'hybrid', fusion_mode: str = 'convex', include_trace: bool = False)
 ```
 
 ### `tool_check_duplicate`
@@ -215,7 +216,7 @@ additive layer over the strict wing/room hierarchy). See
 def tool_delete_drawer(drawer_id: str)
 ```
 
-Delete a single drawer by ID.
+Delete a single logical drawer by ID.
 
 ### `tool_mine`
 
@@ -251,6 +252,34 @@ The palace write lock is held by the miners themselves, so a concurrent mine
 surfaces as a structured already-running error. Orphan cleanup is not part of
 mining — use ``mempalace_sync`` for that.
 
+### `tool_delete_by_source`
+
+```python
+def tool_delete_by_source(source_file: str, dry_run: bool = True)
+```
+
+Delete every drawer whose ``source_file`` metadata matches exactly.
+
+Bulk cleanup for the contamination case in #1722, where benchmark/eval
+files (ShareGPT dumps, ``results_mempal_*.jsonl``, language config JSON)
+get mined into the same wing as real user data and drown out semantic
+search. Previously the only recourse was hand-rolled SQLite ``DELETE``
+against ``chroma.sqlite3``.
+
+Matching is exact on the stored ``source_file`` value and pushed down to
+the backend via ``delete(where=...)`` — the same idiom used by the miner
+and diary ingest paths — so there is no client-side id list and the
+SQLite "too many variables" limit cannot be hit, regardless of how many
+drawers share the source (the reporter had 55k).
+
+Also purges the matching closets (the AAAK index layer) so deleting the
+drawers doesn't strand stale index pointers at the dead source (#1722).
+
+Defaults to a dry run: it reports the drawer match count, the closet match
+count, and a small sample so the caller can confirm the blast radius before
+anything is removed. Pass ``dry_run=False`` to commit the deletion
+(irreversible).
+
 ### `tool_sync`
 
 ```python
@@ -265,7 +294,7 @@ Prune drawers whose source files are gitignored, missing, or moved (#1252).
 def tool_get_drawer(drawer_id: str)
 ```
 
-Fetch a single drawer by ID. Returns full content and metadata.
+Fetch a single logical drawer by ID. Returns full content and metadata.
 
 ### `tool_list_drawers`
 
@@ -273,7 +302,7 @@ Fetch a single drawer by ID. Returns full content and metadata.
 def tool_list_drawers(wing: str = None, room: str = None, tags: list = None, limit: int = 20, offset: int = 0)
 ```
 
-List drawers with pagination. Optional wing/room/tag filter.
+List logical drawers with pagination. Optional wing/room/tag filter.
 
 ### `tool_update_drawer`
 
@@ -281,7 +310,7 @@ List drawers with pagination. Optional wing/room/tag filter.
 def tool_update_drawer(drawer_id: str, content: str = None, wing: str = None, room: str = None, tags: list = None)
 ```
 
-Update an existing drawer's content and/or metadata.
+Update an existing logical drawer's content and/or metadata.
 
 ``tags`` semantics:
     * ``None`` — leave the existing tag list untouched.
@@ -481,6 +510,25 @@ Use after external scripts or CLI commands modify the palace database
 or replace ``knowledge_graph.sqlite3`` directly, which can leave the
 in-memory HNSW index stale or pin a closed-on-disk SQLite connection.
 
+### `tool_checkpoint`
+
+```python
+def tool_checkpoint(items, diary = None, dedup_threshold = 0.9)
+```
+
+Batch session save in a single call.
+
+Semantic-dedups each item, files the non-duplicates as drawers, then
+writes one diary entry. Collapses the per-item ``check_duplicate`` /
+``add_drawer`` / ``diary_write`` sequence into one MCP request so the
+host UI renders a single tool-call card (and keeps its spinner up for
+the whole save) instead of one card per underlying call.
+
+``items`` is a list of ``&#123;"wing", "room", "content"}`` dicts. ``diary``
+is an optional ``&#123;"agent_name", "entry", "topic"?, "wing"?}`` dict.
+Reuses the existing single-item handlers so dedup/idempotency/WAL
+behaviour is identical to calling them directly.
+
 ### `handle_request`
 
 ```python
@@ -495,9 +543,14 @@ def main()
 
 MCP server entry point for the ``mempalace-mcp`` console script.
 
-Side effect: pops ``PYTHONPATH`` from ``os.environ`` (see #1423) so
-any subprocess this server spawns inherits a clean env. Host
-applications that call ``main()`` programmatically should be aware
-that the parent process loses ``PYTHONPATH`` as well. Library imports
-(``import mempalace.searcher`` from a host app) do NOT trigger this
-side effect; only the CLI/MCP entry points pop the env var.
+Side effect: pops ``PYTHONPATH`` from ``os.environ`` (see #1423) so any
+subprocess this server spawns inherits a clean env. Host applications that
+call ``main()`` programmatically should be aware that the parent process
+loses ``PYTHONPATH`` as well. Library imports do NOT trigger this side
+effect; only the CLI/MCP entry point does.
+
+Transports:
+- ``stdio`` remains the default for existing Claude/MCP deployments.
+- ``http`` is opt-in and serves JSON-RPC POSTs at ``/mcp`` in the same
+  process, avoiding the long-lived stdio framing failure surface from
+  #1801.

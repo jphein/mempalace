@@ -28,9 +28,17 @@ HOOK_CONFIG = REPO_ROOT / ".claude-plugin" / "hooks" / "hooks.json"
 # invocation; fork's daemon path completes faster.)
 #
 # SessionStart is a cheap warmup ping — 5000ms is plenty.
+#
+# SessionEnd backgrounds all of its work in the shell wrapper — the foreground
+# only forks the detached child and returns near-instantly — so its timeout is
+# a generous backstop on a near-instant operation, not a synchronous-work bound
+# like Stop/PreCompact. A bound is still required (#1465) so a wedged fork can
+# never fall back to the 600s command default. The bash wrapper carries a small
+# native-unit timeout, so its bound is in the seconds scale, not ms.
 EVENT_TIMEOUT_BOUNDS: dict[str, tuple[int, int]] = {
     "SessionStart": (1000, 10000),
     "Stop": (10000, 30000),
+    "SessionEnd": (5, 30),
     "PreCompact": (10000, 90000),
 }
 
@@ -96,3 +104,22 @@ def test_no_unbounded_events_in_plugin_config(hook_config: dict) -> None:
         "Add a (floor, ceiling) entry to EVENT_TIMEOUT_BOUNDS in this test "
         "after deciding the worst-case freeze the event can tolerate."
     )
+
+
+def test_session_end_hook_uses_background_wrapper(hook_config: dict) -> None:
+    """Claude SessionEnd should use the backgrounding wrapper, not PreCompact."""
+    events = hook_config.get("hooks", {})
+
+    assert "SessionEnd" in events
+    assert "PreCompact" in events
+    assert events["SessionEnd"] != events["PreCompact"]
+
+    commands = [
+        hook["command"]
+        for entry in events["SessionEnd"]
+        for hook in entry.get("hooks", [])
+        if hook.get("type") == "command"
+    ]
+
+    assert any("mempal-session-end-hook.sh" in command for command in commands)
+    assert not any("mempal-precompact-hook.sh" in command for command in commands)

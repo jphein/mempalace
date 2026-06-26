@@ -75,6 +75,12 @@ def cmd_sync(args)
 
 Prune drawers whose source files are gitignored, deleted, or moved (#1252).
 
+### `cmd_daemon`
+
+```python
+def cmd_daemon(args)
+```
+
 ### `cmd_search`
 
 ```python
@@ -450,6 +456,10 @@ retired alongside the recovery collection (PR #8 / row 32).
 Closes Copilot finding on jphein/mempalace#8: docstring claimed
 only "rebuild" while the function continued to dispatch
 ``max-seq-id`` based on ``args.mode``.
+
+On a successful rebuild the palace SQLite file is VACUUMed and the
+FTS5 index is rebuilt, so the next repair's integrity preflight reads
+a consistent database (#1747).
 
 ### `cmd_hook`
 

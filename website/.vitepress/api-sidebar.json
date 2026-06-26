@@ -60,6 +60,10 @@
         "link": "/reference/python-api/cross_encoder_rerank"
       },
       {
+        "text": "mempalace.daemon",
+        "link": "/reference/python-api/daemon"
+      },
+      {
         "text": "mempalace.dedup",
         "link": "/reference/python-api/dedup"
       },
@@ -106,6 +110,10 @@
       {
         "text": "mempalace.hallways",
         "link": "/reference/python-api/hallways"
+      },
+      {
+        "text": "mempalace.hook_shell",
+        "link": "/reference/python-api/hook_shell"
       },
       {
         "text": "mempalace.hooks_cli",
@@ -252,6 +260,10 @@
         "link": "/reference/python-api/searcher"
       },
       {
+        "text": "mempalace.service",
+        "link": "/reference/python-api/service"
+      },
+      {
         "text": "mempalace.sources",
         "link": "/reference/python-api/sources"
       },
@@ -282,6 +294,10 @@
       {
         "text": "mempalace.version",
         "link": "/reference/python-api/version"
+      },
+      {
+        "text": "mempalace.wal",
+        "link": "/reference/python-api/wal"
       },
       {
         "text": "mempalace.write_sanitizer",

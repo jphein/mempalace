@@ -96,6 +96,7 @@ export default withMermaid(
               { text: 'OpenClaw Skill', link: '/guide/openclaw' },
               { text: 'Local Models', link: '/guide/local-models' },
               { text: 'Auto-Save Hooks', link: '/guide/hooks' },
+              { text: 'Cursor IDE Hooks', link: '/guide/cursor-hooks' },
               { text: 'Configuration', link: '/guide/configuration' },
             ],
           },

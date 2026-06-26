@@ -165,6 +165,31 @@ def print_sqlite_integrity_abort(palace_path: str, errors: list[str]) -> None
 
 Print a clear repair abort message for SQLite-layer corruption.
 
+### `index_read_recovery_guidance`
+
+```python
+def index_read_recovery_guidance() -> str
+```
+
+Recovery guidance for a failed drawer-index read in the legacy paths.
+
+Both ``cmd_repair`` (cli.py) and :func:`rebuild_index` read the drawers
+collection via ``Collection.count()`` as their first step. The common
+reason that read raises is the chromadb compactor failing to apply the
+WAL into the HNSW segment (``InternalError: Failed to apply logs to the
+hnsw segment writer``, issues #1308 / #1843): the on-disk HNSW index is
+corrupt while the rows stay intact in ``chroma.sqlite3``, so
+:func:`rebuild_from_sqlite` (``repair --mode from-sqlite``) recovers them
+and re-mining would needlessly drop drawers added through the MCP server
+and diary entries that have no source file.
+
+The other thing that strands this read is a live MemPalace server or
+mine still holding the palace open, so the guidance says to stop it and
+retry before assuming corruption. Worded conditionally because the bare
+``except Exception`` cannot prove which case it caught. Returned as a
+pre-indented block so the ``print``-based CLI path and the
+``progress``-callable rebuild path emit it unchanged.
+
 ### `maybe_repair_poisoned_max_seq_id_before_rebuild`
 
 ```python

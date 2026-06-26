@@ -319,6 +319,27 @@ this reports the server-side embedder so the same identity rules apply
 (RFC 001). Defaults to ``None`` — the collection is embedded by the
 injected/core embedder, and the caller supplies the current identity.
 
+#### `get_all_metadata`
+
+```python
+def get_all_metadata(self, where: Optional[dict] = None) -> list[dict]
+```
+
+Return every matching record's metadata in one logical pass (#1796).
+
+Default implementation pages through :meth:`get` using
+``limit``/``offset`` -- correct for backends with a real server-side
+cursor (e.g. Chroma's SQL OFFSET), and the same shape callers already
+relied on before this method existed.
+
+Backends whose ``get(limit=, offset=)`` is implemented by fully
+materializing a result set and then Python-slicing it (no true
+server-side cursor) MUST override this method to walk their native
+cursor exactly once instead. Calling the default implementation on
+such a backend is O(n^2) in collection size: each page re-walks the
+entire collection just to discard everything outside the requested
+slice. See issue #1796.
+
 #### `maintenance_state`
 
 ```python

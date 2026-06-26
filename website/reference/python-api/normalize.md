@@ -11,6 +11,9 @@ Supported:
     - Claude Code JSONL (with tool_use/tool_result block capture)
     - OpenAI Codex CLI JSONL
     - Gemini CLI JSONL (~/.gemini/tmp/&lt;project_hash>/chats/session-*.jsonl)
+    - Pi agent JSONL
+    - Gemini CLI / Google AI Studio JSON sessions (contents / messages / flat list)
+    - Continue.dev session JSON (~/.continue/sessions/*.json)
     - Slack JSON export
     - Plain text (pass through for paragraph chunking)
 

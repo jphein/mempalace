@@ -33,6 +33,7 @@ import argparse
 import os
 import shutil
 import sqlite3
+import stat
 import time
 from collections import defaultdict
 from contextlib import closing
@@ -43,6 +44,7 @@ from typing import Callable, Iterator, Optional
 from chromadb.errors import NotFoundError as ChromaNotFoundError
 
 from .backends.chroma import ChromaBackend, hnsw_capacity_status
+from .config import sqlite_read_uri
 
 
 COLLECTION_NAME = "mempalace_drawers"
@@ -54,6 +56,78 @@ REPAIR_TEMP_COLLECTION = f"{COLLECTION_NAME}__repair_tmp"
 # cross-palace AAAK lookups. Drawer collection name comes from config
 # (see ``_recoverable_collections``).
 CLOSETS_COLLECTION_NAME = "mempalace_closets"
+
+
+def _no_follow_flag() -> int:
+    return getattr(os, "O_NOFOLLOW", 0)
+
+
+def _open_regular_file_no_follow(path: str) -> int:
+    if os.path.islink(path):
+        raise RuntimeError(f"Refusing symlinked file: {path}")
+    fd = os.open(path, os.O_RDONLY | _no_follow_flag())
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise RuntimeError(f"Refusing non-regular file: {path}")
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
+
+
+def _write_text_replace_no_follow(path: str, text: str) -> None:
+    directory = os.path.dirname(path) or "."
+    basename = os.path.basename(path)
+    tmp_path = os.path.join(
+        directory,
+        f".{basename}.{os.getpid()}.{int(time.time() * 1_000_000)}.tmp",
+    )
+    fd = os.open(
+        tmp_path,
+        os.O_WRONLY | os.O_CREAT | os.O_EXCL | _no_follow_flag(),
+        0o600,
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.replace(tmp_path, path)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+
+def _copy_file_no_follow(src: str, dst: str, *, replace: bool = False) -> None:
+    src_fd = _open_regular_file_no_follow(src)
+    try:
+        src_f = os.fdopen(src_fd, "rb")
+    except Exception:
+        os.close(src_fd)
+        raise
+    # ``src_f`` now owns ``src_fd`` and closes it on exit.
+    with src_f:
+        flags = os.O_WRONLY | os.O_CREAT | _no_follow_flag()
+        flags |= os.O_TRUNC if replace else os.O_EXCL
+        dst_fd = os.open(dst, flags, 0o600)
+        try:
+            dst_f = os.fdopen(dst_fd, "wb")
+        except Exception:
+            os.close(dst_fd)
+            raise
+        with dst_f:
+            shutil.copyfileobj(src_f, dst_f)
+    try:
+        shutil.copystat(src, dst, follow_symlinks=False)
+    except OSError:
+        pass
+
+
+def _unique_backup_path(path: str, label: str) -> str:
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return f"{path}.{label}.{stamp}.{os.getpid()}"
 
 
 def _drawers_collection_name() -> str:
@@ -359,9 +433,10 @@ def scan_palace(palace_path=None, only_wing=None, collection_name: Optional[str]
     print(f"  BAD:  {len(bad_set):,}  ({len(bad_set) / max(len(all_ids), 1) * 100:.1f}%)")
 
     bad_file = os.path.join(palace_path, "corrupt_ids.txt")
-    with open(bad_file, "w") as f:
-        for bid in sorted(bad_set):
-            f.write(bid + "\n")
+    _write_text_replace_no_follow(
+        bad_file,
+        "".join(f"{bid}\n" for bid in sorted(bad_set)),
+    )
     print(f"\n  Bad IDs written to: {bad_file}")
     return good_set, bad_set
 
@@ -520,7 +595,7 @@ def sqlite_drawer_count(palace_path: str, collection_name: Optional[str] = None)
     try:
         import sqlite3
 
-        conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
+        conn = sqlite3.connect(sqlite_read_uri(sqlite_path), uri=True)
         try:
             row = conn.execute(
                 """
@@ -560,7 +635,7 @@ def sqlite_integrity_errors(palace_path: str) -> list[str]:
         return []
 
     try:
-        with sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True) as conn:
+        with sqlite3.connect(sqlite_read_uri(sqlite_path), uri=True) as conn:
             rows = conn.execute("PRAGMA quick_check").fetchall()
     except sqlite3.Error as e:
         return [f"PRAGMA quick_check failed: {e}"]
@@ -605,6 +680,40 @@ def print_sqlite_integrity_abort(palace_path: str, errors: list[str]) -> None:
     print("    4. Recreate the FTS5 virtual table from intact embedding_metadata rows.")
     print("    5. Verify `PRAGMA integrity_check` returns `ok`.")
     print("    6. Re-run `mempalace repair --yes`.")
+
+
+def index_read_recovery_guidance() -> str:
+    """Recovery guidance for a failed drawer-index read in the legacy paths.
+
+    Both ``cmd_repair`` (cli.py) and :func:`rebuild_index` read the drawers
+    collection via ``Collection.count()`` as their first step. The common
+    reason that read raises is the chromadb compactor failing to apply the
+    WAL into the HNSW segment (``InternalError: Failed to apply logs to the
+    hnsw segment writer``, issues #1308 / #1843): the on-disk HNSW index is
+    corrupt while the rows stay intact in ``chroma.sqlite3``, so
+    :func:`rebuild_from_sqlite` (``repair --mode from-sqlite``) recovers them
+    and re-mining would needlessly drop drawers added through the MCP server
+    and diary entries that have no source file.
+
+    The other thing that strands this read is a live MemPalace server or
+    mine still holding the palace open, so the guidance says to stop it and
+    retry before assuming corruption. Worded conditionally because the bare
+    ``except Exception`` cannot prove which case it caught. Returned as a
+    pre-indented block so the ``print``-based CLI path and the
+    ``progress``-callable rebuild path emit it unchanged.
+    """
+    return (
+        "  If a MemPalace server or mine is still running against this palace,\n"
+        "  stop it and retry. Otherwise the drawer index is likely corrupt\n"
+        "  (for example a failed chromadb HNSW compaction) while your drawer\n"
+        "  rows remain in chroma.sqlite3. Rebuild the index from SQLite rather\n"
+        "  than re-mining:\n"
+        "\n"
+        "      mempalace repair --mode from-sqlite --archive-existing\n"
+        "\n"
+        "  (Re-mining from source files would drop drawers added via the MCP\n"
+        "  server and diary entries, which have no source file.)"
+    )
 
 
 def maybe_repair_poisoned_max_seq_id_before_rebuild(
@@ -759,6 +868,19 @@ def _vacuum_and_rebuild_fts5(palace_path: str, progress=print) -> None:
         progress(f"  Warning: post-repair cleanup failed (non-fatal): {exc}")
 
 
+def _post_rebuild_cleanup(palace_path: str, backend: "ChromaBackend", progress=print) -> None:
+    """Close cached chroma handles, then VACUUM and rebuild the FTS5 index.
+
+    Shared epilogue for the two full-rebuild paths (``rebuild_index`` and the
+    CLI legacy ``cmd_repair``), so neither can drift out of the post-run
+    cleanup again (issues #1517, #1747). ChromaDB's PersistentClient keeps
+    chroma.sqlite3 open and VACUUM needs exclusive access, so the handles
+    are released first.
+    """
+    _close_chroma_handles(palace_path, backend=backend)
+    _vacuum_and_rebuild_fts5(palace_path, progress=progress)
+
+
 def rebuild_index(
     palace_path=None,
     confirm_truncation_ok: bool = False,
@@ -822,7 +944,7 @@ def rebuild_index(
         total = col.count()
     except Exception as e:
         progress(f"  Error reading palace: {e}")
-        progress("  Palace may need to be re-mined from source files.")
+        progress(index_read_recovery_guidance())
         return
 
     progress(f"  Drawers found: {total}")
@@ -859,10 +981,10 @@ def rebuild_index(
 
     # Back up ONLY the SQLite database, not the bloated HNSW files
     sqlite_path = os.path.join(palace_path, "chroma.sqlite3")
-    backup_path = sqlite_path + ".backup"
+    backup_path = _unique_backup_path(sqlite_path, "backup")
     if os.path.exists(sqlite_path):
         progress(f"  Backing up chroma.sqlite3 ({os.path.getsize(sqlite_path) / 1e6:.0f} MB)...")
-        shutil.copy2(sqlite_path, backup_path)
+        _copy_file_no_follow(sqlite_path, backup_path)
         progress(f"  Backup: {backup_path}")
 
     # Rebuild with correct HNSW settings
@@ -887,7 +1009,7 @@ def rebuild_index(
             try:
                 _close_chroma_handles(palace_path, backend=backend)
                 _delete_collection_if_exists(backend, palace_path, collection_name)
-                shutil.copy2(backup_path, sqlite_path)
+                _copy_file_no_follow(backup_path, sqlite_path, replace=True)
                 progress("  Backup restored. Palace is back to pre-repair state.")
             except Exception as restore_error:
                 progress(f"  Backup restore failed: {restore_error}")
@@ -898,8 +1020,7 @@ def rebuild_index(
             print("  Live collection was not replaced; leaving the original palace untouched.")
         raise
 
-    _close_chroma_handles(palace_path, backend=backend)
-    _vacuum_and_rebuild_fts5(palace_path, progress=progress)
+    _post_rebuild_cleanup(palace_path, backend=backend, progress=progress)
 
     print(f"\n  Repair complete. {filed} drawers rebuilt.")
     print("  HNSW index is now clean with cosine distance metric.")
@@ -1051,7 +1172,7 @@ def extract_via_sqlite(palace_path: str, collection_name: str) -> Iterator[tuple
     if not os.path.isfile(sqlite_path):
         return
 
-    conn = sqlite3.connect(f"file:{sqlite_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(sqlite_read_uri(sqlite_path), uri=True)
     try:
         seg_row = conn.execute(
             """
@@ -1095,6 +1216,40 @@ def extract_via_sqlite(palace_path: str, collection_name: str) -> Iterator[tuple
             yield emb_id, doc, kv
     finally:
         conn.close()
+
+
+def _preserve_knowledge_graph_sqlite(source_palace: str, dest_palace: str) -> list[str]:
+    """Copy KG SQLite sidecars when rebuilding a palace from chroma.sqlite3.
+
+    rebuild_from_sqlite reconstructs Chroma collections into a fresh
+    destination directory. The knowledge graph is a separate SQLite database,
+    so it must be copied explicitly or the repair succeeds while silently
+    dropping KG state (#1816).
+    """
+
+    copied: list[str] = []
+
+    for suffix in ("", "-wal", "-shm"):
+        filename = f"knowledge_graph.sqlite3{suffix}"
+        src = os.path.join(source_palace, filename)
+        dst = os.path.join(dest_palace, filename)
+
+        if not os.path.isfile(src):
+            continue
+        if os.path.abspath(src) == os.path.abspath(dst):
+            continue
+
+        os.makedirs(dest_palace, exist_ok=True)
+        try:
+            _copy_file_no_follow(src, dst, replace=True)
+        except RuntimeError:
+            continue
+        copied.append(filename)
+
+    if copied:
+        print(" Preserved knowledge graph: " + ", ".join(copied))
+
+    return copied
 
 
 def rebuild_from_sqlite(
@@ -1243,6 +1398,7 @@ def rebuild_from_sqlite(
             )
 
     os.makedirs(dest_palace, exist_ok=True)
+    _preserve_knowledge_graph_sqlite(source_palace, dest_palace)
 
     # Backend lifetime is wrapped in try/finally so the dest palace's
     # PersistentClient handle (opened lazily inside ``create_collection``
@@ -1346,7 +1502,15 @@ def status(palace_path=None, collection_name: Optional[str] = None) -> dict:
             print(f"    note:           {info['message']}")
 
     if drawers["diverged"] or closets["diverged"]:
-        print("\n  Recommended: run `mempalace repair` to rebuild the index.")
+        print(
+            "\n  Recommended: rebuild the index from SQLite rather than re-mining:\n"
+            "\n      mempalace repair --mode from-sqlite --archive-existing\n"
+            "\n  A diverged index usually means the HNSW segment is out of sync with\n"
+            "  chroma.sqlite3 (for example a failed chromadb HNSW compaction). The\n"
+            "  drawer rows are intact in SQLite, so --mode from-sqlite recovers them.\n"
+            "  Do not re-mine from source files: that would drop drawers added via\n"
+            "  the MCP server and diary entries, which have no source file (#1843)."
+        )
     print()
     return {"drawers": drawers, "closets": closets}
 

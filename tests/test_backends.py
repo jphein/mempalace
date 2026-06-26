@@ -1328,6 +1328,33 @@ def test_fix_blob_seq_ids_writes_marker_when_already_integer(tmp_path):
     assert marker.is_file(), "marker must be written even when no BLOBs found"
 
 
+def test_fix_blob_seq_ids_closes_sqlite_connection(tmp_path, monkeypatch):
+    """The migration closes sqlite connections after the pre-open probe."""
+    db_path = tmp_path / "chroma.sqlite3"
+    with closing(sqlite3.connect(str(db_path))) as conn:
+        conn.execute("CREATE TABLE embeddings (rowid INTEGER PRIMARY KEY, seq_id INTEGER)")
+        conn.execute("INSERT INTO embeddings (seq_id) VALUES (42)")
+        conn.commit()
+
+    closed = []
+    real_connect = sqlite3.connect
+
+    class TrackingConnection(sqlite3.Connection):
+        def close(self):
+            closed.append(True)
+            super().close()
+
+    def tracking_connect(*args, **kwargs):
+        kwargs["factory"] = TrackingConnection
+        return real_connect(*args, **kwargs)
+
+    monkeypatch.setattr("mempalace.backends.chroma.sqlite3.connect", tracking_connect)
+
+    _fix_blob_seq_ids(str(tmp_path))
+
+    assert closed == [True]
+
+
 def test_fix_blob_seq_ids_skips_sqlite_when_marker_present(tmp_path):
     """When the marker exists, ``_fix_blob_seq_ids`` does not open sqlite3.
 
@@ -2343,7 +2370,7 @@ def test_explain_ef_mismatch_recognizes_chromadb_conflict():
     assert msg is not None
     assert "/tmp/palace.db" in msg
     assert "MEMPALACE_EMBEDDING_MODEL" in msg
-    assert "rebuild-index" in msg
+    assert "mempalace --palace /tmp/palace.db repair rebuild-index" in msg
 
 
 def test_explain_ef_mismatch_returns_none_for_unrelated_errors():
