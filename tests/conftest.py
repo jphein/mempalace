@@ -97,6 +97,10 @@ def _reset_mcp_cache():
                     mcp_server._collection_cache_palace = None
                 if hasattr(mcp_server, "_collection_open_error"):
                     mcp_server._collection_open_error = None
+                if hasattr(mcp_server, "_palace_db_inode"):
+                    mcp_server._palace_db_inode = 0
+                if hasattr(mcp_server, "_palace_db_mtime"):
+                    mcp_server._palace_db_mtime = 0.0
                 # The metadata cache is keyed by nothing but TTL, so a prior
                 # test's palace contents survive into the next function-scoped
                 # palace and pollute tag/taxonomy reads. Clear it too.
