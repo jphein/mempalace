@@ -1325,7 +1325,7 @@ def _fix_blob_seq_ids(palace_path: str) -> None:
         return
     try:
         conn = sqlite3.connect(db_path)
-        with conn, contextlib.closing(conn):
+        try:
             try:
                 rows = conn.execute(
                     "SELECT rowid, seq_id FROM embeddings WHERE typeof(seq_id) = 'blob'"
@@ -1346,6 +1346,8 @@ def _fix_blob_seq_ids(palace_path: str) -> None:
                 conn.executemany("UPDATE embeddings SET seq_id = ? WHERE rowid = ?", updates)
                 logger.info("Fixed %d BLOB seq_ids in embeddings", len(updates))
                 conn.commit()
+        finally:
+            conn.close()
     except Exception:
         logger.exception("Could not fix BLOB seq_ids in %s", db_path)
         return
