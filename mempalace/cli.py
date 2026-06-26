@@ -5841,8 +5841,6 @@ def main():
             "parallelizes prep on multi-core cold mines."
         ),
     )
-    from . import miner as _miner_for_default
-
     p_mine.add_argument(
         "--max-chunks-per-file",
         type=int,
