@@ -70,9 +70,7 @@ def _select_tool(signals: SignalSet) -> Optional[MCPCall]:
 
     # Priority 1.5: Periodic depth refresh — a broad project-scoped pull to
     # re-anchor context mid-session. Sits just below task resumption and above
-    # every content-derived signal (explicit/entity/temporal), per spec §1.
-    # Note: this means a depth turn (every 15th) outranks an explicit recall
-    # ask landing on the same turn — see PR notes on the ordering tradeoff.
+    # every content-derived signal (explicit/entity/temporal).
     if signals.depth_fire:
         query = "session context {}".format(signals.project_wing).strip()
         args = {"query": query, "limit": 3}
