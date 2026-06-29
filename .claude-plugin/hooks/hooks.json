@@ -44,6 +44,17 @@
           }
         ]
       }
+    ],
+    "PostCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /home/jp/Projects/palace-daemon/clients/hook.py --hook postcompact --harness claude-code",
+            "timeout": 10000
+          }
+        ]
+      }
     ]
   }
 }
