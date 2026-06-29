@@ -268,6 +268,7 @@ def _serialize_signals(signals):
         "temporal": [{"name": s.name, "phrase": s.phrase} for s in signals.temporal],
         "resumption": signals.resumption,
         "explicit": signals.explicit,
+        "depth_fire": signals.depth_fire,
         "total_score": signals.total_score,
         "project_wing": signals.project_wing,
     }

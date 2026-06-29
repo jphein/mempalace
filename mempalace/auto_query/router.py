@@ -68,6 +68,16 @@ def _select_tool(signals: SignalSet) -> Optional[MCPCall]:
             },
         )
 
+    # Priority 1.5: Periodic depth refresh — a broad project-scoped pull to
+    # re-anchor context mid-session. Sits just below task resumption and above
+    # every content-derived signal (explicit/entity/temporal).
+    if signals.depth_fire:
+        query = "session context {}".format(signals.project_wing).strip()
+        args = {"query": query, "limit": 3}
+        if signals.project_wing:
+            args["wing"] = signals.project_wing
+        return MCPCall(tool="mempalace_search", args=args)
+
     # Priority 2: Explicit recall hint
     if signals.explicit:
         query = _sanitize_for_search(signals.query_text)

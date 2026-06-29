@@ -45,6 +45,7 @@ class SignalSet:
     total_score: int
     project_wing: str = ""
     query_text: str = ""
+    depth_fire: bool = False  # periodic depth refresh fired this turn
 
 
 @dataclasses.dataclass
