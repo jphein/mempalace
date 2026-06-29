@@ -92,7 +92,7 @@ class TestEntitySignals:
         assert len(matched) == 1
         assert matched[0].score == 2
 
-    def test_unknown_entity_scores_0(self):
+    def test_unknown_entity_scores_1(self):
         signals = _extract_entity_signals(
             "Tell me about Xylophone",
             _session(),
@@ -101,7 +101,8 @@ class TestEntitySignals:
         )
         matched = [s for s in signals if s.name == "Xylophone"]
         assert len(matched) == 1
-        assert matched[0].score == 0
+        # Bumped 0 -> 1: a bare capitalized name is a weak recall signal.
+        assert matched[0].score == 1
 
     def test_dedup_queried_entities(self):
         """Entities already in session_state.queried_entities are skipped."""
@@ -212,6 +213,36 @@ class TestTemporalSignals:
     def test_earlier_today(self):
         signals = _extract_temporal_signals("earlier today we pushed a fix")
         assert len(signals) >= 1
+
+    # Broadened patterns (spec change 3) ------------------------------------
+
+    def test_recently(self):
+        signals = _extract_temporal_signals("we changed that approach recently")
+        assert any("recently" in s.phrase.lower() for s in signals)
+
+    def test_a_while_ago(self):
+        signals = _extract_temporal_signals("we set this up a while ago")
+        assert any("while ago" in s.phrase.lower() for s in signals)
+
+    def test_few_days_ago(self):
+        signals = _extract_temporal_signals("we deployed it a few days ago")
+        assert any("few days ago" in s.phrase.lower() for s in signals)
+
+    def test_few_days_ago_without_a(self):
+        signals = _extract_temporal_signals("merged that fix few days ago")
+        assert any("few days ago" in s.phrase.lower() for s in signals)
+
+    def test_last_sprint(self):
+        signals = _extract_temporal_signals("we planned this last sprint")
+        assert any("last sprint" in s.phrase.lower() for s in signals)
+
+    def test_back_when(self):
+        signals = _extract_temporal_signals("back when we used the old schema")
+        assert any("back when" in s.phrase.lower() for s in signals)
+
+    def test_used_to(self):
+        signals = _extract_temporal_signals("we used to do it differently")
+        assert any("used to" in s.phrase.lower() for s in signals)
 
     def test_no_match_time_complexity(self):
         """'the time complexity' must NOT match temporal signals."""
@@ -400,8 +431,10 @@ class TestCompounding:
             set(),
             {"Alice"},
         )
-        # Alice: score 2, no temporal, no resumption, no explicit
-        assert result.total_score == 2
+        # "Alice": score 2 (known entity); "Tell": score 1 (unknown
+        # capitalized word, post score-0->1 bump). No temporal/resumption/
+        # explicit, no compound bonus. 2 + 1 = 3.
+        assert result.total_score == 3
 
     def test_total_score_temporal_only(self):
         """Temporal only — no compound bonus."""
@@ -452,6 +485,51 @@ class TestCompounding:
         assert result.explicit is True
         assert len(result.entity) >= 1
         assert len(result.temporal) >= 1
+
+
+# ---------------------------------------------------------------------------
+# Depth signal (periodic refresh)
+# ---------------------------------------------------------------------------
+
+
+class TestDepthSignal:
+    """Tests for the periodic depth-refresh signal — fires every 15 turns."""
+
+    def _result(self, turn):
+        # Content-free prompt so only the turn count can set depth_fire.
+        return extract_signals("ok", _session(turn=turn), "wing_test", set())
+
+    def test_fires_on_turn_15(self):
+        assert self._result(15).depth_fire is True
+
+    def test_fires_on_turn_30(self):
+        assert self._result(30).depth_fire is True
+
+    def test_fires_on_turn_45(self):
+        assert self._result(45).depth_fire is True
+
+    def test_no_fire_turn_1(self):
+        assert self._result(1).depth_fire is False
+
+    def test_no_fire_turn_14(self):
+        assert self._result(14).depth_fire is False
+
+    def test_no_fire_turn_16(self):
+        assert self._result(16).depth_fire is False
+
+    def test_no_fire_turn_0(self):
+        """Turn 0 is the pre-session sentinel: 0 % 15 == 0 but the > 0 guard
+        must keep depth_fire False."""
+        assert self._result(0).depth_fire is False
+
+    def test_depth_adds_4_to_score(self):
+        """A depth turn with no other signal scores exactly 4 (balanced gate)."""
+        result = self._result(15)
+        assert result.total_score == 4
+
+    def test_depth_default_false(self):
+        """Non-depth turns leave depth_fire at its default False."""
+        assert self._result(7).depth_fire is False
 
 
 # ---------------------------------------------------------------------------

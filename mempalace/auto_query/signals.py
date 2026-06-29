@@ -14,12 +14,17 @@ _ENTITY_REGEX = re.compile(r"\b([A-Z][a-zA-Z0-9_]+(?:\s+[A-Z][a-zA-Z0-9_]+)*)\b"
 
 # Temporal signal patterns (spec section 1.1.2)
 _TEMPORAL_RE = re.compile(
-    r"\b(last\s+(?:time|week|session|night|run)"
+    r"\b(last\s+(?:time|week|session|night|run|sprint)"
     r"|earlier\s+(?:today|this\s+week)"
     r"|yesterday"
     r"|that\s+time\s+we"
     r"|when\s+(?:did|we)\s+"
     r"|previously"
+    r"|recently"
+    r"|a\s+while\s+ago"
+    r"|(?:a\s+)?few\s+days\s+ago"
+    r"|back\s+when"
+    r"|used\s+to"
     r"|before\s+we)\b",
     re.IGNORECASE,
 )
@@ -116,6 +121,14 @@ def extract_signals(
     if entity_signals and temporal_signals:
         total += 1
 
+    # Periodic depth refresh — every 15 turns, auto-fire regardless of message
+    # content to counteract mid-context attention degradation ("lost in the
+    # middle"). turn_index > 0 guards the turn-0 sentinel so it never fires
+    # before the session has a real turn.
+    depth_fire = session_state.turn_index > 0 and session_state.turn_index % 15 == 0
+    if depth_fire:
+        total += 4  # enough to fire in balanced mode (threshold 4)
+
     return SignalSet(
         entity=entity_signals,
         temporal=temporal_signals,
@@ -124,6 +137,7 @@ def extract_signals(
         total_score=total,
         project_wing=project_wing,
         query_text=text,
+        depth_fire=depth_fire,
     )
 
 
@@ -193,8 +207,10 @@ def _score_entity(
     if known_entities and name in known_entities:
         return Signal(kind="entity", name=name, score=2)
 
-    # Unknown entity — score 0
-    return Signal(kind="entity", name=name, score=0)
+    # Unknown entity — score 1. A bare capitalized name is a weak-but-real
+    # recall signal: two unknown entities reach the aggressive threshold (2),
+    # four reach balanced (4). (Was 0, which made unknown names invisible.)
+    return Signal(kind="entity", name=name, score=1)
 
 
 def _entity_to_wing_slugs(name):

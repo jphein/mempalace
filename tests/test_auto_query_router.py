@@ -275,6 +275,63 @@ class TestPriority:
 
 
 # ---------------------------------------------------------------------------
+# TestDepthRoute
+# ---------------------------------------------------------------------------
+
+
+class TestDepthRoute:
+    """Priority 1.5: periodic depth refresh -> project-scoped search."""
+
+    def test_depth_routes_to_search(self):
+        signals = _empty_signals(score=4, project_wing="wing_test")
+        signals.depth_fire = True
+        result = pick_tool(signals, "balanced", _session())
+
+        assert result is not None
+        assert result.tool == "mempalace_search"
+        assert result.args["wing"] == "wing_test"
+        assert result.args["limit"] == 3
+        assert "session context" in result.args["query"]
+
+    def test_resumption_overrides_depth(self):
+        """Task resumption (Priority 1) still wins over depth (1.5)."""
+        signals = _empty_signals(score=8, project_wing="wing_test")
+        signals.resumption = True
+        signals.depth_fire = True
+        result = pick_tool(signals, "balanced", _session())
+
+        assert result.tool == "mempalace_diary_read"
+
+    def test_depth_overrides_explicit(self):
+        """Per spec ordering, depth (1.5) outranks an explicit ask (2) landing
+        on the same turn. Guards against an accidental reorder."""
+        signals = _empty_signals(score=9, query_text="remind me about X?", project_wing="wing_test")
+        signals.depth_fire = True
+        signals.explicit = True
+        result = pick_tool(signals, "balanced", _session())
+
+        assert result.tool == "mempalace_search"
+        assert "session context" in result.args["query"]
+
+    def test_depth_no_wing_omits_wing_arg(self):
+        """Empty project wing -> trimmed query, no wing arg."""
+        signals = _empty_signals(score=4, project_wing="")
+        signals.depth_fire = True
+        result = pick_tool(signals, "balanced", _session())
+
+        assert result.tool == "mempalace_search"
+        assert result.args["query"] == "session context"
+        assert "wing" not in result.args
+
+    def test_depth_below_threshold_skips(self):
+        """If the score is gated out, depth doesn't fire either."""
+        signals = _empty_signals(score=3, project_wing="wing_test")
+        signals.depth_fire = True
+        # conservative threshold is 6; score 3 is below it
+        assert pick_tool(signals, "conservative", _session()) is None
+
+
+# ---------------------------------------------------------------------------
 # TestEntitySelection
 # ---------------------------------------------------------------------------
 
