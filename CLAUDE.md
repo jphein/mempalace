@@ -103,6 +103,15 @@ Two save modes, controlled by `hook_silent_save` in `~/.mempalace/config.json`:
 - **Stop hook**: fires every 15 messages, saves diary entry + auto-mines transcript
 - **PreCompact hook**: emergency save before context compaction, auto-mines transcript, finds transcript by session_id fallback
 
+## Compact instructions
+
+When compacting this conversation, preserve:
+- MemPalace search results and drawer IDs referenced in this session
+- Active dream team agent names, assignments, worktree paths, and task status
+- Any structured session state, pinboard content, or roster files
+- The current wing context and palace connection state
+- Specific mempalace CLI commands or search queries that produced results
+
 ## Testing
 
 Always run `python -m pytest tests/ -x -q` after changes. Benchmark and stress tests are excluded by default (use `-m benchmark` or `-m stress` to include).
