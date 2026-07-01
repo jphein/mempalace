@@ -18,6 +18,60 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-07-01]
+
+
+### Fixed
+
+
+- **Auto-query firing fixes: frozen turn counter, dead wing scoring, lowercase entities, turn-1 cadence** ([`fad3e27`](https://github.com/techempower-org/mempalace/commit/fad3e27))
+  Auto-query was injecting on only ~1.7% of real prompts because of
+  three defects, not a threshold preference (found by a read-only
+  investigation against the 3,935-decision corpus). The hook derived
+  its session id from the never-set ``CLAUDE_SESSION_ID`` env var, so
+  the time-based fallback minted a fresh id every prompt and froze the
+  turn counter at 1 — the periodic depth signal could never fire. Wing
+  scoring was dead in production: ``mempalace_list_wings`` over
+  ``/mcp`` scans every drawer and times out, so ``known_wings`` was
+  always empty and the +3/+2 bonuses never fired. And the capital-only
+  entity regex made lowercase project names invisible.
+
+  Fixes: session id now comes from the hook's stdin JSON (fallback
+  ``CLAUDE_CODE_SESSION_ID``); wings are fetched from the fast
+  ``/status/fast`` route and cached to disk so scoring survives a
+  sleeping daemon; a lowercase wing/alias pass (word-boundary,
+  min-length 5, common-word blocklist) registers terse lowercase
+  mentions; path/orchestration stopwords stop junk fires on
+  ``~/Projects`` fragments; the depth refresh fires on turn 1 and
+  every 10 turns (most sessions are short — turn-15 left the majority
+  with zero recall); an optional known-entities registry is loaded
+  when present. The firing threshold is intentionally unchanged.
+
+  *Tests:* 21 tests (TestDepthSignal, TestLowercaseWingMatch, TestPathAndOrchestrationNoise, TestWingCache, TestKnownEntitiesLoad, TestSessionIdFromStdin)
+  *Files:* `mempalace/auto_query/signals.py`, `mempalace/auto_query/__main__.py`, `hooks/palace-auto-query.sh`, `tests/test_auto_query_signals.py`, `tests/test_auto_query_main.py`, `tests/test_auto_query_hook.py`
+
+
+## [2026-06-29]
+
+
+### Added
+
+
+- **Auto-query: periodic depth signal, unknown-entity 0->1 bump, broader temporal patterns** ([`864d7a4`](https://github.com/techempower-org/mempalace/commit/864d7a4))
+  Added a content-independent periodic depth signal to auto-query: a
+  broad project-scoped palace pull that re-anchors context mid-session
+  to counteract "lost in the middle" attention degradation. Routed at
+  priority 1.5 (below task resumption, above content-derived signals).
+  Also bumped unknown-entity score 0 -> 1 (a bare capitalized name is
+  a weak-but-real recall signal) and broadened the temporal patterns
+  (recently, a while ago, few days ago, last sprint, back when, used
+  to). Landed with the PostCompact timeout-bounds fix for the plugin
+  hook config.
+
+  *Tests:* 26 tests (TestDepthSignal, TestDepthRoute, broadened temporal patterns)
+  *Files:* `mempalace/auto_query/signals.py`, `mempalace/auto_query/router.py`, `mempalace/auto_query/__init__.py`, `mempalace/auto_query/runner.py`, `tests/test_auto_query_signals.py`, `tests/test_auto_query_router.py`
+
+
 ## [2026-06-26]
 
 
