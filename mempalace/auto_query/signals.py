@@ -85,7 +85,53 @@ _STOPWORDS = {
     "There",
     "Now",
     "Then",
+    # Path / orchestration noise — capitalized non-entities common in JP's
+    # prompts and pasted tool output (e.g. ~/Projects paths, "run in the
+    # Background"). These previously mis-fired auto-query on pure noise.
+    "Projects",
+    "Background",
+    "Wait",
+    "Monitor",
+    "Poll",
+    "Watch",
+    "Build",
+    "Agent",
+    "Agents",
+    "Phase",
+    "Please",
+    "Ran",
+    "Research",
+    "Robust",
+    "Task",
+    "Clean",
 }
+
+# Alias map: JP-vocabulary → canonical wing. An alias only fires if its
+# target wing is actually present in known_wings.
+_WING_ALIASES = {
+    "mempalace": "memorypalace",
+    "memory palace": "memorypalace",
+}
+
+# Common English words that are also wing names — never lowercase-match
+# these, or they fire on ordinary prose ("in general", "the projects list").
+_WING_MATCH_BLOCKLIST = frozenset(
+    {
+        "general",
+        "projects",
+        "sessions",
+        "update",
+        "test",
+        "tools",
+        "watch",
+        "claude",
+        "oracle",
+    }
+)
+
+# Minimum length for a lowercase wing/alias surface form to be matchable.
+# Below this, short names ("ha", "jp", "sdp") false-match inside words.
+_MIN_LOWERCASE_WING_LEN = 5
 
 # Max results per signal class
 _MAX_ENTITY_SIGNALS = 5
@@ -121,11 +167,15 @@ def extract_signals(
     if entity_signals and temporal_signals:
         total += 1
 
-    # Periodic depth refresh — every 15 turns, auto-fire regardless of message
-    # content to counteract mid-context attention degradation ("lost in the
-    # middle"). turn_index > 0 guards the turn-0 sentinel so it never fires
+    # Periodic depth refresh — auto-fire regardless of message content to
+    # counteract mid-context attention degradation ("lost in the middle").
+    # Fires on turn 1 (a recall floor for the very short sessions that
+    # dominate real usage — many are a single turn) and every 10th turn
+    # thereafter. turn_index > 0 guards the turn-0 sentinel so it never fires
     # before the session has a real turn.
-    depth_fire = session_state.turn_index > 0 and session_state.turn_index % 15 == 0
+    depth_fire = session_state.turn_index > 0 and (
+        session_state.turn_index == 1 or session_state.turn_index % 10 == 0
+    )
     if depth_fire:
         total += 4  # enough to fire in balanced mode (threshold 4)
 
@@ -173,7 +223,28 @@ def _extract_entity_signals(
         seen.add(token)
 
         signal = _score_entity(token, known_wings, known_entities)
+        if signal.wing:
+            seen.add(signal.wing)
         signals.append(signal)
+
+    # Pass 1.5: lowercase wing / alias match. JP types wing names in
+    # lowercase ("candela", "mempalace", "familiar"), which the capital-only
+    # regex above never sees. Match known wings and a small alias map against
+    # the lowercased text at word boundaries, with a min length and a
+    # common-word blocklist to keep precision high.
+    q_lower = text.lower()
+    for surface, wing in _wing_surface_forms(known_wings):
+        if len(surface) < _MIN_LOWERCASE_WING_LEN:
+            continue
+        if surface in _WING_MATCH_BLOCKLIST:
+            continue
+        if wing in seen:
+            continue
+        if wing in session_state.queried_entities:
+            continue
+        if _word_present(surface, q_lower):
+            seen.add(wing)
+            signals.append(Signal(kind="entity", name=surface, score=3, wing=wing))
 
     # Pass 2: lowercase substring match against known entities
     # (same pattern as _ner_from_query in searcher.py:1218-1225)
@@ -228,6 +299,32 @@ def _entity_to_wing_slugs(name):
         underscored,
         lower,
     ]
+
+
+def _wing_surface_forms(known_wings):
+    # type: (set) -> list
+    """Yield (surface_form, canonical_wing) pairs for lowercase matching.
+
+    For each wing: the lowercased wing name and an underscores-as-spaces
+    form; plus any alias whose target wing is present in known_wings.
+    """
+    forms = []  # type: list
+    for wing in known_wings:
+        wl = wing.lower()
+        forms.append((wl, wing))
+        spaced = wl.replace("_", " ")
+        if spaced != wl:
+            forms.append((spaced, wing))
+    for alias, wing in _WING_ALIASES.items():
+        if wing in known_wings:
+            forms.append((alias, wing))
+    return forms
+
+
+def _word_present(needle, haystack_lower):
+    # type: (str, str) -> bool
+    """True if needle appears in haystack at word boundaries (both lowercased)."""
+    return re.search(r"\b{}\b".format(re.escape(needle)), haystack_lower) is not None
 
 
 def _extract_temporal_signals(text):
