@@ -10,9 +10,9 @@ Outputs the injection block to stdout (if any), suitable for
 ``hookSpecificOutput.additionalContext`` in Claude Code hooks.
 Exits 0 on success (with or without output), 1 on error.
 
-Wing list is fetched from the daemon at startup via
-``mempalace_list_wings``.  If the daemon is unreachable, an empty
-set is used (entity scoring degrades gracefully).
+Wing list is fetched from the daemon's fast ``/status/fast`` route at
+startup and cached on disk; if the daemon is unreachable the cached
+set is used, so wing scoring keeps working while the host sleeps.
 """
 
 import argparse
@@ -26,35 +26,101 @@ from mempalace.auto_query.runner import run_auto_query
 from mempalace.config import MempalaceConfig
 
 
-def _fetch_wings(config):
+def _default_wings_cache_path():
+    # type: () -> str
+    """Path to the on-disk wing cache."""
+    return os.path.join(os.path.expanduser("~/.mempalace/auto_query"), "wings.json")
+
+
+def _read_wings_cache(cache_path):
+    # type: (str) -> set
+    """Read the cached wing set; empty set if missing/unreadable."""
+    try:
+        with open(cache_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return set()
+    return set(data) if isinstance(data, list) else set()
+
+
+def _write_wings_cache(wings, cache_path):
+    # type: (set, str) -> None
+    """Write the wing set to the cache, swallowing I/O errors."""
+    try:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "w", encoding="utf-8") as f:
+            json.dump(sorted(wings), f)
+    except OSError:
+        pass
+
+
+def _fetch_wings_from_daemon(config):
     # type: (MempalaceConfig) -> set
-    """Fetch known wing names from the daemon via JSON-RPC."""
+    """Fetch wing names from the daemon's fast status route.
+
+    Uses ``/status/fast`` (a cached counts endpoint that returns in ~ms)
+    rather than ``mempalace_list_wings`` over ``/mcp``, which scans the full
+    drawer set per call, reliably exceeds the hook's latency budget, and
+    silently returns empty — disabling all wing scoring.
+    """
     daemon_url = config.daemon_url
     if not daemon_url:
         return set()
-    url = "{}/mcp".format(daemon_url.rstrip("/"))
-    payload = json.dumps(
-        {
-            "jsonrpc": "2.0",
-            "method": "tools/call",
-            "params": {"name": "mempalace_list_wings", "arguments": {}},
-            "id": 1,
-        }
-    ).encode("utf-8")
-    headers = {"Content-Type": "application/json"}
+    url = "{}/status/fast".format(daemon_url.rstrip("/"))
+    headers = {}
     api_key = os.environ.get("PALACE_API_KEY", "").strip()
     if api_key:
         headers["X-API-Key"] = api_key
-    req = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+    req = urllib.request.Request(url, headers=headers, method="GET")
     try:
-        with urllib.request.urlopen(req, timeout=3) as resp:
-            rpc = json.loads(resp.read().decode("utf-8"))
-            text = rpc.get("result", {}).get("content", [{}])[0].get("text", "")
-            result = json.loads(text) if text else {}
-            wings = result.get("wings", [])
-            return {w.get("name", w) if isinstance(w, dict) else str(w) for w in wings}
-    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError, KeyError, IndexError):
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, json.JSONDecodeError, ValueError):
         return set()
+    wings = data.get("wings", {})
+    if isinstance(wings, dict):
+        return {str(name) for name in wings.keys()}
+    if isinstance(wings, list):
+        return {w.get("name", w) if isinstance(w, dict) else str(w) for w in wings}
+    return set()
+
+
+def _fetch_wings(config, cache_path=None):
+    # type: (MempalaceConfig, Optional[str]) -> set
+    """Fetch wing names, refreshing an on-disk cache.
+
+    On a successful daemon fetch the cache is refreshed and the fresh set
+    returned. On failure (daemon asleep/unreachable) the last cached set is
+    used, so wing scoring keeps working while ``familiar`` naps.
+    """
+    if cache_path is None:
+        cache_path = _default_wings_cache_path()
+    wings = _fetch_wings_from_daemon(config)
+    if wings:
+        _write_wings_cache(wings, cache_path)
+        return wings
+    return _read_wings_cache(cache_path)
+
+
+def _load_known_entities(path=None):
+    # type: (Optional[str]) -> Optional[set]
+    """Load the known-entity registry if present, else None.
+
+    Accepts a JSON list of names or a dict keyed by name. Absent/unreadable
+    file yields None (Pass-2 entity matching simply stays inactive).
+    """
+    if path is None:
+        path = os.path.expanduser("~/.mempalace/known_entities.json")
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+    if isinstance(data, list):
+        return {str(x) for x in data}
+    if isinstance(data, dict):
+        return {str(k) for k in data.keys()}
+    return None
 
 
 def main(argv=None):
@@ -80,6 +146,7 @@ def main(argv=None):
     project_wing = config.resolve_wing(args.wing) if args.wing else ""
 
     known_wings = _fetch_wings(config)
+    known_entities = _load_known_entities()
 
     result = run_auto_query(
         prompt=args.prompt,
@@ -87,6 +154,7 @@ def main(argv=None):
         turn=args.turn,
         project_wing=project_wing,
         known_wings=known_wings,
+        known_entities=known_entities,
         has_recent_drawers=args.recent_drawers,
         config=config,
     )

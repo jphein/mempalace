@@ -14,8 +14,13 @@ from mempalace.auto_query.signals import (
 )
 
 
-def _session(turn=1, queried=None, sid="test-session"):
-    """Helper to create a SessionState."""
+def _session(turn=2, queried=None, sid="test-session"):
+    """Helper to create a SessionState.
+
+    Default turn=2 so content-scoring tests are isolated from the periodic
+    depth signal (which fires at turn 1 and every 10th turn). Tests that
+    exercise turn-1 behaviour pass turn=1 explicitly.
+    """
     return SessionState(
         turn_index=turn,
         queried_entities=queried or set(),
@@ -493,43 +498,52 @@ class TestCompounding:
 
 
 class TestDepthSignal:
-    """Tests for the periodic depth-refresh signal — fires every 15 turns."""
+    """Periodic depth-refresh signal — fires at turn 1 and every 10th turn.
+
+    Tuned to JP's session-length distribution: most of his sessions are very
+    short (many are a single turn), so the first fire must land on turn 1 or
+    short sessions get no automatic recall at all; the every-10 refresh then
+    re-anchors context in the long-tail deep sessions.
+    """
 
     def _result(self, turn):
         # Content-free prompt so only the turn count can set depth_fire.
         return extract_signals("ok", _session(turn=turn), "wing_test", set())
 
-    def test_fires_on_turn_15(self):
-        assert self._result(15).depth_fire is True
+    def test_fires_on_turn_1(self):
+        assert self._result(1).depth_fire is True
 
-    def test_fires_on_turn_30(self):
-        assert self._result(30).depth_fire is True
+    def test_fires_on_turn_10(self):
+        assert self._result(10).depth_fire is True
 
-    def test_fires_on_turn_45(self):
-        assert self._result(45).depth_fire is True
+    def test_fires_on_turn_20(self):
+        assert self._result(20).depth_fire is True
 
-    def test_no_fire_turn_1(self):
-        assert self._result(1).depth_fire is False
+    def test_no_fire_turn_2(self):
+        assert self._result(2).depth_fire is False
 
-    def test_no_fire_turn_14(self):
-        assert self._result(14).depth_fire is False
+    def test_no_fire_turn_9(self):
+        assert self._result(9).depth_fire is False
 
-    def test_no_fire_turn_16(self):
-        assert self._result(16).depth_fire is False
+    def test_no_fire_turn_11(self):
+        assert self._result(11).depth_fire is False
+
+    def test_no_fire_turn_15(self):
+        """Old cadence fired on 15; the every-10 cadence does not."""
+        assert self._result(15).depth_fire is False
 
     def test_no_fire_turn_0(self):
-        """Turn 0 is the pre-session sentinel: 0 % 15 == 0 but the > 0 guard
-        must keep depth_fire False."""
+        """Turn 0 is the pre-session sentinel: the > 0 guard keeps it False."""
         assert self._result(0).depth_fire is False
 
     def test_depth_adds_4_to_score(self):
         """A depth turn with no other signal scores exactly 4 (balanced gate)."""
-        result = self._result(15)
-        assert result.total_score == 4
+        assert self._result(10).total_score == 4
 
-    def test_depth_default_false(self):
-        """Non-depth turns leave depth_fire at its default False."""
-        assert self._result(7).depth_fire is False
+    def test_turn_1_depth_adds_4(self):
+        """Turn 1 with no content signal still fires depth — a recall floor
+        for the single-turn sessions that dominate JP's usage."""
+        assert self._result(1).total_score == 4
 
 
 # ---------------------------------------------------------------------------
@@ -619,3 +633,127 @@ class TestEdgeCases:
             set(),
         )
         assert state.queried_entities == original_queried
+
+
+# ---------------------------------------------------------------------------
+# Path / orchestration noise stopwords (de-noise the entity extractor)
+# ---------------------------------------------------------------------------
+
+
+class TestPathAndOrchestrationNoise:
+    """Capitalized path/orchestration artifacts must not score as entities.
+
+    JP's prompts and pasted tool output are full of capitalized non-entities
+    like 'Projects' (from ~/Projects paths) and 'Background' (from 'run in
+    the background'), which previously mis-fired auto-query on noise.
+    """
+
+    def test_projects_and_background_filtered(self):
+        signals = _extract_entity_signals(
+            "run the Projects build in the Background",
+            _session(),
+            set(),
+            None,
+        )
+        names = [s.name for s in signals]
+        assert "Projects" not in names
+        assert "Background" not in names
+
+    def test_orchestration_verbs_filtered(self):
+        signals = _extract_entity_signals(
+            "Wait then Monitor and Poll the run",
+            _session(),
+            set(),
+            None,
+        )
+        names = [s.name for s in signals]
+        assert "Wait" not in names
+        assert "Monitor" not in names
+        assert "Poll" not in names
+
+
+# ---------------------------------------------------------------------------
+# Lowercase wing / alias matching (personalized for JP's lowercase style)
+# ---------------------------------------------------------------------------
+
+
+class TestLowercaseWingMatch:
+    """Lowercase project/wing names must register as +3 wing signals.
+
+    JP types wing names in lowercase ('candela', 'mempalace', 'familiar'),
+    which the capital-only regex never sees. This pass matches known wings
+    (and a small alias map) against the lowercased prompt, at word
+    boundaries, minimum length 5, with a collision blocklist for common words.
+    """
+
+    def test_lowercase_wing_scores_3(self):
+        signals = _extract_entity_signals(
+            "what's the status on candela today",
+            _session(),
+            {"candela"},
+            None,
+        )
+        matched = [s for s in signals if s.wing == "candela"]
+        assert len(matched) == 1
+        assert matched[0].score == 3
+
+    def test_lowercase_alias_maps_to_wing(self):
+        signals = _extract_entity_signals(
+            "is mempalace working 100%?",
+            _session(),
+            {"memorypalace"},
+            None,
+        )
+        matched = [s for s in signals if s.wing == "memorypalace"]
+        assert len(matched) == 1
+        assert matched[0].score == 3
+
+    def test_word_boundary_no_substring_match(self):
+        """'candela' must not match inside 'candelabra'."""
+        signals = _extract_entity_signals(
+            "the candelabra needs new bulbs",
+            _session(),
+            {"candela"},
+            None,
+        )
+        assert not [s for s in signals if s.wing == "candela"]
+
+    def test_min_length_skips_short_wings(self):
+        """Short wing names (< 5 chars) don't lowercase-match (avoids 'ha' in 'what')."""
+        signals = _extract_entity_signals(
+            "what happened here",
+            _session(),
+            {"ha"},
+            None,
+        )
+        assert not [s for s in signals if s.wing == "ha"]
+
+    def test_blocklist_common_word_wing(self):
+        """A wing whose name is a common English word is not lowercase-matched."""
+        signals = _extract_entity_signals(
+            "in general this looks fine",
+            _session(),
+            {"general"},
+            None,
+        )
+        assert not [s for s in signals if s.wing == "general"]
+
+    def test_no_wing_mention_no_fire(self):
+        signals = _extract_entity_signals(
+            "how do i fix this error",
+            _session(),
+            {"candela", "memorypalace"},
+            None,
+        )
+        assert not [s for s in signals if s.score == 3]
+
+    def test_known_entities_substring_still_works(self):
+        """The existing lowercase known-entities pass is preserved."""
+        signals = _extract_entity_signals(
+            "check the palace_daemon logs",
+            _session(),
+            set(),
+            {"palace_daemon"},
+        )
+        names = [s.name for s in signals]
+        assert "palace_daemon" in names

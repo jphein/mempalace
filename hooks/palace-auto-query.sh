@@ -28,8 +28,15 @@ if [ -n "$CWD" ]; then
   PROJECT_WING="$BASENAME"
 fi
 
-# Session ID from env or generate
-SESSION_ID="${CLAUDE_SESSION_ID:-$(date +%s)}"
+# Session ID — prefer the harness-provided id in the hook's stdin JSON, then
+# the CLAUDE_CODE_SESSION_ID env var, then a time-based fallback. The old
+# CLAUDE_SESSION_ID env var is never set by Claude Code, so the fallback fired
+# on every prompt -> a fresh id per second -> the turn counter reset to 1 each
+# turn and the periodic depth signal could never fire.
+SESSION_ID=$(echo "$INPUT" | jq -r '.session_id // empty' 2>/dev/null)
+if [ -z "$SESSION_ID" ]; then
+  SESSION_ID="${CLAUDE_CODE_SESSION_ID:-$(date +%s)}"
+fi
 
 # Turn index — computed BEFORE the pre-filter so turn-1 resumption works
 TURN_FILE="/tmp/palace-aq-turn-${SESSION_ID}"
@@ -46,13 +53,13 @@ echo "$TURN" > "$TURN_FILE" 2>/dev/null || true
 # letting prompts through. Four checks:
 #   1. Temporal/explicit recall patterns (case-insensitive)
 #   2. Capitalized entity names (potential wing/entity matches)
-#   3. Turn 1 always passes (task resumption signal)
-#   4. Every 15th turn passes (periodic depth refresh)
+#   3. Turn 1 always passes (task resumption + first depth refresh)
+#   4. Every 10th turn passes (periodic depth refresh)
 MATCH=0
 echo "$PROMPT" | grep -qiE 'remind|remember|do (we|you) (have|know)|did (we|you)|what (did|was|were) |history of|have we|prior to|earlier|last (time|week|session|night|run|month|sprint)|yesterday|previously|recently|while ago|days ago|back when|used to|that time|when (did|we|was)|before we|recall|check (if|whether)|was there|were there' && MATCH=1
 [ "$MATCH" -eq 0 ] && echo "$PROMPT" | grep -qE '[A-Z][a-zA-Z]{2,}' && MATCH=1
 [ "$MATCH" -eq 0 ] && [ "$TURN" -eq 1 ] && MATCH=1
-[ "$MATCH" -eq 0 ] && [ "$((TURN % 15))" -eq 0 ] && MATCH=1
+[ "$MATCH" -eq 0 ] && [ "$((TURN % 10))" -eq 0 ] && MATCH=1
 if [ "$MATCH" -eq 0 ]; then
   echo "$(date -Iseconds) skip:no-signal" >> "$LOG" 2>/dev/null || true
   exit 0
