@@ -215,6 +215,18 @@ def health(self, palace: Optional[PalaceRef] = None) -> HealthStatus
 def detect(cls, path: str) -> bool
 ```
 
+Return True when ``path`` looks like a chroma palace.
+
+Verifies the SQLite magic header rather than file presence alone.
+Bare ``sqlite3.connect()`` against a missing path leaves a 0-byte
+file behind (the SQLite header is written on the first statement,
+not on connection), so file-presence alone treats those artifacts
+as real chroma palaces and breaks multi-backend resolution. The
+16-byte ``SQLite format 3\x00`` magic prefix is written as soon
+as chromadb's ``PersistentClient`` does any work, so this check
+accepts every real chroma palace while rejecting empty / garbage
+files. See #1893.
+
 #### `get_or_create_collection`
 
 ```python
