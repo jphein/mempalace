@@ -97,14 +97,18 @@ docs=(README.md CLAUDE.md FORK_CHANGELOG.md)
 # in *this* fork. Pattern: anything inside (https://github.com/<other>/<repo>/commit/HASH)
 # where <other>/<repo> is not techempower-org/mempalace.
 # For each line, skip the line entirely if it mentions a sibling repo
-# (palace-daemon / multipass-structural-memory-eval) — we can't tell which
-# hashes on that line are fork-mempalace vs cross-repo without parsing
-# linked URLs by repo. Treating the whole line as cross-repo is the
-# conservative under-call: false negatives (missing a real bad hash
-# adjacent to a sibling-repo mention) but no false positives.
+# (palace-daemon / multipass-structural-memory-eval) or upstream — we
+# can't tell which hashes on that line are fork-mempalace vs cross-repo
+# without parsing linked URLs by repo, and upstream-sync lines reference
+# MemPalace/mempalace commits that only resolve when the upstream remote
+# is fetched (never true on CI's shallow origin-only checkout: a squash-
+# merged sync severs the ancestry, so e.g. `da5a48c` resolved on the sync
+# PR itself but not on any later branch). Treating the whole line as
+# cross-repo is the conservative under-call: false negatives (missing a
+# real bad hash adjacent to such a mention) but no false positives.
 mapfile -t hashes < <(
     for d in "${docs[@]}"; do
-        grep -v -E 'palace-daemon|multipass-structural-memory-eval|/(jphein|techempower-org)/[a-z-]+/commit/' "$d" 2>/dev/null
+        grep -v -E 'palace-daemon|multipass-structural-memory-eval|upstream|/(jphein|techempower-org)/[a-z-]+/commit/' "$d" 2>/dev/null
     done | grep -hoE '`[0-9a-f]{7,40}`' | tr -d '`' | sort -u
 )
 unresolved=0
