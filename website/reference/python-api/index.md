@@ -89,6 +89,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 ### auto_query
 
 - [`mempalace.auto_query.decisions`](./auto_query/decisions) — Decision logger for the auto-query system.
+- [`mempalace.auto_query.depth_cache`](./auto_query/depth_cache) — TTL cache for the periodic depth-refresh injection.
 - [`mempalace.auto_query.formatter`](./auto_query/formatter) — Result formatter for the auto-query integration.
 - [`mempalace.auto_query.router`](./auto_query/router) — Tool router for auto-query integration.
 - [`mempalace.auto_query.runner`](./auto_query/runner) — Auto-query runner — chains signal extraction, routing, and formatting.

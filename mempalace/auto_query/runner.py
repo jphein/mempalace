@@ -22,6 +22,11 @@ import urllib.request
 from datetime import datetime, timezone
 from mempalace.auto_query import Decision, SessionState
 from mempalace.auto_query.decisions import append_decision, rotate_log
+from mempalace.auto_query.depth_cache import (
+    cache_key,
+    load_cached_injection,
+    store_injection,
+)
 from mempalace.auto_query.formatter import format_injection
 from mempalace.auto_query.router import THRESHOLDS, pick_tool
 from mempalace.auto_query.signals import extract_signals
@@ -129,6 +134,37 @@ def run_auto_query(
         _safe_log(decision, log_dir)
         return AutoQueryResult(decision=decision, tool_call=tool_call)
 
+    # Depth fires re-issue a deterministic query whose results barely change
+    # within a session, while the daemon round-trip costs most of a second —
+    # over the hook latency budget. Serve repeats from the TTL cache; only
+    # the first fire per window pays the daemon call.
+    depth_key = None
+    if signals.depth_fire and tool_call.tool == "mempalace_search":
+        depth_key = cache_key(
+            tool_call.args.get("query", ""),
+            tool_call.args.get("wing", ""),
+            tool_call.args.get("limit", 0),
+        )
+        cached = load_cached_injection(depth_key, config.auto_query_depth_cache_ttl)
+        if cached is not None:
+            decision = Decision(
+                ts=ts,
+                session_id=session_id,
+                turn=turn,
+                signals=_serialize_signals(signals),
+                score=signals.total_score,
+                threshold=int(threshold),
+                mode=mode,
+                decision="fire",
+                reason="results formatted (depth cache)",
+                tool=tool_call.tool,
+                args=tool_call.args,
+                latency_ms=0,
+                injection_tokens=len(cached) // 4,
+            )
+            _safe_log(decision, log_dir)
+            return AutoQueryResult(injection=cached, decision=decision, tool_call=tool_call)
+
     # Live mode: execute the MCP call.
     t0 = time.monotonic()
     mcp_result = _call_mcp(tool_call, config)
@@ -153,6 +189,9 @@ def run_auto_query(
         return AutoQueryResult(decision=decision, tool_call=tool_call)
 
     injection = format_injection(tool_call, mcp_result, signals, latency_ms)
+
+    if injection and depth_key is not None:
+        store_injection(depth_key, injection)
 
     result_count = _count_results(mcp_result)
     injection_tokens = len(injection) // 4 if injection else 0

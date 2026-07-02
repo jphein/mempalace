@@ -601,6 +601,24 @@ class MempalaceConfig:
         return str(aq.get("mode", "off")).strip().lower()
 
     @property
+    def auto_query_depth_cache_ttl(self) -> int:
+        """TTL (seconds) for the depth-refresh injection cache; 0 disables.
+
+        Env ``AUTO_QUERY_DEPTH_CACHE_TTL`` > config ``auto_query.depth_cache_ttl``
+        > 900. The depth query is deterministic per wing, so serving repeat
+        fires from cache trades sub-second staleness bounds for skipping a
+        ~1s daemon round-trip on every 10th turn.
+        """
+        env_val = os.environ.get("AUTO_QUERY_DEPTH_CACHE_TTL", "").strip()
+        if env_val:
+            coerced = self._try_coerce_int(env_val, minimum=0)
+            if coerced is not None:
+                return coerced
+        aq = self._file_config.get("auto_query", {})
+        coerced = self._try_coerce_int(aq.get("depth_cache_ttl"), minimum=0)
+        return coerced if coerced is not None else 900
+
+    @property
     def auto_query_max_per_turn(self) -> int:
         """Max auto-query invocations per turn.
 

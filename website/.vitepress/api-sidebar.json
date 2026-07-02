@@ -318,6 +318,10 @@
         "link": "/reference/python-api/auto_query/decisions"
       },
       {
+        "text": "mempalace.auto_query.depth_cache",
+        "link": "/reference/python-api/auto_query/depth_cache"
+      },
+      {
         "text": "mempalace.auto_query.formatter",
         "link": "/reference/python-api/auto_query/formatter"
       },
