@@ -133,6 +133,8 @@ READABLE_EXTENSIONS = {
     ".csv",
     ".sql",
     ".toml",
+    ".tex",
+    ".bib",
     # C# / .NET
     ".cs",
     ".csproj",

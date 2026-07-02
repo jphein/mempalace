@@ -92,10 +92,10 @@ mempal_log "preCompact" "$MEMPAL_CONV_ID" \
 # right before the irreversible compaction. The pending-save marker
 # below is the backstop: the next `stop` hook re-mines and nudges a
 # verbatim save regardless of whether this mine completed.
-if "$MEMPAL_PYTHON_BIN" -c "import mempalace" >/dev/null 2>&1; then
+if command -v mempalace >/dev/null 2>&1; then
     if mempal_is_valid_transcript "$MEMPAL_TRANSCRIPT" \
         && [ -f "$MEMPAL_TRANSCRIPT" ]; then
-        "$MEMPAL_PYTHON_BIN" -m mempalace mine "$(dirname "$MEMPAL_TRANSCRIPT")" --mode convos \
+        mempalace mine "$(dirname "$MEMPAL_TRANSCRIPT")" --mode convos \
             >> "$MEMPAL_CURSOR_LOG" 2>&1 || \
             mempal_log "preCompact" "$MEMPAL_CONV_ID" \
                 "WARN: mempalace mine convos returned non-zero"
@@ -104,14 +104,14 @@ if "$MEMPAL_PYTHON_BIN" -c "import mempalace" >/dev/null 2>&1; then
             "skipping invalid transcript path: $MEMPAL_TRANSCRIPT"
     fi
     if [ -n "$MEMPAL_DIR" ] && [ -d "$MEMPAL_DIR" ]; then
-        "$MEMPAL_PYTHON_BIN" -m mempalace mine "$MEMPAL_DIR" --mode projects \
+        mempalace mine "$MEMPAL_DIR" --mode projects \
             >> "$MEMPAL_CURSOR_LOG" 2>&1 || \
             mempal_log "preCompact" "$MEMPAL_CONV_ID" \
                 "WARN: mempalace mine projects returned non-zero"
     fi
 else
     mempal_log "preCompact" "$MEMPAL_CONV_ID" \
-        "mempalace module not importable via $MEMPAL_PYTHON_BIN; skipping synchronous mine"
+        "mempalace CLI not on PATH; skipping synchronous mine"
 fi
 
 # ── Drop the pending-save marker ──────────────────────────────────

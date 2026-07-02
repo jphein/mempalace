@@ -538,6 +538,20 @@ def test_scan_project_includes_kotlin_files():
         ]
 
 
+def test_scan_project_includes_latex_files():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        project_root = Path(tmpdir).resolve()
+        write_file(
+            project_root / "main.tex",
+            "\\documentclass{article}\n\\begin{document}\nHello, world.\n\\end{document}\n" * 20,
+        )
+        write_file(
+            project_root / "refs.bib",
+            "@article{lamport1986, author={Leslie Lamport}, title={LaTeX}, year={1986}}\n" * 20,
+        )
+        assert scanned_files(project_root) == ["main.tex", "refs.bib"]
+
+
 def test_scan_project_respects_gitignore():
     tmpdir = tempfile.mkdtemp()
     try:

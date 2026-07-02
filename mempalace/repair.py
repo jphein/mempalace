@@ -682,6 +682,82 @@ def print_sqlite_integrity_abort(palace_path: str, errors: list[str]) -> None:
     print("    6. Re-run `mempalace repair --yes`.")
 
 
+# quick_check labels a corrupt FTS5 inverted index like:
+#   "malformed inverted index for FTS5 table main.embedding_fulltext_search"
+# That specific failure is recoverable in place: the index is derived from the
+# intact ``embedding_fulltext_search_content`` shadow table, so rebuilding it
+# restores full-text search without touching any drawer rows. Concurrent
+# killed-mid-write mines are the usual cause (#1596).
+_FTS5_MALFORMED_RE = re.compile(r"malformed inverted index for FTS5 table", re.IGNORECASE)
+
+
+def _errors_are_isolated_fts5(errors: list[str]) -> bool:
+    """True when every quick_check error is a malformed FTS5 inverted index.
+
+    Only an isolated FTS5 failure is safe to auto-heal: the inverted index is
+    derived data that ``rebuild`` regenerates from the content shadow table. If
+    quick_check also reports page/row corruption, the data itself may be damaged
+    and rebuilding the index over it would mask real loss — that still aborts.
+    """
+    return bool(errors) and all(_FTS5_MALFORMED_RE.search(e) for e in errors)
+
+
+def maybe_autoheal_fts5_index(palace_path: str, errors: list[str], *, progress=print) -> list[str]:
+    """Rebuild a malformed FTS5 inverted index in place; return remaining errors.
+
+    The repair preflight aborts when ``PRAGMA quick_check`` reports SQLite-layer
+    corruption. After concurrent killed-mid-write mines (#1596) the common
+    failure is an isolated ``malformed inverted index for FTS5 table``, which is
+    fully recoverable: the index rebuilds from the intact
+    ``embedding_fulltext_search_content`` table without touching drawer rows.
+
+    When the errors are isolated to FTS5, rebuild the index under the palace
+    write lock (so a live mine cannot race the rebuild) and re-run quick_check.
+    Returns the remaining quick_check errors — empty when the heal succeeded.
+    Broader corruption, a lock held by another writer, or a rebuild failure
+    leaves ``errors`` unchanged so the caller still aborts with the banner.
+    """
+    if not _errors_are_isolated_fts5(errors):
+        return errors
+
+    sqlite_path = os.path.join(palace_path, "chroma.sqlite3")
+    if not os.path.exists(sqlite_path):
+        return errors
+
+    # Lazy import: palace.py is heavier and importing it at module load would
+    # widen repair.py's import graph for callers that never hit this path.
+    from .palace import MineAlreadyRunning, mine_palace_lock
+
+    progress(
+        "\n  Isolated FTS5 inverted-index corruption detected; attempting an\n"
+        "  in-place rebuild from the intact content table before aborting."
+    )
+    try:
+        with mine_palace_lock(palace_path):
+            with closing(sqlite3.connect(sqlite_path, isolation_level=None)) as conn:
+                conn.execute(
+                    "INSERT INTO embedding_fulltext_search"
+                    "(embedding_fulltext_search) VALUES('rebuild')"
+                )
+                conn.commit()
+    except MineAlreadyRunning as exc:
+        progress(
+            f"  Skipped FTS5 rebuild: palace is being written by another process ({exc}). "
+            "Stop it and re-run."
+        )
+        return errors
+    except Exception as exc:
+        progress(f"  FTS5 rebuild failed (leaving palace untouched): {exc}")
+        return errors
+
+    remaining = sqlite_integrity_errors(palace_path)
+    if remaining:
+        progress("  FTS5 rebuild did not clear quick_check; aborting for safety.")
+    else:
+        progress("  FTS5 index rebuilt from intact content; quick_check is clean.")
+    return remaining
+
+
 def index_read_recovery_guidance() -> str:
     """Recovery guidance for a failed drawer-index read in the legacy paths.
 
@@ -927,6 +1003,8 @@ def rebuild_index(
     # corruption here lets us surface the clear recovery instructions and
     # exit cleanly before chromadb's compactor touches the disk.
     sqlite_errors = sqlite_integrity_errors(palace_path)
+    if sqlite_errors:
+        sqlite_errors = maybe_autoheal_fts5_index(palace_path, sqlite_errors, progress=progress)
     if sqlite_errors:
         print_sqlite_integrity_abort(palace_path, sqlite_errors)
         return

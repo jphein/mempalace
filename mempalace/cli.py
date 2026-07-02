@@ -4554,6 +4554,21 @@ def _build_overlap_cypher(wing_a: str, wing_b: str, limit: int) -> str:
     )
 
 
+def cmd_hallways(args):
+    """List within-wing entity hallways (the auto-built associative graph)."""
+    from .hallways import list_hallways
+
+    rows = list_hallways(getattr(args, "wing", None))
+    if not rows:
+        print("No hallways yet — they are built from drawer entities when you mine.")
+        return
+    rows.sort(key=lambda h: h.get("co_occurrence_count", 0), reverse=True)
+    print(f"  {len(rows)} hallway(s):")
+    for h in rows[: max(0, args.limit)]:
+        label = h.get("label") or f"{h.get('entity_a', '?')} <-> {h.get('entity_b', '?')}"
+        print(f"    {label}")
+
+
 def _print_overlap_table(rows: list[dict], wing_a: str, wing_b: str) -> None:
     """Aligned columns: entity | A drawers | B drawers | total."""
     if not rows:
@@ -5199,6 +5214,7 @@ def cmd_repair(args):
         _rebuild_collection_via_temp,
         check_extraction_safety,
         index_read_recovery_guidance,
+        maybe_autoheal_fts5_index,
         maybe_repair_poisoned_max_seq_id_before_rebuild,
         print_sqlite_integrity_abort,
         sqlite_integrity_errors,
@@ -5289,6 +5305,8 @@ def cmd_repair(args):
     # here so we can surface the clear recovery instructions and exit
     # cleanly before chromadb's compactor touches the disk.
     sqlite_errors = sqlite_integrity_errors(palace_path)
+    if sqlite_errors:
+        sqlite_errors = maybe_autoheal_fts5_index(palace_path, sqlite_errors)
     if sqlite_errors:
         print_sqlite_integrity_abort(palace_path, sqlite_errors)
         sys.exit(1)
@@ -5451,6 +5469,154 @@ def cmd_mcp(args):
         print(f"  claude mcp add mempalace -- {base_server_cmd} --palace /path/to/palace")
         print(f"  codex mcp add mempalace -- {base_server_cmd} --palace /path/to/palace")
         print(f"  {base_server_cmd} --palace /path/to/palace")
+
+
+_SERVER_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
+_SERVER_BIND_ALL_HOSTS = {"0.0.0.0", "::", "[::]"}
+
+
+def _server_is_loopback(host: str) -> bool:
+    return (host or "").strip().lower() in _SERVER_LOOPBACK_HOSTS
+
+
+def _server_token_path(palace_path: str) -> Path:
+    """Per-palace location for the auto-generated server bearer token.
+
+    Distinct from the daemon's token dir; keyed by the canonical palace path so
+    one server per palace reuses a stable token across restarts.
+    """
+    import hashlib
+
+    canonical = os.path.abspath(os.path.realpath(os.path.expanduser(palace_path)))
+    key = hashlib.sha256(os.path.normcase(canonical).encode("utf-8")).hexdigest()[:24]
+    return Path.home() / ".mempalace" / "server" / key / "token"
+
+
+def _load_or_create_server_token(palace_path: str) -> tuple[str, bool]:
+    """Return (token, created). Reuse an existing 0600 token or mint a new one."""
+    import secrets
+
+    token_path = _server_token_path(palace_path)
+    if token_path.exists():
+        existing = token_path.read_text(encoding="utf-8").strip()
+        if existing:
+            return existing, False
+    token = secrets.token_urlsafe(32)
+    token_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(str(token_path.parent), 0o700)
+    except OSError:
+        pass
+    # O_CREAT with 0600 so the token is never briefly world-readable on disk.
+    fd = os.open(str(token_path), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        fh.write(token + "\n")
+    return token, True
+
+
+def cmd_serve(args):
+    """Run a secure remote HTTP MCP server for a team to share one palace (#1877).
+
+    A turnkey wrapper over ``mempalace-mcp --transport http``: it resolves a
+    bearer token (auto-generating a strong one for non-loopback binds), prints a
+    ready-to-paste client config, then execs the real server in the foreground so
+    Docker/systemd own the process lifecycle. The token is passed via the
+    environment, never argv, so it can't leak through ``ps``.
+    """
+    host = args.host
+    port = int(args.port)
+    loopback = _server_is_loopback(host)
+    palace_path = (
+        os.path.abspath(os.path.expanduser(args.palace))
+        if args.palace
+        else MempalaceConfig().palace_path
+    )
+    backend = _backend_arg(args)
+
+    tls_cert = os.path.expanduser(args.tls_cert) if args.tls_cert else None
+    tls_key = os.path.expanduser(args.tls_key) if args.tls_key else None
+    if bool(tls_cert) != bool(tls_key):
+        print("mempalace: --tls-cert and --tls-key must be given together", file=sys.stderr)
+        sys.exit(2)
+    for label, path in (("--tls-cert", tls_cert), ("--tls-key", tls_key)):
+        if path and not os.path.isfile(path):
+            print(f"mempalace: {label} file not found: {path}", file=sys.stderr)
+            sys.exit(2)
+    scheme = "https" if tls_cert else "http"
+
+    # Token resolution. Explicit flag > existing env > (non-loopback) auto-generated.
+    token = (args.token or os.environ.get("MEMPALACE_MCP_HTTP_TOKEN", "")).strip()
+    token_created = False
+    if not token and not loopback and not args.allow_insecure:
+        token, token_created = _load_or_create_server_token(palace_path)
+
+    # Build the child environment. Token rides in the env (never argv) so it
+    # stays out of the process table.
+    env = dict(os.environ)
+    env["MEMPALACE_PALACE_PATH"] = palace_path
+    if backend:
+        env["MEMPALACE_BACKEND"] = str(backend).strip().lower()
+    if token:
+        env["MEMPALACE_MCP_HTTP_TOKEN"] = token
+    if args.allow_insecure:
+        env["MEMPALACE_MCP_HTTP_ALLOW_INSECURE_NO_TOKEN"] = "1"
+
+    child = [
+        sys.executable,
+        "-m",
+        "mempalace.mcp_server",
+        "--transport",
+        "http",
+        "--host",
+        host,
+        "--port",
+        str(port),
+    ]
+    if backend:
+        child += ["--backend", str(backend).strip().lower()]
+    child += ["--palace", palace_path]
+    if tls_cert:
+        child += ["--tls-cert", tls_cert, "--tls-key", tls_key]
+    if args.read_only:
+        child.append("--read-only")
+
+    # Client-facing address: 0.0.0.0/:: means "all interfaces" — clients dial a
+    # real reachable host, so show a placeholder rather than the bind wildcard.
+    client_host = "YOUR_SERVER_HOST" if host.strip().lower() in _SERVER_BIND_ALL_HOSTS else host
+    url = f"{scheme}://{client_host}:{port}/mcp"
+
+    print("Starting MemPalace remote MCP server")
+    print(f"  palace   : {palace_path}")
+    print(f"  backend  : {(backend or 'default').strip().lower() if backend else 'default'}")
+    print(f"  bind     : {host}:{port}  ({'loopback' if loopback else 'network-exposed'})")
+    print(f"  tls      : {'on' if tls_cert else 'off (plaintext — terminate TLS at a proxy)'}")
+    print(f"  read-only: {'yes' if args.read_only else 'no'}")
+    if token_created:
+        print("\n  A new bearer token was generated and stored 0600 at:")
+        print(f"    {_server_token_path(palace_path)}")
+        print("  Store it securely — clients need it to connect:")
+        print(f"    {token}")
+    print("\nConnect a client:")
+    if token:
+        print(
+            f"  claude mcp add --transport http mempalace {url} "
+            f'--header "Authorization: Bearer {token if token_created else "$MEMPALACE_MCP_HTTP_TOKEN"}"'
+        )
+    else:
+        print(f"  claude mcp add --transport http mempalace {url}")
+    print(f"  curl {scheme}://{client_host}:{port}/healthz   # liveness (no auth)\n")
+    sys.stdout.flush()
+
+    # Foreground: hand the process to the real server so signals (SIGTERM from
+    # Docker/systemd) reach it directly. exec on POSIX; subprocess on Windows
+    # (no exec semantics) propagating the exit code.
+    if os.name == "posix":
+        os.execve(sys.executable, child, env)
+    else:
+        import subprocess
+
+        completed = subprocess.run(child, env=env)
+        sys.exit(completed.returncode)
 
 
 def cmd_compress(args):
@@ -6199,19 +6365,6 @@ def main():
         "--yes", action="store_true", help="Skip confirmation for destructive changes"
     )
     p_repair.add_argument(
-        "--mode",
-        choices=["rebuild", "legacy", "max-seq-id", "from-sqlite"],
-        default="legacy",
-        help=(
-            "rebuild/legacy: full-palace HNSW rebuild via extract + re-upsert (default; "
-            "rebuild and legacy are synonyms). "
-            "max-seq-id: un-poison max_seq_id rows corrupted by the legacy 0.6.x shim. "
-            "from-sqlite: rebuild by reading rows directly from chroma.sqlite3, "
-            "bypassing the chromadb client. Use when legacy mode bails because the "
-            "chromadb client cannot open the collection."
-        ),
-    )
-    p_repair.add_argument(
         "repair_action",
         nargs="?",
         choices=["rebuild-index"],
@@ -6228,6 +6381,19 @@ def main():
             "extraction returns exactly 10,000 drawers and the SQLite ground-truth check "
             "either matches or can't be read. Use only after independently confirming "
             "the palace really contains that count."
+        ),
+    )
+    p_repair.add_argument(
+        "--mode",
+        choices=["rebuild", "legacy", "max-seq-id", "from-sqlite"],
+        default="legacy",
+        help=(
+            "rebuild/legacy: full-palace HNSW rebuild via extract + re-upsert (default; "
+            "rebuild and legacy are synonyms). "
+            "max-seq-id: un-poison max_seq_id rows corrupted by the legacy 0.6.x shim. "
+            "from-sqlite: rebuild by reading rows directly from chroma.sqlite3, "
+            "bypassing the chromadb client. Use when legacy mode bails because the "
+            "chromadb client cannot open the collection."
         ),
     )
     p_repair.add_argument(
@@ -6308,6 +6474,38 @@ def main():
         "--backend",
         default=None,
         help="Storage backend to include in the MCP startup command",
+    )
+
+    # serve — turnkey remote HTTP MCP server (#1877)
+    p_serve = sub.add_parser(
+        "serve",
+        help="Run a secure remote HTTP MCP server for a team to share one palace",
+    )
+    p_serve.add_argument(
+        "--host", default="127.0.0.1", help="Bind address (use 0.0.0.0 for remote clients)"
+    )
+    p_serve.add_argument("--port", type=int, default=8765, help="Bind port (default: 8765)")
+    p_serve.add_argument(
+        "--backend", default=None, help="Storage backend (default: config/env/detected)"
+    )
+    p_serve.add_argument("--palace", default=None, help="Palace path (overrides config/env)")
+    p_serve.add_argument(
+        "--token",
+        default=None,
+        help="Bearer token clients must present. Default: reuse/auto-generate one for "
+        "non-loopback binds (stored 0600 under ~/.mempalace/server/).",
+    )
+    p_serve.add_argument("--tls-cert", default=None, help="PEM certificate to enable TLS")
+    p_serve.add_argument("--tls-key", default=None, help="PEM private key matching --tls-cert")
+    p_serve.add_argument(
+        "--read-only",
+        action="store_true",
+        help="Expose recall only: mutating tools are hidden and refused",
+    )
+    p_serve.add_argument(
+        "--allow-insecure",
+        action="store_true",
+        help="Permit a non-loopback bind with no token (only behind a trusted proxy)",
     )
 
     # status
@@ -6435,6 +6633,9 @@ def main():
     )
     p_migrate_wings.add_argument("--yes", action="store_true", help="Skip the confirmation prompt")
 
+    p_hallways = sub.add_parser("hallways", help="List entity hallways (associative graph)")
+    p_hallways.add_argument("--wing", default=None, help="Filter to one wing")
+    p_hallways.add_argument("--limit", type=int, default=50, help="Max hallways to show")
     p_status = sub.add_parser("status", help="Show what's been filed")
     p_status.add_argument(
         "--backend",
@@ -6757,6 +6958,7 @@ def main():
         "sweep": cmd_sweep,
         "sync": cmd_sync,
         "mcp": cmd_mcp,
+        "serve": cmd_serve,
         "compress": cmd_compress,
         "wake-up": cmd_wakeup,
         "repair": cmd_repair,
@@ -6768,6 +6970,7 @@ def main():
         "rename-wing": cmd_rename_wing,
         "rooms": cmd_rooms,
         "migrate-wings": cmd_migrate_wings,
+        "hallways": cmd_hallways,
         "status": cmd_status,
         "stats": cmd_stats,
         "tags": cmd_tags,

@@ -84,6 +84,12 @@ already use, so this can't independently drift from those call
 sites. (Maintainer review on #1832: avoid duplicating the filter
 dance inline.)
 
+#### `facet_counts`
+
+```python
+def facet_counts(self, field: str, where: Optional[dict] = None, limit: int = 1000) -> dict[str, int]
+```
+
 #### `delete`
 
 ```python

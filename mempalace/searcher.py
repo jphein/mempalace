@@ -252,7 +252,18 @@ def _hybrid_rank(
             r["bm25_score"] = round(raw, 3)
         scored.append((vector_weight * vec_sim + bm25_weight * effective_norm, r))
 
-    scored.sort(key=lambda pair: pair[0], reverse=True)
+    # Break exact score ties toward the more recently authored drawer so equal-score
+    # candidates rank chronologically instead of in arbitrary backend order. ISO-8601
+    # ``authored_at`` strings sort chronologically; missing dates sort oldest.
+    # authored_at lives at the top level on the search_memories path and nested under
+    # "metadata" on the candidate-union path; check both so the tie-break works for each.
+    scored.sort(
+        key=lambda pair: (
+            pair[0],
+            pair[1].get("authored_at") or pair[1].get("metadata", {}).get("authored_at") or "",
+        ),
+        reverse=True,
+    )
     results[:] = [r for _, r in scored]
     return results
 
@@ -1098,6 +1109,7 @@ def _bm25_only_via_sqlite(
                 "source_file": Path(full_source).name if full_source else "?",
                 "source_path": full_source,
                 "created_at": meta.get("filed_at", "unknown"),
+                "authored_at": meta.get("authored_at", meta.get("filed_at", "unknown")),
                 # No vector distance available in BM25-only mode.
                 "similarity": None,
                 "distance": None,
@@ -1720,32 +1732,35 @@ def _merge_bm25_union_candidates(
                 n_results=n_results * 3,
                 where=where or None,
             )
-            bm25_extra = []
-            for hit in lexical.hits:
-                meta = hit.metadata or {}
-                full_source = meta.get("source_file", "") or ""
-                bm25_extra.append(
-                    {
-                        "text": hit.document or "",
-                        "wing": meta.get("wing", "unknown"),
-                        "room": meta.get("room", "unknown"),
-                        "source_file": Path(full_source).name if full_source else "?",
-                        "created_at": meta.get("filed_at", "unknown"),
-                        "similarity": None,
-                        "distance": None,
-                        "effective_distance": None,
-                        "closet_boost": 0.0,
-                        "matched_via": "bm25_backend",
-                        "bm25_score": round(float(hit.score), 3),
-                        "_source_file_full": full_source,
-                        "_chunk_index": meta.get("chunk_index"),
-                    }
-                )
     except UnsupportedCapabilityError:
         raise
     except Exception:
         logger.debug("candidate_strategy=union: lexical fetch failed", exc_info=True)
         return
+
+    bm25_extra = []
+    for hit in lexical.hits:
+        meta = hit.metadata or {}
+        full_source = meta.get("source_file", "") or ""
+        bm25_extra.append(
+            {
+                "text": hit.document or "",
+                "wing": meta.get("wing", "unknown"),
+                "room": meta.get("room", "unknown"),
+                "source_file": Path(full_source).name if full_source else "?",
+                "source_path": full_source,
+                "created_at": meta.get("filed_at", "unknown"),
+                "authored_at": meta.get("authored_at", meta.get("filed_at", "unknown")),
+                "similarity": None,
+                "distance": None,
+                "effective_distance": None,
+                "closet_boost": 0.0,
+                "matched_via": "bm25_backend",
+                "bm25_score": round(float(hit.score), 3),
+                "_source_file_full": full_source,
+                "_chunk_index": meta.get("chunk_index"),
+            }
+        )
 
     def _dedup_key(entry: dict):
         full = entry.get("_source_file_full")
@@ -2467,6 +2482,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
             "source_file": Path(source).name if source else "?",
             "source_path": source,
             "created_at": meta.get("filed_at", "unknown"),
+            "authored_at": meta.get("authored_at", meta.get("filed_at", "unknown")),
             "similarity": round(_distance_to_similarity(effective_dist, metric), 3),
             "distance": round(dist, 4),
             "effective_distance": round(effective_dist, 4),
