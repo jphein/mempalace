@@ -187,11 +187,13 @@ Non-blocking: if another `mine` is already writing to this palace,
 raise MineAlreadyRunning so the caller can exit cleanly instead of
 piling up as a waiting worker.
 
-Re-entrant: if the current thread already holds the lock for the same
+Re-entrant: if the current process already holds the lock for the same
 palace, the context manager passes through without re-acquiring. This
 lets ChromaCollection write methods (which acquire the lock themselves
 to protect MCP/direct callers) compose with miner.mine() (which holds
-the outer lock for the entire mine pipeline) without self-deadlock.
+the outer lock for the entire mine pipeline) without self-deadlock, and
+lets the threaded MCP HTTP transport write from a worker thread while the
+long-lived writer-lease is held on another thread of the same process.
 
 ### `file_already_mined`
 

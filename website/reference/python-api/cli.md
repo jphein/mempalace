@@ -366,6 +366,14 @@ as a CLI verb. Supports ``--wing`` / ``--room`` scoping and a
 
 Daemon unreachable → exit 1; inner-error envelope → exit 2.
 
+### `cmd_hallways`
+
+```python
+def cmd_hallways(args)
+```
+
+List within-wing entity hallways (the auto-built associative graph).
+
 ### `cmd_overlap`
 
 ```python
@@ -484,6 +492,20 @@ def cmd_mcp(args)
 ```
 
 Show how to wire MemPalace into MCP-capable hosts.
+
+### `cmd_serve`
+
+```python
+def cmd_serve(args)
+```
+
+Run a secure remote HTTP MCP server for a team to share one palace (#1877).
+
+A turnkey wrapper over ``mempalace-mcp --transport http``: it resolves a
+bearer token (auto-generating a strong one for non-loopback binds), prints a
+ready-to-paste client config, then execs the real server in the foreground so
+Docker/systemd own the process lifecycle. The token is passed via the
+environment, never argv, so it can't leak through ``ps``.
 
 ### `cmd_compress`
 

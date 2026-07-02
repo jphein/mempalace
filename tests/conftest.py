@@ -152,32 +152,38 @@ def _reset_mcp_cache():
         except (ImportError, AttributeError):
             pass
 
-        # Release chromadb clients opened through the backend layer. Many tests
-        # reach the store via palace.get_collection() (sweep, repair, CLI, ...),
-        # which caches one PersistentClient per palace_path on the long-lived
-        # backend singleton and never closes it. chromadb frees the rust-side
-        # SQLite/HNSW file handles only on client.close(); on POSIX the open
-        # handles are harmless, but on Windows they stay locked and accumulate
-        # across the session until a later test's HNSW segment write fails
-        # (#1128 Windows CI). close_palace() closes the client and drops the
-        # handle without marking the backend closed, so it stays reusable.
-        try:
-            from mempalace import palace as _palace
-
-            backend = getattr(_palace, "_DEFAULT_BACKEND", None)
-            clients = getattr(backend, "_clients", None)
-            if clients:
-                for path in list(clients):
-                    try:
-                        backend.close_palace(path)
-                    except Exception:
-                        pass
-        except (ImportError, AttributeError):
-            pass
+        _close_backend_palace_clients()
 
     _clear_cache()
     yield
     _clear_cache()
+
+
+def _close_backend_palace_clients():
+    """Release chromadb clients opened through the backend layer.
+
+    Many tests reach the store via palace.get_collection() (sweep, repair,
+    CLI, ...), which caches one PersistentClient per palace_path on the
+    long-lived backend singleton and never closes it. chromadb frees the
+    rust-side SQLite/HNSW file handles only on client.close(); on POSIX the
+    open handles are harmless, but on Windows they stay locked and accumulate
+    across the session until a later test's HNSW segment write fails
+    (#1128 Windows CI). close_palace() closes the client and drops the
+    handle without marking the backend closed, so it stays reusable.
+    """
+    try:
+        from mempalace import palace as _palace
+
+        backend = getattr(_palace, "_DEFAULT_BACKEND", None)
+        clients = getattr(backend, "_clients", None)
+        if clients:
+            for path in list(clients):
+                try:
+                    backend.close_palace(path)
+                except Exception:
+                    pass
+    except (ImportError, AttributeError):
+        pass
 
 
 @pytest.fixture(scope="session", autouse=True)

@@ -203,13 +203,16 @@ class TestColdStartDiagnostics:
         """Create just enough on disk for ``_maybe_eager_warmup_embedder``'s
         fresh-install pre-check to pass (``chroma.sqlite3`` exists).
 
-        Returns the palace dir as a string. The file is empty — production
-        code must not read its bytes during pre-check; only its existence
-        gates whether warmup proceeds to the chromadb client open.
+        Returns the palace dir as a string. The file carries a real SQLite
+        header (but no chromadb schema) so backend detection's magic-header
+        check (#1893) accepts it; warmup must still gate on the pre-check
+        before any chromadb client open.
         """
+        from _chroma_palace_helper import make_minimal_chroma_sqlite
+
         palace = tmp_path / "palace"
         palace.mkdir()
-        (palace / "chroma.sqlite3").touch()
+        make_minimal_chroma_sqlite(palace)
         return str(palace)
 
     @staticmethod

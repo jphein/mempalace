@@ -299,10 +299,18 @@ Fetch a single logical drawer by ID. Returns full content and metadata.
 ### `tool_list_drawers`
 
 ```python
-def tool_list_drawers(wing: str = None, room: str = None, tags: list = None, limit: int = 20, offset: int = 0)
+def tool_list_drawers(wing: str = None, room: str = None, since: str = None, before: str = None, tags: list = None, limit: int = 20, offset: int = 0)
 ```
 
 List logical drawers with pagination. Optional wing/room/tag filter.
+
+Optional ``since`` / ``before`` filter by drawer ``filed_at`` (ISO date or
+timestamp): ``since`` is inclusive, ``before`` is exclusive (#1128). A
+drawer whose ``filed_at`` is missing or unparseable is excluded while a
+date bound is active. The filter is applied in Python after the rows are
+fetched — ChromaDB rejects string operands for ``$gte``/``$lt`` (1.5.7),
+and ``filed_at`` is stored as an ISO string, so a server-side ``where``
+comparison is not available.
 
 ### `tool_update_drawer`
 

@@ -165,6 +165,26 @@ def print_sqlite_integrity_abort(palace_path: str, errors: list[str]) -> None
 
 Print a clear repair abort message for SQLite-layer corruption.
 
+### `maybe_autoheal_fts5_index`
+
+```python
+def maybe_autoheal_fts5_index(palace_path: str, errors: list[str], *, progress = print) -> list[str]
+```
+
+Rebuild a malformed FTS5 inverted index in place; return remaining errors.
+
+The repair preflight aborts when ``PRAGMA quick_check`` reports SQLite-layer
+corruption. After concurrent killed-mid-write mines (#1596) the common
+failure is an isolated ``malformed inverted index for FTS5 table``, which is
+fully recoverable: the index rebuilds from the intact
+``embedding_fulltext_search_content`` table without touching drawer rows.
+
+When the errors are isolated to FTS5, rebuild the index under the palace
+write lock (so a live mine cannot race the rebuild) and re-run quick_check.
+Returns the remaining quick_check errors — empty when the heal succeeded.
+Broader corruption, a lock held by another writer, or a rebuild failure
+leaves ``errors`` unchanged so the caller still aborts with the banner.
+
 ### `index_read_recovery_guidance`
 
 ```python

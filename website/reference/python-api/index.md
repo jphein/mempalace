@@ -29,6 +29,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.diary_ingest`](./diary_ingest) — diary_ingest.py — Ingest daily summary files into the palace.
 - [`mempalace.dynamics`](./dynamics) — dynamics.py — Living-connection math for halls + tunnels.
 - [`mempalace.embedding`](./embedding) — Embedding function factory with hardware acceleration.
+- [`mempalace.entities`](./entities) — No-LLM structural entity extraction for the associative graph.
 - [`mempalace.entity_detector`](./entity_detector) — entity_detector.py — Auto-detect people and projects from file content.
 - [`mempalace.entity_registry`](./entity_registry) — entity_registry.py — Persistent personal entity registry for MemPalace.
 - [`mempalace.exporter`](./exporter) — exporter.py — Export the palace as a browsable folder of markdown files.

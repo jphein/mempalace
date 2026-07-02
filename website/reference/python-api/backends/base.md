@@ -340,6 +340,14 @@ such a backend is O(n^2) in collection size: each page re-walks the
 entire collection just to discard everything outside the requested
 slice. See issue #1796.
 
+#### `facet_counts`
+
+```python
+def facet_counts(self, field: str, where: Optional[dict] = None, limit: int = 1000) -> dict[str, int]
+```
+
+Return counts for each distinct value of a metadata field.
+
 #### `maintenance_state`
 
 ```python

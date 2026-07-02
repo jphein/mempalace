@@ -47,6 +47,32 @@ def get_stored_embedder_identity(self)
 def set_embedder_identity(self, identity) -> None
 ```
 
+#### `get_all_metadata`
+
+```python
+def get_all_metadata(self, where = None) -> list[dict]
+```
+
+Single-pass metadata-only fetch — projects out the document column.
+
+The base implementation pages through ``get(include=["metadatas"])``,
+which routes here via ``_scroll`` and (pre-this-override) always sent
+the ``document`` text over the wire even when nothing consumed it.
+For pgvector deployments where the client is remote (TLS over WAN),
+that meant ``mempalace_status`` transferred O(n × document_size)
+bytes per call, dominating wall time. With ``with_document=False``
+the SELECT replaces document with NULL, dropping the per-row payload
+to id + metadata for every caller of this method.
+
+Filtered fetches still need the ``_matches_where`` post-filter for
+non-pushdown semantics (array/object values where ``metadata @> ...``
+is broader than the exact match the caller asked for — same
+correctness contract as #1840's filtered ``get`` path). Since that
+post-filter only reads ``metadata``, we keep the single-scroll +
+``with_document=False`` fast path and just apply the filter locally
+on the metadata dicts before returning. This extends the wire-byte
+win to filtered callers as well.
+
 #### `add`
 
 ```python
