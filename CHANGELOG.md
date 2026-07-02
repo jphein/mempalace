@@ -568,9 +568,9 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/MemPalace/mempalace/compare/v3.4.1...HEAD
+[Unreleased]: https://github.com/MemPalace/mempalace/compare/v3.5.0...HEAD
+[3.5.0]: https://github.com/MemPalace/mempalace/compare/v3.4.1...v3.5.0
 [3.4.1]: https://github.com/MemPalace/mempalace/compare/v3.4.0...v3.4.1
-[3.4.0]: https://github.com/MemPalace/mempalace/compare/v3.3.6...v3.4.0
 [3.3.6]: https://github.com/MemPalace/mempalace/compare/v3.3.5...v3.3.6
 [3.3.5]: https://github.com/MemPalace/mempalace/compare/v3.3.4...v3.3.5
 [3.3.4]: https://github.com/MemPalace/mempalace/compare/v3.3.3...v3.3.4
