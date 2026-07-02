@@ -237,22 +237,22 @@ mempal_log "stop" "$MEMPAL_CONV_ID" "TRIGGERING SAVE at counter=$NEXT"
 # Cursor-configured timeout. `command -v mempalace` gates so a user
 # without the CLI on PATH (e.g. a fresh GUI-launched session) does
 # not see a noisy error.
-if "$MEMPAL_PYTHON_BIN" -c "import mempalace" >/dev/null 2>&1; then
+if command -v mempalace >/dev/null 2>&1; then
     if mempal_is_valid_transcript "$MEMPAL_TRANSCRIPT" \
         && [ -f "$MEMPAL_TRANSCRIPT" ]; then
-        ( "$MEMPAL_PYTHON_BIN" -m mempalace mine "$(dirname "$MEMPAL_TRANSCRIPT")" --mode convos \
+        ( mempalace mine "$(dirname "$MEMPAL_TRANSCRIPT")" --mode convos \
             >> "$MEMPAL_CURSOR_LOG" 2>&1 ) &
     elif [ -n "$MEMPAL_TRANSCRIPT" ]; then
         mempal_log "stop" "$MEMPAL_CONV_ID" \
             "skipping invalid transcript path: $MEMPAL_TRANSCRIPT"
     fi
     if [ -n "$MEMPAL_DIR" ] && [ -d "$MEMPAL_DIR" ]; then
-        ( "$MEMPAL_PYTHON_BIN" -m mempalace mine "$MEMPAL_DIR" --mode projects \
+        ( mempalace mine "$MEMPAL_DIR" --mode projects \
             >> "$MEMPAL_CURSOR_LOG" 2>&1 ) &
     fi
 else
     mempal_log "stop" "$MEMPAL_CONV_ID" \
-        "mempalace module not importable via $MEMPAL_PYTHON_BIN; skipping background mine"
+        "mempalace CLI not on PATH; skipping background mine"
 fi
 
 # The followup is the load-bearing verbatim path for Cursor (see header),
