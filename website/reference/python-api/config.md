@@ -249,6 +249,19 @@ Auto-query mode: off, dry-run, conservative, balanced, aggressive.
 
 Env ``AUTO_QUERY_MODE`` > config ``auto_query.mode`` > ``"off"``.
 
+#### `auto_query_depth_cache_ttl`
+
+```python
+def auto_query_depth_cache_ttl(self) -> int
+```
+
+TTL (seconds) for the depth-refresh injection cache; 0 disables.
+
+Env ``AUTO_QUERY_DEPTH_CACHE_TTL`` > config ``auto_query.depth_cache_ttl``
+> 900. The depth query is deterministic per wing, so serving repeat
+fires from cache trades sub-second staleness bounds for skipping a
+~1s daemon round-trip on every 10th turn.
+
 #### `auto_query_max_per_turn`
 
 ```python

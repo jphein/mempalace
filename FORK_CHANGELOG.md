@@ -50,6 +50,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/mcp_server.py`, `mempalace/searcher.py`, `mempalace/cli.py`, `mempalace/convo_miner.py`, `mempalace/embedding.py`, `mempalace/backends/base.py`, `mempalace/backends/pgvector.py`, `tests/conftest.py`, `tests/test_mcp_server.py`, `tests/test_backends.py`
 
 
+### Performance
+
+
+- **Auto-query: TTL cache for the deterministic depth-refresh injection — repeat fires 0ms vs ~850ms daemon round-trip** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  The periodic depth refresh fires a deterministic query ("session
+  context <wing>") whose warm daemon round-trip measures ~780–880ms —
+  well over the 500ms hook latency budget — while its results barely
+  change within a session. Repeat fires are now served from a small
+  on-disk TTL cache (default 900s; ``auto_query.depth_cache_ttl`` /
+  ``AUTO_QUERY_DEPTH_CACHE_TTL``, 0 disables): live A/B shows the
+  second fire at 202ms end-to-end with 0ms daemon time vs 957ms cold.
+  Only the first fire per TTL window pays the daemon call; every path
+  fails open, and content-driven queries are never cached.
+
+  *Tests:* 8 tests (TestCacheKey, TestRoundTrip, TestRunnerIntegration)
+  *Files:* `mempalace/auto_query/depth_cache.py`, `mempalace/auto_query/runner.py`, `mempalace/config.py`, `tests/test_auto_query_depth_cache.py`
+
+
 ## [2026-07-01]
 
 
