@@ -161,6 +161,27 @@ Three bands of work, all instances of the [architectural principles](docs/ARCHIT
 - **Single-writer architecture.** [palace-daemon](https://github.com/techempower-org/palace-daemon) is the only process that opens the palace; clients connect over HTTP. ChromaDB HNSW concurrency hazards become structurally impossible.
 - **Deterministic hook saves.** Silent saves bypass auto-memory conflicts — the LLM is no longer in the save path. Verbatim transcript ingest is the entire save path.
 
+## How the fork diverges today
+
+The complete current-state map of code divergence from `upstream/develop` (as of the 2026-07-02 sync; ~30 fork-only modules, 88 modified files). Chronological detail per change lives in [`FORK_CHANGELOG.md`](FORK_CHANGELOG.md); this is the by-area view.
+
+| Area | What the fork adds/changes | Status vs upstream |
+|---|---|---|
+| **Auto-query context injection** | `mempalace/auto_query/` — UserPromptSubmit hook pipeline (shell pre-filter → signal scoring → router → search → injection), periodic depth refresh, lowercase wing/alias matching, decision log, TTL depth cache | Fork-only |
+| **Tags** | `tags.py` + `tag_extraction.py` (TF-IDF auto-extraction on write), `$contains_all`/`$contains_any` filters across chroma + postgres backends, tag surfaces in MCP tools | Fork-only |
+| **Postgres production backend** | `backends/postgres.py` (RFC 001, psycopg3, production at 411K drawers), `migrate_to_postgres.py`, install/cutover scripts, postgres fast paths in `tool_status` | Fork-only; upstream ships a parallel `backends/pgvector.py` — consolidation candidate |
+| **Knowledge graph on Apache AGE** | `knowledge_graph_age.py`, `palace_graph_age.py`, `backfill_age.py`, LLM triple-extraction pipeline (`kg_llm_extractor.py`, `kg_triple_worker.py`, write-through, canonical vocab + predicate normalization), systemd worker units | Fork-only; composes with upstream #1895 graph auto-population; upstream PR #1903 (`BaseKGStore`) would give it a proper plug point |
+| **Retrieval quality stack** | `rrf.py` (opt-in RRF fusion; convex default won our labeled A/B), `multi_encoder.py`, `cross_encoder_rerank.py`, `calibration.py` (isotonic scaffolding), `recency.py` (decay weighting), BM25 top-up warnings | Fork-only; rerank/calibration pending a labeled conversational probe set |
+| **Ingest & write quality** | `write_sanitizer.py`, `novelty.py` + wiring (novelty tagging on mine), `room_taxonomy.py` (canonical 7-room taxonomy + validation), `pending_queue.py`, verbatim mode (`hooks.verbatim_mode`), miner `--workers` parallel-prepare | Fork-only |
+| **Source adapters (RFC 002)** | `sources/` adapter contract + concrete adapters: opencode, aider, codex, gemini, warp, conversations, filesystem | RFC 002 + OpenCode adapter PR'd upstream ([#1484](https://github.com/MemPalace/mempalace/pull/1484) open); upstream detects session formats in `normalize.py` instead — architectural conversation |
+| **Feedback & ratings** | `ratings.py` + `mempalace_rate_memory` MCP tool (bounded rating signal into ranking) | Fork-only |
+| **Embedding** | `adaptmem_ft` SentenceTransformer encoder option, ORT intra-op thread cap + lazy-download fix for the capped session | Fork-only (thread-cap issue upstream #1068) |
+| **Daemon routing** | `auto_wake.py` (WoL for a sleeping palace host), `PALACE_DAEMON_URL` strict routing in CLI/hooks/MCP with startup announce, daemon-strict skip of local probes | Fork-specific (assumes [palace-daemon](https://github.com/techempower-org/palace-daemon)); portable pieces could upstream |
+| **Hooks** | Silent deterministic saves (`hook_silent_save`), PostCompact + SessionStart compact-recovery wiring, ms-scale timeouts, `hooks/palace-auto-query.sh` | Fork-only; upstream moved toward non-blocking saves in v3.3.0 — direction already aligned |
+| **Docs/CI machinery** | `docs/fork-changes.yaml` + renderers, `check-docs.sh` drift gate, lint-docs workflow, ARCHITECTURE/ECOSYSTEM/BIBLIOGRAPHY, benchmark corpora + eval scripts (fusion A/B, rerank, chunk ablation) | Fork-specific (eval scripts upstreamable) |
+
+Not divergence: everything else — the fork tracks upstream verbatim and re-syncs regularly (last: 213 commits, [#369](https://github.com/techempower-org/mempalace/pull/369)).
+
 ## Planned work
 
 Organized around the [verbatim-vs-derivative axis](docs/ARCHITECTURE.md#1-verbatim-vs-derivative-is-the-canonical-axis). Each item evaluated against the architectural principles.
