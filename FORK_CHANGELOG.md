@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **Sync upstream/develop through da5a48c (post-v3.5.0): remote MCP server w/ TLS + read-only, graph auto-population, Qdrant facets, list_drawers date filters, 213 commits** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Sync upstream/develop through da5a48c (post-v3.5.0): remote MCP server w/ TLS + read-only, graph auto-population, Qdrant facets, list_drawers date filters, 213 commits** ([`b46f18d`](https://github.com/techempower-org/mempalace/commit/b46f18d))
   Merged 213 upstream commits (post-v3.5.0 ``da5a48c``). Notable
   upstream additions: the turnkey secure remote MCP server with TLS and
   a read-only server mode (#1877 / #1900), associative-graph
@@ -53,7 +53,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Performance
 
 
-- **Auto-query: TTL cache for the deterministic depth-refresh injection — repeat fires 0ms vs ~850ms daemon round-trip** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Auto-query: TTL cache for the deterministic depth-refresh injection — repeat fires 0ms vs ~850ms daemon round-trip** ([`be903e6`](https://github.com/techempower-org/mempalace/commit/be903e6))
   The periodic depth refresh fires a deterministic query ("session
   context <wing>") whose warm daemon round-trip measures ~780–880ms —
   well over the 500ms hook latency budget — while its results barely
@@ -128,7 +128,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **Sync upstream/develop through v3.5.0 (73e74bf): MCP HTTP transport, source_file filter, checkpoint tool, SessionEnd hook, 185 commits** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Sync upstream/develop through v3.5.0 (73e74bf): MCP HTTP transport, source_file filter, checkpoint tool, SessionEnd hook, 185 commits** ([`8711e1c`](https://github.com/techempower-org/mempalace/commit/8711e1c))
   Merged 185 upstream commits (v3.4.1 ``b5c79a1`` + v3.5.0 ``e8f96dd``).
   Notable upstream additions: the MCP HTTP transport with a
   DNS-rebind guard (#1806), the ``mempalace_checkpoint`` batch-save
@@ -159,7 +159,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Performance
 
 
-- **Restore concurrent file mining via parallel-prepare/serial-write (regression from a dropped sync hunk); opt-in --workers** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Restore concurrent file mining via parallel-prepare/serial-write (regression from a dropped sync hunk); opt-in --workers** ([`42a107b`](https://github.com/techempower-org/mempalace/commit/42a107b))
   The ``--workers`` flag had been stranded in ``cli.py`` — advertised
   but consumed nowhere after an upstream sync dropped the
   ``ThreadPoolExecutor`` wiring originally added in ``5cd14bd``, so
@@ -188,7 +188,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **Sync upstream/develop through v3.4.0 (2ec4bae): RFC-001 backend stack, diary checkpoints restored, 113 commits** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Sync upstream/develop through v3.4.0 (2ec4bae): RFC-001 backend stack, diary checkpoints restored, 113 commits** ([`373fdf2`](https://github.com/techempower-org/mempalace/commit/373fdf2))
   Merged 113 upstream commits (~40 PRs) including the v3.4.0 release
   and the RFC-001 pluggable-backend stack (#1679, #1727 metric-aware
   similarity, #1731/#1734 embedder identity, #1732 advisory-locked
@@ -217,7 +217,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **auto_wake: opt-in wake-on-demand for a sleeping palace-daemon host (wake command + /health poll + single retry)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **auto_wake: opt-in wake-on-demand for a sleeping palace-daemon host (wake command + /health poll + single retry)** ([`8e0d896`](https://github.com/techempower-org/mempalace/commit/8e0d896))
   The palace daemon often runs on a Wake-on-LAN-armed host that
   suspends to save power, so "connection refused" routinely means
   *asleep*, not *down*. With ``"auto_wake"`` configured in

@@ -258,14 +258,14 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | Auto-query: TTL cache for the deterministic depth-refresh injection — repeat fires 0ms vs ~850ms daemon round-trip | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
-| 2 | Sync upstream/develop through da5a48c (post-v3.5.0): remote MCP server w/ TLS + read-only, graph auto-population, Qdrant facets, list_drawers date filters, 213 commits | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
+| 1 | Auto-query: TTL cache for the deterministic depth-refresh injection — repeat fires 0ms vs ~850ms daemon round-trip | — | [`be903e6`](https://github.com/techempower-org/mempalace/commit/be903e6) |
+| 2 | Sync upstream/develop through da5a48c (post-v3.5.0): remote MCP server w/ TLS + read-only, graph auto-population, Qdrant facets, list_drawers date filters, 213 commits | — | [`b46f18d`](https://github.com/techempower-org/mempalace/commit/b46f18d) |
 | 3 | Auto-query firing fixes: frozen turn counter, dead wing scoring, lowercase entities, turn-1 cadence | — | [`fad3e27`](https://github.com/techempower-org/mempalace/commit/fad3e27) |
 | 4 | Auto-query: periodic depth signal, unknown-entity 0->1 bump, broader temporal patterns | — | [`864d7a4`](https://github.com/techempower-org/mempalace/commit/864d7a4) |
-| 5 | Sync upstream/develop through v3.5.0 (73e74bf): MCP HTTP transport, source_file filter, checkpoint tool, SessionEnd hook, 185 commits | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
-| 6 | Restore concurrent file mining via parallel-prepare/serial-write (regression from a dropped sync hunk); opt-in --workers | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
-| 7 | Sync upstream/develop through v3.4.0 (2ec4bae): RFC-001 backend stack, diary checkpoints restored, 113 commits | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
-| 8 | auto_wake: opt-in wake-on-demand for a sleeping palace-daemon host (wake command + /health poll + single retry) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
+| 5 | Sync upstream/develop through v3.5.0 (73e74bf): MCP HTTP transport, source_file filter, checkpoint tool, SessionEnd hook, 185 commits | — | [`8711e1c`](https://github.com/techempower-org/mempalace/commit/8711e1c) |
+| 6 | Restore concurrent file mining via parallel-prepare/serial-write (regression from a dropped sync hunk); opt-in --workers | — | [`42a107b`](https://github.com/techempower-org/mempalace/commit/42a107b) |
+| 7 | Sync upstream/develop through v3.4.0 (2ec4bae): RFC-001 backend stack, diary checkpoints restored, 113 commits | — | [`373fdf2`](https://github.com/techempower-org/mempalace/commit/373fdf2) |
+| 8 | auto_wake: opt-in wake-on-demand for a sleeping palace-daemon host (wake command + /health poll + single retry) | — | [`8e0d896`](https://github.com/techempower-org/mempalace/commit/8e0d896) |
 | 9 | AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
 | 10 | pluggable adaptmem_ft encoder backend selectable via MEMPALACE_EMBEDDING_MODEL (closes #308) | — | [`5fba6d8`](https://github.com/techempower-org/mempalace/commit/5fba6d8) |
 | 11 | README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28) | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
