@@ -27,7 +27,7 @@ entries:
   - id: auto-query-depth-cache
     date: 2026-07-02
     bucket: Performance
-    commit: TBD
+    commit: be903e6
     area: Search
     summary: "Auto-query: TTL cache for the deterministic depth-refresh injection — repeat fires 0ms vs ~850ms daemon round-trip"
     tests: "8 tests (TestCacheKey, TestRoundTrip, TestRunnerIntegration)"
@@ -51,7 +51,7 @@ entries:
   - id: sync-upstream-368
     date: 2026-07-02
     bucket: Changed
-    commit: TBD
+    commit: b46f18d
     area: Reliability
     summary: "Sync upstream/develop through da5a48c (post-v3.5.0): remote MCP server w/ TLS + read-only, graph auto-population, Qdrant facets, list_drawers date filters, 213 commits"
     files:
@@ -153,7 +153,7 @@ entries:
   - id: sync-upstream-350
     date: 2026-06-26
     bucket: Changed
-    commit: TBD
+    commit: 8711e1c
     area: Reliability
     summary: "Sync upstream/develop through v3.5.0 (73e74bf): MCP HTTP transport, source_file filter, checkpoint tool, SessionEnd hook, 185 commits"
     files:
@@ -190,7 +190,7 @@ entries:
   - id: restore-concurrent-mining
     date: 2026-06-14
     bucket: Performance
-    commit: TBD
+    commit: 42a107b
     area: Performance
     summary: "Restore concurrent file mining via parallel-prepare/serial-write (regression from a dropped sync hunk); opt-in --workers"
     files:
@@ -221,7 +221,7 @@ entries:
   - id: sync-upstream-340
     date: 2026-06-11
     bucket: Changed
-    commit: TBD
+    commit: 373fdf2
     area: Reliability
     summary: "Sync upstream/develop through v3.4.0 (2ec4bae): RFC-001 backend stack, diary checkpoints restored, 113 commits"
     files:
@@ -255,7 +255,7 @@ entries:
   - id: auto-wake
     date: 2026-06-10
     bucket: Added
-    commit: TBD
+    commit: 8e0d896
     area: Reliability
     summary: "auto_wake: opt-in wake-on-demand for a sleeping palace-daemon host (wake command + /health poll + single retry)"
     tests: "31 — tests/test_auto_wake.py (config normalization fail-open-to-off, HTTP-vs-connection eligibility gate, attempt/poll/deadline, once-per-process guard, urlopen wrapper retry)"
