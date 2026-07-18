@@ -5,7 +5,9 @@ The palace daemon often runs on a host that suspends to save power
 state, not a fault. When a CLI request hits a connection-level failure,
 this module can run a user-configured wake command (a WoL sender, an
 IPMI call, anything), wait for the daemon's ``/health`` endpoint to
-come back, and retry the original request once.
+come back, and retry the original request once. A proxy in the path
+(HTTP_PROXY, reverse proxy) reports the same sleeping host as its own
+502/504 response, so those statuses count as wake-eligible too.
 
 Strictly opt-in: enabled only by an ``auto_wake`` entry in
 ``~/.mempalace/config.json`` (see :meth:`MempalaceConfig.auto_wake`);
@@ -34,15 +36,26 @@ _WAKE_COMMAND_TIMEOUT = 15  # seconds the wake command itself may take
 _attempted = False
 
 
-def _is_wake_eligible(exc: BaseException) -> bool:
-    """True for connection-level failures a host wake could fix.
+# Statuses a proxy emits for an unreachable upstream. When a forward or
+# reverse proxy sits between the CLI and the palace host (e.g. a sandboxed
+# session with HTTP_PROXY set and the palace hostname missing from
+# NO_PROXY), a sleeping host surfaces as the proxy's OWN 502/504 response
+# instead of a connection error. 503 is deliberately absent: the daemon
+# itself answers 503 under crash-loop protection, and a spurious wake
+# would stall the CLI for the full poll deadline against an awake host.
+_PROXY_UPSTREAM_DOWN = frozenset({502, 504})
 
-    ``HTTPError`` means the daemon answered — waking can't help, and
-    it must propagate so 404-fallback paths keep working. It subclasses
-    both ``URLError`` and ``OSError``, so it is excluded first.
+
+def _is_wake_eligible(exc: BaseException) -> bool:
+    """True for failures a host wake could fix.
+
+    Any other ``HTTPError`` means the daemon itself answered — waking
+    can't help, and it must propagate so 404-fallback paths keep
+    working. It subclasses both ``URLError`` and ``OSError``, so it is
+    classified first.
     """
     if isinstance(exc, urllib.error.HTTPError):
-        return False
+        return exc.code in _PROXY_UPSTREAM_DOWN
     return isinstance(exc, (urllib.error.URLError, ConnectionError, OSError))
 
 

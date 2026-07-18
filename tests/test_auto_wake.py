@@ -4,7 +4,8 @@ The palace daemon may live on a suspend-to-RAM host where "connection
 refused" routinely means "asleep". With ``auto_wake`` configured, the
 CLI's daemon calls run a user-supplied wake command, poll ``/health``,
 and retry once. These tests cover the config normalization (fail-open
-to *off*), the failure-classification gate (HTTP errors never wake),
+to *off*), the failure-classification gate (HTTP errors from a live
+daemon never wake; a proxy's 502/504 for a sleeping upstream does),
 the retry path, and the once-per-process guard.
 """
 
@@ -94,9 +95,21 @@ class TestAutoWakeConfig:
 
 
 class TestWakeEligibility:
-    def test_http_error_is_not_eligible(self):
-        err = urllib.error.HTTPError("http://d", 404, "nope", {}, None)
+    @pytest.mark.parametrize("code", [404, 500, 503])
+    def test_http_error_from_live_daemon_is_not_eligible(self, code):
+        # 503 stays ineligible on purpose: the daemon itself emits it under
+        # crash-loop protection, and a spurious wake would stall the CLI for
+        # the full poll deadline against an already-awake host.
+        err = urllib.error.HTTPError("http://d", code, "nope", {}, None)
         assert not auto_wake._is_wake_eligible(err)
+
+    @pytest.mark.parametrize("code", [502, 504])
+    def test_proxy_upstream_down_statuses_are_eligible(self, code):
+        # A forward/reverse proxy between the CLI and the palace host
+        # answers for a sleeping upstream with its OWN 502/504 — the exact
+        # asleep case auto_wake exists for, disguised as an HTTP response.
+        err = urllib.error.HTTPError("http://d", code, "bad gateway", {}, None)
+        assert auto_wake._is_wake_eligible(err)
 
     @pytest.mark.parametrize(
         "exc",
@@ -220,6 +233,23 @@ class TestUrlopenWithWake:
             return _FakeResponse()
 
         monkeypatch.setattr(auto_wake.urllib.request, "urlopen", _flaky)
+        monkeypatch.setattr(auto_wake, "attempt_wake", lambda url, s: True)
+
+        with auto_wake.urlopen_with_wake("req", timeout=5) as resp:
+            assert resp.status == 200
+        assert len(attempts) == 2
+
+    def test_proxy_502_triggers_wake_and_retry(self, monkeypatch):
+        self._patch_config(monkeypatch, settings=dict(_SETTINGS))
+        attempts = []
+
+        def _proxied(req, timeout):
+            attempts.append(req)
+            if len(attempts) == 1:
+                raise urllib.error.HTTPError("http://d", 502, "Bad Gateway", {}, None)
+            return _FakeResponse()
+
+        monkeypatch.setattr(auto_wake.urllib.request, "urlopen", _proxied)
         monkeypatch.setattr(auto_wake, "attempt_wake", lambda url, s: True)
 
         with auto_wake.urlopen_with_wake("req", timeout=5) as resp:
