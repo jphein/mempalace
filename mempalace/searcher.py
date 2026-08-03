@@ -1711,6 +1711,8 @@ def _merge_bm25_union_candidates(
     except Exception:
         logger.debug("candidate_strategy=union: backend probe failed", exc_info=True)
 
+    bm25_extra: list = []
+    lexical = None
     try:
         if use_postgres and dsn:
             bm25_extra = _bm25_only_via_postgres(
@@ -1738,29 +1740,31 @@ def _merge_bm25_union_candidates(
         logger.debug("candidate_strategy=union: lexical fetch failed", exc_info=True)
         return
 
-    bm25_extra = []
-    for hit in lexical.hits:
-        meta = hit.metadata or {}
-        full_source = meta.get("source_file", "") or ""
-        bm25_extra.append(
-            {
-                "text": hit.document or "",
-                "wing": meta.get("wing", "unknown"),
-                "room": meta.get("room", "unknown"),
-                "source_file": Path(full_source).name if full_source else "?",
-                "source_path": full_source,
-                "created_at": meta.get("filed_at", "unknown"),
-                "authored_at": meta.get("authored_at", meta.get("filed_at", "unknown")),
-                "similarity": None,
-                "distance": None,
-                "effective_distance": None,
-                "closet_boost": 0.0,
-                "matched_via": "bm25_backend",
-                "bm25_score": round(float(hit.score), 3),
-                "_source_file_full": full_source,
-                "_chunk_index": meta.get("chunk_index"),
-            }
-        )
+    # ``lexical`` is only bound on the capability path — the postgres
+    # branch already produced ``bm25_extra`` in final entry shape.
+    if lexical is not None:
+        for hit in lexical.hits:
+            meta = hit.metadata or {}
+            full_source = meta.get("source_file", "") or ""
+            bm25_extra.append(
+                {
+                    "text": hit.document or "",
+                    "wing": meta.get("wing", "unknown"),
+                    "room": meta.get("room", "unknown"),
+                    "source_file": Path(full_source).name if full_source else "?",
+                    "source_path": full_source,
+                    "created_at": meta.get("filed_at", "unknown"),
+                    "authored_at": meta.get("authored_at", meta.get("filed_at", "unknown")),
+                    "similarity": None,
+                    "distance": None,
+                    "effective_distance": None,
+                    "closet_boost": 0.0,
+                    "matched_via": "bm25_backend",
+                    "bm25_score": round(float(hit.score), 3),
+                    "_source_file_full": full_source,
+                    "_chunk_index": meta.get("chunk_index"),
+                }
+            )
 
     def _dedup_key(entry: dict):
         full = entry.get("_source_file_full")

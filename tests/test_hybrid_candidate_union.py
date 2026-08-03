@@ -316,3 +316,69 @@ class TestHybridWeightsEnvKnob:
         ]
         ranked = _hybrid_rank(results, "alpha", vector_weight=0.95, bm25_weight=0.05)
         assert ranked[0]["distance"] == 0.20
+
+
+class TestUnionPostgresPath:
+    """The postgres dispatch inside ``_merge_bm25_union_candidates``.
+
+    Fork-only branch: upstream's merger has a single ``lexical_search``
+    path, so upstream tests never exercise the ``use_postgres`` arm.
+    Regression guard for the b46f18d upstream-sync merge, where the
+    postgres results were clobbered by an unconditional ``bm25_extra = []``
+    and the follow-up loop read ``lexical`` — a name only bound on the
+    capability path (UnboundLocalError, techempower-org/mempalace#378).
+    """
+
+    @staticmethod
+    def _fake_pg_hit():
+        return {
+            "text": "Brand voice rules: dry, sturdy, never effusive.",
+            "wing": "shop",
+            "room": "guides",
+            "source_file": "brand_voice_D4.md",
+            "source_path": "/palace/shop/guides/brand_voice_D4.md",
+            "created_at": "2026-08-01T00:00:00",
+            "authored_at": "2026-08-01T00:00:00",
+            "similarity": None,
+            "distance": None,
+            "effective_distance": None,
+            "closet_boost": 0.0,
+            "matched_via": "bm25_postgres",
+            "bm25_score": 1.234,
+            "_source_file_full": "/palace/shop/guides/brand_voice_D4.md",
+            "_chunk_index": 0,
+        }
+
+    def test_postgres_path_merges_bm25_hits_without_lexical_fetch(self, monkeypatch):
+        from mempalace import searcher
+
+        class _PostgresConfig:
+            backend = "postgres"
+            postgres_dsn = "postgresql://palace@localhost:5433/test"
+
+        monkeypatch.setattr("mempalace.config.MempalaceConfig", lambda: _PostgresConfig())
+        monkeypatch.setattr(
+            searcher,
+            "_bm25_only_via_postgres",
+            lambda *args, **kwargs: {"results": [self._fake_pg_hit()]},
+        )
+
+        class _NoLexicalCollection:
+            def lexical_search(self, **kwargs):
+                raise AssertionError("postgres path must not call the collection's lexical_search")
+
+        hits = []
+        searcher._merge_bm25_union_candidates(
+            hits,
+            _NoLexicalCollection(),
+            query="brand voice rules",
+            wing="shop",
+            room="",
+            n_results=5,
+        )
+
+        assert [h["source_file"] for h in hits] == ["brand_voice_D4.md"], (
+            "postgres BM25 candidates must survive the merge, not be clobbered"
+        )
+        assert hits[0]["matched_via"] == "bm25_postgres"
+        assert hits[0]["distance"] is None  # BM25-only entries carry no vector distance
