@@ -9,7 +9,9 @@ The palace daemon often runs on a host that suspends to save power
 state, not a fault. When a CLI request hits a connection-level failure,
 this module can run a user-configured wake command (a WoL sender, an
 IPMI call, anything), wait for the daemon's ``/health`` endpoint to
-come back, and retry the original request once.
+come back, and retry the original request once. A proxy in the path
+(HTTP_PROXY, reverse proxy) reports the same sleeping host as its own
+502/504 response, so those statuses count as wake-eligible too.
 
 Strictly opt-in: enabled only by an ``auto_wake`` entry in
 ``~/.mempalace/config.json`` (see :meth:`MempalaceConfig.auto_wake`);

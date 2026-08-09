@@ -221,7 +221,7 @@ As of OpenCode 1.15.7:
 So today, agents recall memories by explicitly invoking the MCP tools
 (`mempalace_search` etc.) — not via implicit per-turn system-prompt
 injection. The instructions in
-[`MEMPALACE.md`](https://platform.claude.com/docs/en/claude-code/memory)-style
+[`MEMPALACE.md`](https://code.claude.com/docs/en/memory)-style
 project memory help nudge the agent to consult `mempalace_search`
 proactively.
 
