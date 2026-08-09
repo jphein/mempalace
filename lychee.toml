@@ -32,6 +32,12 @@ exclude = [
     # Local / loopback — sometimes appears in example configs.
     '^https?://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:|/|$)',
 
+    # Upstream CHANGELOG compare links for tags upstream has not cut yet —
+    # develop's changelog runs ahead of the release tags, so these 404 until
+    # the release lands. Added 2026-08-09 (v3.7.0 sync); remove once
+    # MemPalace/mempalace tags v3.6.0/v3.7.0.
+    '^https://github\.com/MemPalace/mempalace/compare/v3\.[67]\.0',
+
     # Private homelab hostnames (jphe.in subdomains) — not reachable
     # from GitHub runners. These are docs about JP's internal deploy.
     '^https?://[a-z0-9.-]+\.jphe\.in(:|/|$)',
