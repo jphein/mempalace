@@ -10,6 +10,108 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [3.7.0] — 2026-08-02
+
+### Features
+
+- **Hook write-routing through the daemon.** Background hook saves and mines can honor the shared write-routing policy so multi-session setups serialize mutations through one local owner instead of racing the palace. (#2030, #1963)
+
+### Performance
+
+- **EmbeddingGemma groups documents by size before sub-batching.** The tokenizer pads every row of a sub-batch to the longest sequence in it, so arrival order decided the bill: one long verbatim message dragged a whole sub-batch up to its own length. Measured over 43,157 `sweep` drawers from 160 Claude Code transcripts, padded token slots drop 39.7% and the quadratic attention term 45.0%. Vectors move by at most one float32 ULP (1.2e-07 absolute, cosine 0.99999992), which is reduction-order rounding and not a change of meaning. Applies to `embedding_model: embeddinggemma` only; the default MiniLM embedder pads to a fixed width and was never affected. (#2104)
+- **HNSW capacity probes are cached** and invalidated by palace file signature, so repeated MCP status/taxonomy paths no longer re-scan native segment files on every call. (#2051, #1471)
+- **`chunk_text` line numbering is O(N)** via incremental tallies, fixing multi-second hangs on large sources. (#2054, #2055)
+
+### Bug Fixes
+
+- **Mining works again on the default Chroma backend.** Once Chroma began declaring `requires_explicit_embeddings`, every write started routing through `EmbeddingCollection`, whose `_embed_texts` built rows with `list(ndarray)` — that unpacks into `np.float32` *scalars*, which chromadb rejects outright (`Expected embeddings to be a list of floats or ints, a list of lists, a numpy array, or a list of numpy arrays`). `mine`, and every other write against a default palace, aborted on the first drawer. Vectors now convert to real Python floats. The suite was structurally blind to this: conftest's autouse embedding fixture replaces `_embed_texts` itself for every module outside `test_embedding` / `test_embeddinggemma`, so the defective function was never executed under test — the regression tests therefore live in `test_embedding.py`, where that stub does not apply. (#2187)
+- **ChatGPT data exports are parsed instead of stored as raw JSON.** A real `conversations.json` is a top-level array of conversations, which no parser claimed, so `mine --mode convos` chunked the raw JSON and lost every speaker turn while reporting success. Each conversation now normalizes to its own transcript, as Claude.ai privacy exports already do, so per-conversation dedup survives a re-export. The ChatGPT parser also type-checks its nested shapes, so an unrelated array carrying a `mapping` key is declined instead of raising. (#2160)
+- **Local backends enforce process-lifetime single-writer ownership.** File-backed and unknown backends require one writer owner for the full process lifetime (daemon holds the lease until workers exit; writable MCP HTTP acquires ownership before bind and refuses startup when blocked). Read-only MCP may coexist; `sqlite_exact` opens genuine query-only/immutable readers; remote Milvus/Zilliz remain multi-process. Addresses multi-writer SQLite/WAL corruption from MCP HTTP + daemon + mine topologies. (#2079, #2045)
+- **Chroma HNSW write defaults match chromadb** (`batch_size=100` / `sync_threshold=1000`) instead of the old 2/2 bloat guard that rewrote segments thousands of times on large mines. (#2107, #2106)
+- **Repair and recovery are safer under contention.** `repair --mode from-sqlite` takes the mine-lock before archiving; rebuilds preserve a verified temp collection when the live swap fails; sparse drawers with zero `embedding_metadata` rows are no longer dropped; truncated ID pagination fails loud instead of pretending success. (#2109, #2086, #2087)
+- **`repair --mode from-sqlite --dry-run` is a true preview.** It no longer archives or re-embeds; it prints per-collection would-be counts from SQLite ground truth and exits without touching the palace. Unreadable counts fail closed instead of inventing zeros. (#2133, #2095, #1654)
+- **`repair --dry-run` is a true preview in the default (legacy) mode too.** That path ignored the flag entirely and ran the real rebuild — deleting any existing `<palace>.backup`, copying the palace over it, and re-filing the drawers collection. It now prints a read-only plan and exits without opening a chromadb client, which is itself a write to `chroma.sqlite3`. The plan names the live-collection delete the rebuild performs, warns when an existing backup would be destroyed, and reports the truncation guard as disabled when `--confirm-truncation-ok` is set. An isolated FTS5 inverted-index error is reported as auto-healable instead of raising the manual-recovery abort a real run never reaches, unreadable counts fail closed with a non-zero exit, and the `--dry-run` help no longer claims to be `--mode max-seq-id` only. (#2144)
+- **HNSW divergence is preflighted before remaining `col.count()` crash sites** across mine, dedup, migrate, repair, and palace helpers. (#2093)
+- **Re-mine and conversation ingest no longer lose or duplicate drawers.** Content-hash dedup prevents duplicate LLM conversation drawers; sweeper drawers are excluded from convo extract-mode purge scope and failed purges abort; search returns round-trippable `drawer_id` values for `get_drawer`. (#2050, #2125, #2089, #2090, #2044, #2080)
+- **MCP and daemon lifecycle harden multi-agent use.** Read-only mode refuses config and checkpoint-ack tools that rewrite host state; stdio MCP exits on stdin EOF/broken pipe so orphaned sessions release locks; daemon jobs refused the palace lock are deferred instead of failed permanently. (#2126, #2103, #2101, #2072, #2029, #2014)
+- **Entity-candidate extraction no longer hangs on long ASCII runs** (base64, minified blobs) while preserving CJK/non-ASCII text. (#2127, #2065, #2063)
+- **Mining windowing rejects `chunk_overlap` above half the chunk size**, stopping infinite chunk_text loops. (#2056, #2058)
+- **`docker-compose.yml` is valid again.** The `environment:` key was declared with only comments beneath it, which YAML parses as null, so Compose rejected the whole file (`services.mcp.environment must be a mapping`) — every documented Compose command failed before starting. The key is commented out along with its examples, which now use mapping syntax so uncommenting them yields a valid block. (#2188)
+
+### Documentation
+
+- Operator write-routing / single-writer recovery notes in `docs/write-routing-policy.md`. (#2079)
+- Remote-server guide wording for read-only tools that change host state. (#2126)
+- **The README's Docker section leads with the published image.** It previously documented only `docker build`, even though `ghcr.io/mempalace/mempalace` ships multi-arch — and a clone builds `develop`, not the release, so a build and a pull could differ silently. It now covers what the omissions actually cost: the MCP client config mounts a transcripts directory (without one the server starts and every mine finds nothing), the first embedding call downloads ~80 MB into `/data` and looks like a hang, bind mounts keep host ownership against the image's uid 1000 so a `0700` directory fails with a bare `PermissionError` on Linux (and `--user` is the wrong fix — `/data` is mode 700 owned by that uid), mining sources can be mounted read-only, and the GPU image is x86_64-only. (#2196)
+
+### Internal
+
+- **The Docker workflow runs the image before publishing it.** It previously built both images without ever starting a container or parsing a Compose file, so a green run only proved the Dockerfile compiled — which is how two defects that break the first documented command shipped past it. `scripts/docker-smoke.sh` now validates both Compose files, checks entrypoint dispatch, mines a mounted directory, asserts the drawer reads back verbatim from a separate container, and drives a real MCP stdio handshake; publication is gated on it. The script runs the same way locally: `scripts/docker-smoke.sh <image>`. (#2189)
+
+---
+
+## [3.6.0] — 2026-07-14
+
+### Features
+
+- **Turnkey secure remote / team server.** `mempalace serve` exposes the full MCP surface over HTTP with secure defaults: non-loopback binds require a bearer token, generated tokens are stored with restrictive permissions and passed through the child environment rather than argv, native TLS 1.2+ is supported, and `--read-only` both hides and refuses mutating tools. Docker Compose, systemd, and environment templates are included for deployment. (#1877, #1897, #1900)
+
+- **Milvus storage backend.** The new opt-in `milvus` backend supports embedded Milvus Lite, self-hosted Milvus, and Zilliz Cloud through `pymilvus`, with COSINE vector search, native BM25 lexical search for new collections, namespace isolation, target-mismatch protection, and an optional `milvus` dependency extra. (#1899)
+
+- **Atomic knowledge-graph fact replacement.** `supersede()` / `mempalace_kg_supersede` closes an open fact and opens its successor at one shared instant, so model, employer, address, and other single-valued facts can change without a hand-written invalidate/add race. Temporal queries now use half-open intervals at timestamp precision, returning only the successor at the transition boundary while preserving whole-day semantics for date-only facts. (#1913)
+
+- **Conversation chronology is preserved.** Conversation drawers now retain transcript time as `authored_at` alongside ingest time, search results expose it, and exact hybrid-score ties prefer the more recently authored drawer. An idempotent, dry-run-first backfill script adds the metadata to existing palaces without re-embedding. `mempalace_list_drawers` also accepts inclusive `since` and exclusive `before` filing-time bounds. (#1890, #1891)
+
+- **Mined sessions populate the associative graph.** A precision-biased, no-LLM structural extractor records code symbols, URLs, paths, and qualified identifiers as drawer entities; conversation mining then derives hallways from them. The new `mempalace hallways` CLI command exposes the graph. (#1894, #1895)
+
+- **Per-project mining exclusions.** `exclude_patterns` in `mempalace.yaml` filters pre-scanned project files without changing the corrected `--limit` semantics. (#1213, #1953)
+
+- **LaTeX project coverage.** `.tex` and `.bib` files are now treated as readable prose sources. (#1901)
+
+### Performance
+
+- **MCP initialization no longer waits for palace-wide integrity work.** stdio answers the JSON-RPC `initialize` request immediately while startup preflight runs on a background thread; a tool arriving mid-probe joins the same verdict instead of launching duplicate work. The startup SQLite probe is also skipped above a configurable size limit (512 MiB by default), while repair preflights remain strict. (#1911, #1987)
+
+- **Qdrant metadata counts use server-side facets.** Taxonomy, overview, and status paths can count metadata remotely instead of fetching and tallying every record; the embedding wrapper now forwards the facet and bulk-metadata capabilities correctly. (#1868, #1898)
+
+- **pgvector metadata-only fetches omit document payloads**, reducing transfer and decoding work on enumeration paths. (#1892)
+
+### Bug Fixes
+
+- **Chroma recovery distinguishes derived-index damage from data loss.** Valid all-layer-0 HNSW segments with an empty `link_lists.bin` are no longer quarantined repeatedly; isolated FTS5 inverted-index corruption is rebuilt from intact content during repair and after mining; embedded NUL bytes are sanitized before reaching ChromaDB. (#1716, #1872, #1878, #1927, #1928)
+
+- **SQLite recovery is bounded, atomic, and honest.** Integrity checks wait up to 15 seconds for transient writer contention instead of reporting a healthy palace as corrupt. In-place recovery archives use atomic `os.rename` rather than `shutil.move`'s destructive copy/delete fallback. `repair --mode from-sqlite` now rebuilds FTS5, vacuums, and requires a clean final `PRAGMA quick_check`; cleanup failures return non-zero with recovery details instead of printing a false success banner. (#1945, #2015, #2017)
+
+- **CLI search checks HNSW divergence before opening ChromaDB.** A diverged palace routes directly to the existing SQLite BM25 fallback, avoiding embedder or collection initialization against damaged native index state while leaving healthy Chroma and non-Chroma backends on their normal vector path. (#2016)
+
+- **Writer leases recover instead of stranding servers read-only.** A server refused while a peer owns the palace now retries on each mutating call and promotes itself after the peer exits. Status remains read-only and cannot acquire the writer lease, the in-process re-entrant holder set is released even across asynchronous interruption, and `checkpoint` / `delete_by_source` are correctly classified as mutations for both read-only serving and peer-writer protection. (#1923, #1930, #1934, #1960, #1970, #1971)
+
+- **Status reports only checks that actually ran.** Non-Chroma backends now mark the Chroma SQLite integrity check as not applicable rather than claiming an unperformed success. (#1931, #1946)
+
+- **Conversation transcripts are treated as mutable.** Appended or rewritten sessions are purged and re-filed based on modification time, preventing later turns from being silently skipped. Claude Code `tool-results/` sidecars are excluded from conversation scans so raw machine dumps cannot flood the embedding space. (#1957, #2010)
+
+- **Explicit palace selection now scopes derived graph state.** Project, conversation, and format mining write hallways and tunnels beside the selected `--palace` instead of leaking them into the ambient default palace. (#2018)
+
+- **Remote and local server hardening.** Non-loopback HTTP now requires a token unless an explicit insecure override is supplied; optional-provider probes cannot reuse an ambient external key before the user selects that provider; hook transcript paths and file-copy/repair paths receive stricter local validation and no-follow handling. Importing the MCP server no longer clobbers the host application's root logger, HTTP writes can re-enter the process-wide palace lock safely, and routine client disconnects no longer emit server tracebacks. (#1859, #1860, #1864, #1885, #2003, #2004)
+
+- **Mining and configuration correctness.** Oversized files produce a visible stderr warning, `~` in configured palace paths expands consistently, wing slugs handle special characters, and Windows background daemon / synchronous hook mines use `CREATE_NO_WINDOW`. (#923, #1852, #1857, #1863, #1865)
+
+- **`mempalace init` handles non-ASCII `.gitignore` files on Windows.** The project-file ignore guard now reads and appends UTF-8 explicitly instead of relying on locale defaults such as GBK. (#1648)
+
+- **L1 wake-up surfaces the latest moments.** Drawers with equal importance are now ordered by `filed_at` recency rather than insertion order, so startup context prefers recent memories instead of the oldest ones. (#1630)
+
+- **Backend detection requires a SQLite magic header** before classifying a target as Chroma or `sqlite_exact`, preventing unrelated files from being mistaken for a palace. (#1893, #1896)
+
+### Documentation
+
+- Added a storage-backend configuration reference, a remote/team-server deployment guide, `authored_at` migration guidance, and refreshed the OpenClaw integration for the full 36-tool MCP surface. (#1719, #1877, #1890, #1904, #1905)
+
+### Internal
+
+- Expanded WAL crash-safety, idempotence, and redaction-path coverage (#1869); updated GitHub Actions and Ruff; repaired `uv.lock` drift so it again matches the Ruff 0.15.20 pin and includes Python 3.9 dependency markers introduced by the Milvus resolution.
+
+---
+
 ## [3.5.0] — 2026-06-22
 
 ### Features
@@ -568,7 +670,9 @@ Initial public release.
 
 ---
 
-[Unreleased]: https://github.com/MemPalace/mempalace/compare/v3.5.0...HEAD
+[Unreleased]: https://github.com/MemPalace/mempalace/compare/v3.7.0...HEAD
+[3.7.0]: https://github.com/MemPalace/mempalace/compare/v3.6.0...v3.7.0
+[3.6.0]: https://github.com/MemPalace/mempalace/compare/v3.5.0...v3.6.0
 [3.5.0]: https://github.com/MemPalace/mempalace/compare/v3.4.1...v3.5.0
 [3.4.1]: https://github.com/MemPalace/mempalace/compare/v3.4.0...v3.4.1
 [3.3.6]: https://github.com/MemPalace/mempalace/compare/v3.3.5...v3.3.6

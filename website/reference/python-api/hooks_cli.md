@@ -8,6 +8,30 @@ Reads JSON from stdin, outputs JSON to stdout.
 Supported hooks: session-start, stop, session-end, precompact
 Supported harnesses: claude-code, codex (extensible to cursor, gemini, etc.)
 
+## Classes
+
+### `class HookWriteRouting`
+
+One hook invocation's resolved routing state.
+
+#### `use_daemon`
+
+```python
+def use_daemon(self) -> bool
+```
+
+#### `blocked`
+
+```python
+def blocked(self) -> bool
+```
+
+#### `notice`
+
+```python
+def notice(self) -> str
+```
+
 ## Functions
 
 ### `derive_wing`

@@ -89,6 +89,34 @@ def invalidate(self, subject: str, predicate: str, obj: str, ended: str = None)
 
 Mark a relationship as no longer valid (set valid_to date/time).
 
+#### `supersede`
+
+```python
+def supersede(self, subject: str, predicate: str, old_obj: str, new_obj: str, at: str = None, confidence: float = 1.0, source_closet: str = None, source_file: str = None, source_drawer_id: str = None, adapter_name: str = None)
+```
+
+Atomically replace one fact with another at a single shared boundary.
+
+Closes the currently-open ``(subject, predicate, old_obj)`` triple with
+``valid_to = at`` and opens ``(subject, predicate, new_obj)`` with
+``valid_from = at`` in one transaction, at a single shared instant.
+Paired with the half-open upper bound in ``_temporal_filter_sql``, an
+as-of query at that instant returns only the successor.
+
+This is the primitive for a value change. Hand-rolling a handover as
+``invalidate(ended=D)`` + ``add_triple(valid_from=D)`` with date-only
+``D`` leaves two facts sharing the whole day ``D`` (``valid_to`` expands
+to ``T23:59:59Z`` while ``valid_from`` expands to ``T00:00:00Z``), so an
+as-of query on ``D`` returns both. ``supersede`` avoids this by writing
+one identical precise instant to both sides.
+
+``at`` defaults to the current UTC instant. A date-only ``at`` is
+normalized to ``&lt;date>T00:00:00Z`` so both sides carry the same precise
+value rather than the asymmetric whole-day expansion.
+
+Returns the new triple's id. If no open ``old_obj`` triple exists the
+successor is still opened, so ``supersede`` degrades to ``add_triple``.
+
 #### `query_entity`
 
 ```python
@@ -115,6 +143,29 @@ def timeline(self, entity_name: str = None)
 ```
 
 Get all facts in chronological order, optionally filtered by entity.
+
+#### `dump_rows`
+
+```python
+def dump_rows(self, table: str, after_rowid: int = 0, limit: int = 500) -> list
+```
+
+Page KG rows in rowid order for snapshot replication.
+
+Rows are returned verbatim with a ``_rowid`` pagination cursor.
+rowid order is deterministic, so pages never skip under concurrent
+appends (updates in earlier pages are caught by the next full pass).
+
+#### `apply_row`
+
+```python
+def apply_row(self, table: str, row: dict) -> None
+```
+
+Fold one replicated KG row in, keyed by id (INSERT OR REPLACE).
+
+REPLACE makes invalidations (valid_to updates) and entity edits
+converge on re-pull; rows are never deleted by replication.
 
 #### `stats`
 

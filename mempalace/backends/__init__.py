@@ -37,6 +37,7 @@ from .base import (
     UnsupportedMaintenanceKindError,
 )
 from .chroma import ChromaBackend, ChromaCollection
+from .milvus import MilvusBackend, MilvusCollection
 from .postgres import PostgresBackend, PostgresCollection
 from .pgvector import PgVectorBackend, PgVectorCollection
 from .qdrant import QdrantBackend, QdrantCollection
@@ -69,6 +70,8 @@ __all__ = [
     "LexicalHit",
     "LexicalResult",
     "MaintenanceResult",
+    "MilvusBackend",
+    "MilvusCollection",
     "PalaceNotFoundError",
     "PalaceRef",
     "PostgresBackend",

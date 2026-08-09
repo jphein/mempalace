@@ -207,6 +207,7 @@ def resolve_backend_for_palace(
 def _register_builtins() -> None:
     """Register in-tree backends."""
     from .chroma import ChromaBackend
+    from .milvus import MilvusBackend
     from .postgres import PostgresBackend
     from .pgvector import PgVectorBackend
     from .qdrant import QdrantBackend
@@ -215,6 +216,8 @@ def _register_builtins() -> None:
     # Use setdefault semantics so a caller that pre-registered for tests wins.
     if "chroma" not in _registry:
         _registry["chroma"] = ChromaBackend
+    if "milvus" not in _registry:
+        _registry["milvus"] = MilvusBackend
     if "postgres" not in _registry:
         _registry["postgres"] = PostgresBackend
     if "qdrant" not in _registry:

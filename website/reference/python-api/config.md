@@ -17,7 +17,7 @@ Load order: env vars > config file > defaults.
 #### `__init__`
 
 ```python
-def __init__(self, config_dir = None)
+def __init__(self, config_dir = None, palace_path = None)
 ```
 
 Initialize config.
@@ -25,6 +25,9 @@ Initialize config.
 Args:
     config_dir: Override config directory (useful for testing).
                 Defaults to ~/.mempalace.
+    palace_path: Explicit palace data directory. This is primarily
+                 used by CLI operations that received ``--palace``;
+                 it takes precedence over environment and file config.
 
 #### `daemon_url`
 
@@ -366,6 +369,50 @@ def qdrant_timeout(self)
 
 Qdrant HTTP timeout in seconds.
 
+#### `milvus_uri`
+
+```python
+def milvus_uri(self)
+```
+
+Milvus endpoint for the opt-in ``milvus`` backend.
+
+Defaults to ``None`` so selecting Milvus uses per-palace Milvus Lite at
+``&lt;palace>/milvus.db``. Set this only to deliberately use a shared
+Milvus server, Zilliz Cloud, or a custom local Lite file.
+
+#### `milvus_token`
+
+```python
+def milvus_token(self)
+```
+
+Token for the opt-in ``milvus`` backend, if configured.
+
+#### `milvus_db_name`
+
+```python
+def milvus_db_name(self)
+```
+
+Optional Milvus database name for the opt-in ``milvus`` backend.
+
+#### `milvus_namespace`
+
+```python
+def milvus_namespace(self)
+```
+
+Optional Milvus collection namespace/prefix.
+
+#### `milvus_consistency_level`
+
+```python
+def milvus_consistency_level(self)
+```
+
+Milvus read consistency level for the opt-in ``milvus`` backend.
+
 #### `pgvector_dsn`
 
 ```python
@@ -435,7 +482,7 @@ Characters per drawer chunk (validated, ``>= 1``).
 def chunk_overlap(self) -> int
 ```
 
-Overlap between adjacent chunks (validated, ``< chunk_size``).
+Overlap between adjacent chunks (validated, ``<= chunk_size // 2``).
 
 #### `min_chunk_size`
 
@@ -622,6 +669,35 @@ pruning and keeps every backup (use when an external retention policy
 manages cleanup). Negative or non-numeric values fall back to the
 default rather than crashing migrate/repair.
 
+#### `lang_explicit`
+
+```python
+def lang_explicit(self)
+```
+
+Primary language code when explicitly configured, else ``None``.
+
+Resolution order: ``MEMPALACE_LANG`` / ``MEMPAL_LANG`` env var, then
+``config.json["lang"]``. Returns ``None`` if neither is set. Use this
+when a caller needs to know whether the user has opted in to locale
+behaviour (e.g. to avoid silently changing search scoring for palaces
+that have never set a language).
+
+#### `lang`
+
+```python
+def lang(self)
+```
+
+Primary language code for localized output and display.
+
+Resolution order: ``lang_explicit`` (env or config.json), first entry
+of ``entity_languages``, then ``"en"``. Always returns a non-empty
+string so callers that need a language for display purposes never
+have to handle ``None``. Code paths that must not silently change
+behaviour for unconfigured palaces should read ``lang_explicit``
+instead.
+
 #### `hook_silent_save`
 
 ```python
@@ -637,6 +713,43 @@ def hook_desktop_toast(self)
 ```
 
 Whether the stop hook shows a desktop notification via notify-send.
+
+#### `resolve_write_routing`
+
+```python
+def resolve_write_routing(self, scope: str) -> ResolvedWriteRoutingPolicy
+```
+
+Resolve the configured write policy for ``hooks`` or ``cli``.
+
+Precedence is:
+
+1. scope-specific environment variable;
+2. global environment variable;
+3. legacy hook environment variable;
+4. scope-specific config value;
+5. global config value;
+6. legacy hook config value;
+7. ``direct``.
+
+This foundation does not change current hook or CLI behavior. The
+policy-aware consumers are introduced by follow-up PRs.
+
+#### `hook_write_routing`
+
+```python
+def hook_write_routing(self) -> WriteRoutingPolicy
+```
+
+Resolved future routing policy for hook-triggered writes.
+
+#### `cli_write_routing`
+
+```python
+def cli_write_routing(self) -> WriteRoutingPolicy
+```
+
+Resolved future routing policy for routine CLI writes.
 
 #### `hook_verbatim_mode`
 
@@ -696,6 +809,14 @@ def strip_lone_surrogates(text: str) -> str
 ```
 
 Replace lone UTF-16 surrogates with U+FFFD so the string is legal UTF-8 (#1235).
+
+### `strip_nul_bytes`
+
+```python
+def strip_nul_bytes(text: str) -> str
+```
+
+Replace embedded NUL characters with U+FFFD before ChromaDB storage.
 
 ### `normalize_wing_name`
 
@@ -778,6 +899,12 @@ def sanitize_content(value: str, max_length: int = 100000) -> str
 ```
 
 Validate drawer/diary content length.
+
+### `normalize_milvus_consistency_level`
+
+```python
+def normalize_milvus_consistency_level(value) -> str
+```
 
 ### `sqlite_read_uri`
 

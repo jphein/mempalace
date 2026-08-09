@@ -1,6 +1,6 @@
 [project]
 name = "mempalace"
-version = "3.5.0"
+version = "3.7.0"
 description = "Give your AI a memory — mine projects and conversations into a searchable palace. No API key required."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -70,6 +70,7 @@ mempalace-kg-extract = "mempalace.kg_triple_worker:cli_main"
 
 [project.entry-points."mempalace.backends"]
 chroma = "mempalace.backends.chroma:ChromaBackend"
+milvus = "mempalace.backends.milvus:MilvusBackend"
 postgres = "mempalace.backends.postgres:PostgresBackend"
 pgvector = "mempalace.backends.pgvector:PgVectorBackend"
 qdrant = "mempalace.backends.qdrant:QdrantBackend"
@@ -96,7 +97,7 @@ dev = [
     # (wired only into the test-windows job in ci.yml, scoped to the specific
     # error). Local/Linux/macOS runs never rerun, so real failures stay loud.
     "pytest-rerunfailures>=12.0",
-    "ruff==0.15.20",
+    "ruff==0.16.1",
     "psutil>=5.9",
     "hypothesis>=6.0",
     "pre-commit>=3.0",
@@ -104,6 +105,13 @@ dev = [
 ]
 postgres = ["psycopg[binary]>=3.2,<4", "psycopg-pool>=3.2,<4"]
 spellcheck = ["autocorrect>=2.0"]
+# Opt-in Milvus backend. Defaults to per-palace Milvus Lite
+# (`<palace>/milvus.db`); set MEMPALACE_MILVUS_URI and
+# MEMPALACE_MILVUS_TOKEN to point at Milvus server or Zilliz Cloud.
+milvus = [
+    "pymilvus>=3.0.0",
+    "milvus-lite>=3.0; python_version >= '3.10' and sys_platform != 'win32'",
+]
 # Async LLM-based KG triple extraction worker (mempalace-kg-extract CLI).
 # httpx for the OpenAI-compatible chat-completions client; psycopg3 +
 # psycopg-pool for the queue + AGE writes. Async pool lets the worker
@@ -161,7 +169,7 @@ dev = [
     # (wired only into the test-windows job in ci.yml, scoped to the specific
     # error). Local/Linux/macOS runs never rerun, so real failures stay loud.
     "pytest-rerunfailures>=12.0",
-    "ruff==0.15.20",
+    "ruff==0.16.1",
     "psutil>=5.9",
     "hypothesis>=6.0",
     "pre-commit>=3.0",
@@ -178,7 +186,11 @@ packages = ["mempalace"]
 [tool.ruff]
 line-length = 100
 target-version = "py310"
-extend-exclude = ["benchmarks"]
+# "*.md": ruff 0.16 began formatting Python inside markdown fences, which
+# pulls ~96 docs into scope and reflows hand-aligned example code (the
+# column-aligned field comments in docs/rfcs/002 are deliberate). Docs are
+# authored prose, not linted source — keep the formatter on real modules.
+extend-exclude = ["benchmarks", "*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "C901"]

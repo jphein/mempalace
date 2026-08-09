@@ -116,8 +116,26 @@ def health(self)
 def lexical_search(self, *, query: str, n_results: int = 10, where: Optional[dict] = None)
 ```
 
+#### `facet_counts`
+
+```python
+def facet_counts(self, field: str, where: Optional[dict] = None, limit: int = 1000) -> dict[str, int]
+```
+
+#### `get_all_metadata`
+
+```python
+def get_all_metadata(self, where: Optional[dict] = None) -> list[dict]
+```
+
 #### `update`
 
 ```python
 def update(self, *, ids, documents = None, metadatas = None, embeddings = None)
+```
+
+#### `rename_wing`
+
+```python
+def rename_wing(self, *, from_wing: str, to_wing: str, batch_size: int = 500) -> dict
 ```

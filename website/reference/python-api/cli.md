@@ -424,6 +424,18 @@ in 2+ wings, inferred from the palace graph — see issue #75).
 
 Daemon unreachable → exit 1; inner-error envelope → exit 2.
 
+### `cmd_logstream`
+
+```python
+def cmd_logstream(args)
+```
+
+### `cmd_artifact`
+
+```python
+def cmd_artifact(args)
+```
+
 ### `cmd_palace_set_embedder`
 
 ```python

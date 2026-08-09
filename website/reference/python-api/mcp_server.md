@@ -129,6 +129,17 @@ def tool_graph_stats()
 
 Palace graph overview: nodes, tunnels, edges, connectivity.
 
+### `tool_mesh_peers`
+
+```python
+def tool_mesh_peers()
+```
+
+Mesh estate snapshot — the committed compat surface for PalaceMind's
+mesh view: exactly the GET /sync/peers payload, produced by the same
+function so the tool and the endpoint can never drift. Read-only;
+peers.json tokens are never included.
+
 ### `tool_create_tunnel`
 
 ```python
@@ -411,6 +422,23 @@ response reflects that resolved value.
 Temporal values accept either ``YYYY-MM-DD`` or canonical UTC datetimes in
 the form ``YYYY-MM-DDTHH:MM:SSZ``.
 
+### `tool_kg_supersede`
+
+```python
+def tool_kg_supersede(subject: str, predicate: str, old_object: str, new_object: str, at: str = None)
+```
+
+Atomically replace one fact with another at a single shared boundary.
+
+Closes ``(subject, predicate, old_object)`` and opens
+``(subject, predicate, new_object)`` at one shared instant, so a
+point-in-time query at the boundary returns only the new value. Use this
+instead of a separate ``kg_invalidate`` + ``kg_add`` when a single-valued
+fact changes (e.g. a model, employer, or address changes).
+
+``at`` accepts ``YYYY-MM-DD`` or a canonical UTC datetime
+(``YYYY-MM-DDTHH:MM:SSZ``) and defaults to the current UTC instant.
+
 ### `tool_kg_timeline`
 
 ```python
@@ -521,7 +549,7 @@ in-memory HNSW index stale or pin a closed-on-disk SQLite connection.
 ### `tool_checkpoint`
 
 ```python
-def tool_checkpoint(items, diary = None, dedup_threshold = 0.9)
+def tool_checkpoint(items, diary = None, dedup_threshold = 0.9, added_by = None)
 ```
 
 Batch session save in a single call.
@@ -534,8 +562,76 @@ the whole save) instead of one card per underlying call.
 
 ``items`` is a list of ``&#123;"wing", "room", "content"}`` dicts. ``diary``
 is an optional ``&#123;"agent_name", "entry", "topic"?, "wing"?}`` dict.
+``added_by`` attributes the filed drawers; when omitted it falls back to
+the diary's ``agent_name`` (and then to ``"checkpoint"``), so the agent
+that filed the session is recorded instead of a generic label.
 Reuses the existing single-item handlers so dedup/idempotency/WAL
 behaviour is identical to calling them directly.
+
+### `tool_event_append`
+
+```python
+def tool_event_append(type: str, stream: str, room: str, from_agent: str, to_agent: str = None, correlation_id: str = None, branch: str = None, base_commit: str = None, status: str = None, body: str = '', metadata: dict = None, artifact_ids: list = None)
+```
+
+Append one immutable coordination event.
+
+### `tool_event_list`
+
+```python
+def tool_event_list(stream: str = None, room: str = None, type: str = None, to_agent: str = None, from_agent: str = None, correlation_id: str = None, status: str = None, since_event_id: str = None, since_created_at: str = None, limit: int = 50, preview: bool = False)
+```
+
+List coordination events with structured filters, oldest first.
+
+``preview=True`` truncates each event's verbatim body to a short excerpt
+(marking ``body_truncated`` + ``body_length``) so scanning many events
+stays cheap; re-fetch a specific event's full body with a targeted
+``since_event_id``.
+
+### `tool_event_wait`
+
+```python
+def tool_event_wait(stream: str = None, room: str = None, type: str = None, to_agent: str = None, from_agent: str = None, correlation_id: str = None, status: str = None, since_event_id: str = None, since_created_at: str = None, timeout_ms: int = 60000, limit: int = 50)
+```
+
+Block until a matching event exists or the timeout expires.
+
+``limit`` mirrors ``event_list`` so the two tools accept the same
+filter set — agents kept tripping over wait rejecting a parameter
+that list accepts (reported by windows-codex during dogfood).
+
+### `tool_event_ack`
+
+```python
+def tool_event_ack(event_id: str, from_agent: str, status: str = None, body: str = '')
+```
+
+Append an event.ack referencing a prior event (never mutates it).
+
+### `tool_artifact_put`
+
+```python
+def tool_artifact_put(kind: str, content: str, created_by: str, metadata: dict = None)
+```
+
+Store exact artifact content (patch, file, log, json, note).
+
+### `tool_artifact_get`
+
+```python
+def tool_artifact_get(artifact_id: str)
+```
+
+Fetch an artifact by id — exact content and metadata.
+
+### `tool_patch_submit`
+
+```python
+def tool_patch_submit(content: str, from_agent: str, stream: str, room: str = 'patches', to_agent: str = None, correlation_id: str = None, branch: str = None, base_commit: str = None, body: str = '', metadata: dict = None)
+```
+
+Store a patch artifact and append its patch.ready event in one call.
 
 ### `handle_request`
 

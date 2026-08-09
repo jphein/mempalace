@@ -55,6 +55,7 @@ WRITE_TOOLS = frozenset(
     {
         "mempalace_add_drawer",
         "mempalace_checkpoint",
+        "mempalace_delete_by_source",
         "mempalace_delete_drawer",
         "mempalace_update_drawer",
         "mempalace_diary_write",
@@ -159,6 +160,7 @@ def run_mine(payload: dict[str, Any]) -> dict[str, Any]:
 
         _run_pass_zero(project_dir=source, palace_dir=palace_path, llm_provider=None)
 
+    from .daemon import LOCK_REFUSAL_ERROR_CLASS
     from .palace import MineAlreadyRunning, MineValidationError
 
     try:
@@ -206,7 +208,7 @@ def run_mine(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "success": False,
             "error": str(exc),
-            "error_class": "LockHeldByOtherProcess",
+            "error_class": LOCK_REFUSAL_ERROR_CLASS,
             "exit_code": 1,
         }
     except MineValidationError as exc:
@@ -239,6 +241,7 @@ def run_sync(payload: dict[str, Any]) -> dict[str, Any]:
     _apply_backend(payload.get("backend"))
 
     from .backends import detect_backend_for_path
+    from .daemon import LOCK_REFUSAL_ERROR_CLASS
     from .palace import MineAlreadyRunning, _backend_artifact_label, resolve_backend_name
 
     if not os.path.isdir(palace_path):
@@ -298,7 +301,7 @@ def run_sync(payload: dict[str, Any]) -> dict[str, Any]:
         return {
             "success": False,
             "error": str(exc),
-            "error_class": "LockHeldByOtherProcess",
+            "error_class": LOCK_REFUSAL_ERROR_CLASS,
             "exit_code": 1,
         }
     except ValueError as exc:

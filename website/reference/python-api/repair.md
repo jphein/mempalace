@@ -73,6 +73,20 @@ the underlying chromadb error as ``__cause__``.
 def __init__(self, message: str, *, partial_counts: dict[str, int], failed_collection: str, dest_palace: str, archive_path: Optional[str])
 ```
 
+### `class RebuildCleanupError(Exception)`
+
+Raised when all recoverable rows landed but final cleanup failed.
+
+The destination is intentionally retained for inspection, and an in-place
+rebuild's original archive remains untouched. Callers must not treat this
+as success because the derived FTS5 index has not been verified clean.
+
+#### `__init__`
+
+```python
+def __init__(self, message: str, *, counts: dict[str, int], dest_palace: str, archive_path: Optional[str])
+```
+
 ### `class MaxSeqIdVerificationError(RuntimeError)`
 
 Raised when post-repair detection still sees poisoned rows.
@@ -280,6 +294,13 @@ The ``chroma:document`` key is removed from the metadata dict and
 returned as the document; this matches how chromadb itself stores
 ``add(documents=...)``.
 
+Driven from ``embeddings`` (LEFT JOIN ``embedding_metadata``), not
+the other way around: an embedding with zero ``embedding_metadata``
+rows — a sparse historical write with no ``chroma:document`` and no
+other key, the same condition ``_extract_drawers`` already sanitizes
+for the collection-layer path, see #1458 — must still be yielded
+with an empty metadata dict, not silently excluded by the join.
+
 Silent on missing palace, missing ``chroma.sqlite3``, or unknown
 collection name — yields nothing. Callers that need to distinguish
 "empty collection" from "collection not present" should query
@@ -288,7 +309,7 @@ collection name — yields nothing. Callers that need to distinguish
 ### `rebuild_from_sqlite`
 
 ```python
-def rebuild_from_sqlite(source_palace: str, dest_palace: str, *, archive_existing_dest: bool = False, batch_size: int = 1000) -> dict[str, int]
+def rebuild_from_sqlite(source_palace: str, dest_palace: str, *, archive_existing_dest: bool = False, batch_size: int = 1000, dry_run: bool = False) -> dict[str, int]
 ```
 
 Rebuild a palace by reading drawers from ``source_palace``'s
@@ -322,6 +343,17 @@ already exists:
   instead. Used by the in-place CLI flow where ``--source`` defaults
   to the same path as ``--palace``.
 
+``dry_run`` (CLI: ``--dry-run``) previews the rebuild without making any
+change: source validation runs as normal, then per-collection row counts
+are read from the source SQLite and printed, and the function returns
+those would-be counts *without* archiving the existing palace, taking the
+mine-lock, creating collections, or re-embedding (#2095, #2133). Useful
+before a multi-hour rebuild on a large palace. A dry run returns a
+populated dict (one key per recoverable collection) so CLI callers treat
+it as success; a validation refusal still returns ``&#123;}`` exactly as a real
+run would. If SQLite row counts cannot be read, the preview fails closed
+with ``&#123;}`` rather than inventing zeros.
+
 Returns a ``&#123;collection_name: row_count}`` dict so callers (CLI,
 tests) can verify the per-collection rebuild count without parsing
 stdout. A successful rebuild always returns a dict with one key per
@@ -335,7 +367,9 @@ that found zero rows." Raises :class:`RebuildPartialError` if a
 chromadb upsert fails partway through; the dest palace is left in
 place so the user can inspect what landed, and the in-place archive
 (when applicable) is reported in the error so the user can re-run
-against it.
+against it. Raises :class:`RebuildCleanupError` if all rows land but the
+required FTS5 rebuild, VACUUM, or final quick_check fails; this prevents a
+structurally unverified recovery from being reported as complete.
 
 .. warning::
 
@@ -360,6 +394,29 @@ occasionally wrote booleans as ``int_value=0/1``; those will
 round-trip as ``int`` rather than ``bool`` after this rebuild. This
 is a known divergence and matches the existing migrate-path
 behavior.
+
+### `resolve_repair_preflight_errors`
+
+```python
+def resolve_repair_preflight_errors(palace_path: str, errors: list[str], *, dry_run: bool, progress = print) -> list[str]
+```
+
+Return the quick_check errors that still block a repair.
+
+A real run heals an isolated malformed FTS5 inverted index in place and
+carries on (#1596). ``--dry-run`` must not perform that write, so it
+classifies the errors with the same :func:`_errors_are_isolated_fts5`
+predicate the real path gates on: an isolated FTS5 error is reported and
+cleared, anything broader still aborts. Without this a preview would print
+the ABORT banner — offline ``sqlite3 .recover``, recreate the FTS5 table —
+for a palace the tool repairs by itself.
+
+The prediction is deliberately the optimistic branch, and it is stated as
+an attempt rather than a promise: the real heal still returns the errors
+unchanged when another process holds the mine lock, when the rebuild
+raises, or when ``quick_check`` is still dirty afterwards. A dry run cannot
+tell those apart without taking the lock and writing, which is exactly what
+it must not do, so the wording names them instead.
 
 ### `status`
 
