@@ -27,7 +27,7 @@ entries:
   - id: sync-upstream-v370
     date: 2026-08-09
     bucket: Changed
-    commit: TBD
+    commit: 43547c4
     area: Reliability
     summary: "Sync upstream/develop through v3.7.0 (8516db7f): 433 commits — hub forward, temp-collection repair promote, round-trippable drawer IDs, kg_supersede, HNSW CLI fence, 62 conflict files resolved"
     body: |
@@ -379,7 +379,7 @@ entries:
   - id: age-graph-walk-followups
     date: 2026-05-31
     bucket: Performance
-    commit: TBD
+    commit: 43547c4
     area: Performance
     summary: "AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335)"
     tests: "6 — tests/test_knowledge_graph_age.py::{test_edge_endpoint_index_targets_are_the_four_we_expect, test_ensure_edge_endpoint_indexes_skips_absent_then_installs} + tests/test_searcher_stopwords.py::TestGraphExpandBoundEndpoint (seeds/entities anonymous-target guards); the index test is a @pgmark integration run against a live AGE container (skip-when-absent → install-when-present → idempotent)"
@@ -573,7 +573,7 @@ entries:
       bigger; this PR closes the read-only legs.
     date: 2026-05-28
     bucket: Changed
-    commit: TBD
+    commit: 43547c4
     area: Docs
     summary: "README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28)"
     files:
@@ -1462,7 +1462,7 @@ entries:
   - id: hierarchy-derivation-order
     date: 2026-05-26
     bucket: Changed
-    commit: TBD
+    commit: 43547c4
     area: Reliability
     summary: "Formalize wing/room derivation order; demote entity detector to last-resort hint (#157)"
     files:
@@ -1556,7 +1556,7 @@ entries:
   - id: calibrated-confidence-brier-eval
     date: 2026-05-26
     bucket: Added
-    commit: TBD
+    commit: 43547c4
     area: Search
     summary: "Calibrated confidence field on search results + Brier-score eval column"
     files:
@@ -1598,7 +1598,7 @@ entries:
   - id: multi-palace-separation-eval
     date: 2026-05-26
     bucket: Added
-    commit: TBD
+    commit: 43547c4
     area: Docs
     summary: "Evaluation doc: curated-authority vs auto-mined separation (#202)"
     files:
@@ -1619,7 +1619,7 @@ entries:
   - id: age-statement-timeout-applied
     date: 2026-05-26
     bucket: Fixed
-    commit: TBD
+    commit: 43547c4
     area: Search
     summary: "Apply AGE statement_timeout in same transaction as cypher() (PR #228 follow-up)"
     files:
@@ -1876,7 +1876,7 @@ entries:
   - id: verbatim-derivative-essay
     date: 2026-05-22
     bucket: Added
-    commit: TBD
+    commit: 43547c4
     area: Docs
     summary: "Standalone essay: the verbatim-vs-derivative axis (#47)"
     files:
@@ -1892,7 +1892,7 @@ entries:
   - id: uncertainty-aware-retrieval-research
     date: 2026-05-22
     bucket: Added
-    commit: TBD
+    commit: 43547c4
     area: Docs
     summary: "Research doc: uncertainty-aware retrieval analysis (#84)"
     files:
@@ -1909,7 +1909,7 @@ entries:
   - id: scope-collection-filter-design
     date: 2026-05-22
     bucket: Added
-    commit: TBD
+    commit: 43547c4
     area: Docs
     summary: "Design doc: scope/collection filter on mempalace_search (#76)"
     body: |
@@ -2002,7 +2002,7 @@ entries:
   - id: multi-palace-separation-design
     date: 2026-05-22
     bucket: Added
-    commit: TBD
+    commit: 43547c4
     area: Docs
     summary: "Design eval: multi-palace separation — curated vs auto-mined (#45)"
     body: |
