@@ -66,8 +66,12 @@ def load_config() -> Config:
     if not api_key:
         print("ERROR: OUTLINE_API_KEY is not set", file=sys.stderr)
         sys.exit(2)
-    base_url = os.environ.get("OUTLINE_BASE_URL", "https://outline.jphe.in").rstrip("/")
-    collection_name = os.environ.get("OUTLINE_COLLECTION", "MemPalace")
+    # `or` (not the .get default) so an empty string falls back too: a CI
+    # `${{ secrets.OUTLINE_BASE_URL }}` with the secret absent substitutes
+    # "", which the .get default would pass through and break URL joins
+    # ("unknown url type: '/api/collections.list'") — issue #368 cause 2.
+    base_url = (os.environ.get("OUTLINE_BASE_URL") or "https://outline.jphe.in").rstrip("/")
+    collection_name = os.environ.get("OUTLINE_COLLECTION") or "MemPalace"
     dry_run = bool(os.environ.get("DRY_RUN"))
     return Config(
         api_key=api_key, base_url=base_url, collection_name=collection_name, dry_run=dry_run
