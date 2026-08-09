@@ -1897,6 +1897,7 @@ class TestForceChromaCacheReset:
         succeeding in the same process, the same proof used by
         ``test_chroma_close_palace_releases_sqlite_lock_for_reopen``."""
         import shutil
+        import time
 
         _patch_mcp_server(monkeypatch, config, kg)
         from mempalace import mcp_server
@@ -1911,7 +1912,20 @@ class TestForceChromaCacheReset:
         mcp_server._force_chroma_cache_reset()
 
         assert palace_path not in backend._clients
-        shutil.rmtree(palace_path)
+        # chromadb 1.5.x flushes segment files from a background thread; on
+        # slow CI runners a flush can land mid-walk and rmtree raises
+        # "Directory not empty" even though the sqlite lock IS released
+        # (the thing this test proves — a held lock fails the REOPEN below,
+        # not the delete). Retry the delete briefly instead of failing on
+        # the flusher race.
+        for attempt in range(5):
+            try:
+                shutil.rmtree(palace_path)
+                break
+            except OSError:
+                if attempt == 4:
+                    raise
+                time.sleep(0.2)
 
         col = backend.get_or_create_collection(palace_path, "mempalace_drawers")
         col.upsert(documents=["world"], ids=["b"], metadatas=[{"k": "v2"}])
