@@ -38,7 +38,7 @@ inspectable / editable by hand if needed.
 ### `compute_hallways_for_wing`
 
 ```python
-def compute_hallways_for_wing(wing: str, col = None, min_count: int = 2) -> list[dict]
+def compute_hallways_for_wing(wing: str, col = None, min_count: int = 2, config = None) -> list[dict]
 ```
 
 Compute entity-pair hallways for one wing.
@@ -70,6 +70,10 @@ Args:
         hallway between two entities. Default 2 — single co-occurrences
         are noise (entities mentioned together once in one drawer);
         two or more is a real signal. Clamped to ``>=1``.
+    config: Optional ``MempalaceConfig`` selecting the palace-scoped
+        hallway sidecar. Callers using an explicit palace path must pass
+        the matching config so derived graph state cannot leak into the
+        default palace.
 
 Returns:
     List of hallway dicts created for this wing. Records for other
@@ -78,7 +82,7 @@ Returns:
 ### `list_hallways`
 
 ```python
-def list_hallways(wing: Optional[str] = None) -> list[dict]
+def list_hallways(wing: Optional[str] = None, config = None) -> list[dict]
 ```
 
 List hallway records. Filter by ``wing`` if specified.
@@ -86,7 +90,7 @@ List hallway records. Filter by ``wing`` if specified.
 ### `delete_hallway`
 
 ```python
-def delete_hallway(hallway_id: str) -> bool
+def delete_hallway(hallway_id: str, config = None) -> bool
 ```
 
 Remove one hallway record by id. Returns True if a record was removed.

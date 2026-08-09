@@ -84,7 +84,7 @@ Summary statistics about the palace graph.
 ### `create_tunnel`
 
 ```python
-def create_tunnel(source_wing: str, source_room: str, target_wing: str, target_room: str, label: str = '', source_drawer_id: str = None, target_drawer_id: str = None, kind: str = 'explicit')
+def create_tunnel(source_wing: str, source_room: str, target_wing: str, target_room: str, label: str = '', source_drawer_id: str = None, target_drawer_id: str = None, kind: str = 'explicit', config = None)
 ```
 
 Create an explicit (symmetric) tunnel between two locations in the palace.
@@ -112,6 +112,9 @@ Args:
         topical link where rooms are synthetic ``topic:&lt;name>``
         identifiers). Preserved on the stored dict so readers can
         distinguish real-room traversals from topic connections.
+    config: Optional ``MempalaceConfig`` selecting the palace and its
+        tunnel sidecar. Explicit-path callers must pass the matching
+        config instead of falling back to the ambient default palace.
 
 Returns:
     The stored tunnel dict.
@@ -191,7 +194,7 @@ same name (e.g. a wing that has both an "Angular" folder room and an
 ### `compute_topic_tunnels`
 
 ```python
-def compute_topic_tunnels(topics_by_wing: dict, min_count: int = 1, label_prefix: str = 'shared topic') -> list[dict]
+def compute_topic_tunnels(topics_by_wing: dict, min_count: int = 1, label_prefix: str = 'shared topic', config = None) -> list[dict]
 ```
 
 Create tunnels for every pair of wings that share >= ``min_count`` topics.
@@ -220,7 +223,7 @@ No-op semantics:
 ### `topic_tunnels_for_wing`
 
 ```python
-def topic_tunnels_for_wing(wing: str, topics_by_wing: dict, min_count: int = 1, label_prefix: str = 'shared topic') -> list[dict]
+def topic_tunnels_for_wing(wing: str, topics_by_wing: dict, min_count: int = 1, label_prefix: str = 'shared topic', config = None) -> list[dict]
 ```
 
 Compute topic tunnels involving a single wing.
@@ -232,7 +235,7 @@ Returns the list of tunnels created or refreshed.
 ### `entity_tunnels_for_wing`
 
 ```python
-def entity_tunnels_for_wing(wing: str, hallways: list, label_prefix: str = 'shared entity') -> list
+def entity_tunnels_for_wing(wing: str, hallways: list, label_prefix: str = 'shared entity', config = None) -> list
 ```
 
 Compute entity tunnels involving a single wing.

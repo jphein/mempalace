@@ -48,7 +48,7 @@ hybrid ranking, sqlite-BM25 fallback, and scope-aware warnings.
 ### `search_memories`
 
 ```python
-def search_memories(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, source_file: str = None, n_results: int = 5, max_distance: float = 0.0, vector_disabled: bool = False, candidate_strategy: str = 'vector', fusion_mode: str = 'convex', collection_name: str = None) -> dict
+def search_memories(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, source_file: str = None, n_results: int = 5, max_distance: float = 0.0, vector_disabled: bool = False, candidate_strategy: str = 'vector', fusion_mode: str = 'convex', collection_name: str = None, lang: Optional[str] = None) -> dict
 ```
 
 Programmatic search — returns a dict instead of printing.
@@ -91,6 +91,12 @@ Args:
           When ``max_distance > 0.0`` is also set, BM25-only candidates
           are skipped — they have no vector distance and would silently
           violate the requested distance threshold.
+    lang: Locale code for BM25 stop-word filtering (opt-in). When
+        omitted, reads ``MempalaceConfig().lang_explicit`` — returns an
+        empty set unless the user has set ``MEMPALACE_LANG`` /
+        ``MEMPAL_LANG`` or ``config.json["lang"]``. Palaces without an
+        explicit language skip filtering entirely, preserving pre-PR
+        byte-identical scoring.
     fusion_mode: How the final candidate pool is ranked.
 
         * ``"convex"`` (default) — historical behavior: a weighted blend

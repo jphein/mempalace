@@ -10,6 +10,7 @@ from mempalace.convo_miner import (
     _emit_bounded,
     _extract_authored_at,
     _file_chunks_locked,
+    _source_file_delete_ids,
     chunk_exchanges,
     detect_convo_room,
     scan_convos,
@@ -382,6 +383,30 @@ class TestScanConvos:
         files = scan_convos(str(tmp_path))
         assert files == []
 
+    def test_scan_skips_tool_results_dirs(self, tmp_path):
+        # Claude Code pages large tool outputs to <session>/tool-results/*.txt
+        # inside ~/.claude/projects/<slug>/. These are raw machine dumps
+        # referenced from the transcript JSONL, not conversations — mining
+        # them floods the palace (12.8k drawers measured in the field, one
+        # single file produced 3.6k). The scanner must not descend into them.
+        session_dir = tmp_path / "1234-5678-session"
+        tool_results = session_dir / "tool-results"
+        tool_results.mkdir(parents=True)
+        (tool_results / "bipc8jdx0.txt").write_text("raw tool dump " * 100, encoding="utf-8")
+        (tmp_path / "session.jsonl").write_text('{"type": "user"}', encoding="utf-8")
+        files = scan_convos(str(tmp_path))
+        names = [f.name for f in files]
+        assert "session.jsonl" in names
+        assert "bipc8jdx0.txt" not in names
+
+    def test_scan_keeps_regular_nested_dirs(self, tmp_path):
+        # The tool-results skip must not turn into a blanket nested-dir skip.
+        nested = tmp_path / "archive"
+        nested.mkdir()
+        (nested / "old-chat.md").write_text("> q\na\n> q2\na2\n> q3\na3", encoding="utf-8")
+        files = scan_convos(str(tmp_path))
+        assert [f.name for f in files] == ["old-chat.md"]
+
     @pytest.mark.skipif(
         sys.platform == "win32",
         reason="symlink creation requires elevated privileges on Windows",
@@ -450,6 +475,59 @@ class TestScanConvos:
         # not just the leaf — proves relative_to(convo_path) over .name.
         assert "deep/subdir/nested.jsonl" in err
         assert "(symlink)" in err
+
+    def test_scan_skips_oversized_files(self, tmp_path, capsys, monkeypatch):
+        import re
+
+        import mempalace.convo_miner as convo_mod
+
+        monkeypatch.setattr(convo_mod, "MAX_FILE_SIZE", 100)
+
+        (tmp_path / "small.txt").write_text("hello " * 5, encoding="utf-8")
+        (tmp_path / "big.txt").write_text("hello " * 100, encoding="utf-8")
+
+        files = scan_convos(str(tmp_path))
+        names = [f.name for f in files]
+        assert "small.txt" in names
+        assert "big.txt" not in names
+
+        err = capsys.readouterr().err
+        # SKIP message goes to stderr, matching the existing
+        # `SKIP: <rel> (symlink)` line in the same function.
+        assert "SKIP: big.txt" in err
+        # Validate the full template so a drop of the MB suffix or a
+        # regression to bare-substring output trips the test.
+        assert re.search(r"SKIP: big\.txt \(\d+\.\d+ MB\) exceeds \d+ MB limit", err), err
+
+    def test_scan_skips_unreadable_files(self, tmp_path, capsys, monkeypatch):
+        from pathlib import Path
+
+        # .txt is in CONVO_EXTENSIONS so it reaches the size-check gate.
+        (tmp_path / "readable.txt").write_text("hi", encoding="utf-8")
+        unreadable = tmp_path / "unreadable.txt"
+        unreadable.write_text("hi", encoding="utf-8")
+
+        real_stat = Path.stat
+
+        def selective_stat(self, *args, **kwargs):
+            # On Py 3.10+, Path.is_symlink() routes through lstat ->
+            # stat(follow_symlinks=False). Only raise for the follow-symlinks
+            # call that the actual size-check makes, otherwise the test
+            # never reaches the size-check arm we want to exercise.
+            if self.name == "unreadable.txt" and kwargs.get("follow_symlinks", True):
+                raise PermissionError(13, "Permission denied", str(self))
+            return real_stat(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "stat", selective_stat)
+
+        files = scan_convos(str(tmp_path))
+        names = [f.name for f in files]
+        assert "readable.txt" in names
+        assert "unreadable.txt" not in names
+
+        err = capsys.readouterr().err
+        assert "SKIP: unreadable.txt" in err
+        assert "stat error" in err
 
 
 class TestFileChunksLocked:
@@ -525,6 +603,75 @@ class TestFileChunksLocked:
         assert "rag/foo.py" in entities
         assert "do_thing_now" in entities
 
+    def test_aborts_when_stale_drawer_purge_fails(self, monkeypatch):
+        """#105: a failed purge must abort the mine attempt, not silently
+        proceed to upsert on top of it — the same swallow already fixed
+        for miner.py's process_file at #23, own instance here."""
+        import mempalace.convo_miner as convo_miner
+
+        class FailingPurgeCol:
+            def __init__(self):
+                self.upsert_called = False
+
+            def get(self, *args, **kwargs):
+                raise RuntimeError("simulated transient backend error")
+
+            def delete(self, *args, **kwargs):
+                pass
+
+            def upsert(self, documents, ids, metadatas):
+                self.upsert_called = True
+
+        chunks = [{"content": f"chunk {i} " * 20, "chunk_index": i} for i in range(3)]
+        col = FailingPurgeCol()
+        monkeypatch.setattr(
+            convo_miner, "file_already_mined", lambda collection, source_file, **kwargs: False
+        )
+        monkeypatch.setattr(convo_miner, "mine_lock", lambda source_file: contextlib.nullcontext())
+        monkeypatch.setattr(convo_miner, "_detect_hall_cached", lambda content: "conversations")
+
+        drawers, room_counts, skipped = _file_chunks_locked(
+            col, "chat.txt", chunks, "wing", "general", "agent", "exchange"
+        )
+
+        assert col.upsert_called is False, (
+            "_file_chunks_locked inserted new chunks even though the "
+            "stale-drawer purge raised — old and new rows can now coexist "
+            "as duplicates/orphans"
+        )
+        assert drawers == 0
+        assert skipped is True
+
+
+class TestSourceFileDeleteIds:
+    """#104: the sweeper writes drawers with no extract_mode at all
+    (ingest_mode="sweep"). convo_miner's default exchange-mode purge
+    must not scoop those up — they were never meant to carry
+    extract_mode, unlike a genuine legacy pre-schema convo_miner row."""
+
+    def test_excludes_sweeper_rows_from_exchange_mode_purge(self):
+        class FakeCol:
+            def get(self, where=None, limit=None, offset=0, include=None):
+                if offset > 0:
+                    return {"ids": [], "metadatas": []}
+                return {
+                    "ids": ["sweep_1", "exchange_1", "legacy_1"],
+                    "metadatas": [
+                        {"ingest_mode": "sweep", "session_id": "s1", "role": "user"},
+                        {"ingest_mode": "convos", "extract_mode": "exchange"},
+                        {"source_file": "chat.txt"},  # pre-ingest_mode legacy row
+                    ],
+                }
+
+        delete_ids = _source_file_delete_ids(FakeCol(), "chat.txt", "exchange")
+
+        assert "sweep_1" not in delete_ids, (
+            "sweeper's drawer was scooped into convo_miner's default "
+            "exchange-mode purge and would be deleted on the next re-mine"
+        )
+        assert "exchange_1" in delete_ids
+        assert "legacy_1" in delete_ids
+
 
 class TestExtractAuthoredAt:
     """authored_at = max per-line ``timestamp`` in a transcript (real authored date,
@@ -585,3 +732,21 @@ class TestExtractAuthoredAt:
         f = tmp_path / "session.jsonl"
         f.write_text('{"timestamp": 1}\n{"timestamp": false}\n')
         assert _extract_authored_at(f) is None
+
+
+def test_scan_convos_accepts_one_file_without_scanning_siblings(
+    tmp_path,
+):
+    selected = tmp_path / "selected.jsonl"
+    sibling = tmp_path / "sibling.jsonl"
+
+    selected.write_text(
+        '{"type": "user"}\n',
+        encoding="utf-8",
+    )
+    sibling.write_text(
+        '{"type": "user"}\n',
+        encoding="utf-8",
+    )
+
+    assert scan_convos(str(selected)) == [selected.resolve()]

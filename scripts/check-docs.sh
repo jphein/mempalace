@@ -295,7 +295,14 @@ PYEOF
                 fi
             done
         done < <(git grep -nE '[0-9]+ (MCP )?tools' -- '*.md' '*.json' \
-                   ':!README.md' ':!docs/ECOSYSTEM.md' ':!website/public/llms-full.txt' 2>/dev/null)
+                   ':!README.md' ':!docs/ECOSYSTEM.md' ':!website/public/llms-full.txt' \
+                   ':!FORK_CHANGELOG.md' ':!docs/specs/*' 2>/dev/null)
+        # FORK_CHANGELOG.md is a historical record rendered from
+        # docs/fork-changes.yaml — entries legitimately state the tool count
+        # AS OF their date (e.g. "stays at 39 tools" from the v3.5 sync), so
+        # it is excluded rather than rewritten every time the surface grows.
+        # docs/specs/ are dated design documents with the same property:
+        # they describe the surface as measured when the spec was written.
         (( tc_drift == 0 )) && ok "all doc tool-count claims == $expected"
     fi
 fi

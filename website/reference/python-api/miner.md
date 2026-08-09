@@ -26,6 +26,25 @@ def __init__(self, base_dir: Path, rules: list)
 def from_dir(cls, dir_path: Path)
 ```
 
+#### `from_patterns`
+
+```python
+def from_patterns(cls, base_dir: Path, patterns)
+```
+
+Create a matcher from an explicit list of gitignore-inspired pattern strings.
+
+Supports a gitignore-inspired subset of pattern syntax for
+``exclude_patterns`` in ``mempalace.yaml``.  Patterns are parsed by
+the same rule parser used for ``.gitignore`` files, so familiar
+constructs (trailing ``/`` for dir-only, leading ``/`` for anchoring,
+``!`` negation, ``**`` globs) work as expected.  Full gitignore
+semantics are not guaranteed for every edge case.
+
+``patterns`` must be a list of strings.  A single string is coerced
+to a one-element list for convenience.  Non-string entries are
+converted via ``str()``.
+
 #### `matches`
 
 ```python
@@ -258,7 +277,7 @@ surface a separate counter in the mine summary (see #1455).
 ### `scan_project`
 
 ```python
-def scan_project(project_dir: str, respect_gitignore: bool = True, include_ignored: list = None) -> list
+def scan_project(project_dir: str, respect_gitignore: bool = True, include_ignored: list = None, exclude_patterns: list = None) -> list
 ```
 
 Return list of all readable file paths under ``project_dir``.

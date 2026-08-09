@@ -28,7 +28,11 @@ from .backends import (
 from .backends.embedding_wrapper import EmbeddingCollection
 from .backends.chroma import ChromaBackend
 from .config import DEFAULT_COLLECTION_NAME, MempalaceConfig
-from .entity_detector import _apply_known_systems_prepass, _get_coca_filter
+from .entity_detector import (
+    _apply_known_systems_prepass,
+    _collapse_long_ascii_runs,
+    _get_coca_filter,
+)
 
 logger = logging.getLogger("mempalace_mcp")
 
@@ -98,6 +102,23 @@ def _emit_current_daemon_url(emit) -> None:
 _VALIDATED_IDENTITY: set = set()
 
 
+def clear_validated_embedder_identity(palace_path: Optional[str] = None) -> None:
+    """Drop cached embedder-identity verdicts so the next open re-checks.
+
+    Read-only opens of an empty collection can mark a key as validated without
+    recording identity on disk (``create=False``). When MCP later promotes that
+    reader to a writable owner, the writable open must re-run enforcement so
+    the first drawers still get labelled with the active model.
+    """
+    if palace_path is None:
+        _VALIDATED_IDENTITY.clear()
+        return
+    palace_key = str(palace_path)
+    stale = [key for key in _VALIDATED_IDENTITY if key and key[0] == palace_key]
+    for key in stale:
+        _VALIDATED_IDENTITY.discard(key)
+
+
 def _enforce_embedder_identity(collection, palace_path, collection_name, *, create) -> None:
     """Check (and, for a brand-new collection, record) embedder identity (RFC 001).
 
@@ -160,10 +181,29 @@ def _enforce_embedder_identity(collection, palace_path, collection_name, *, crea
         return
 
     if state == "unknown" and stored is None:
+        # Preflight HNSW divergence before touching count(): this is the
+        # universal chokepoint every tool passes through via
+        # get_collection(), and count() on a diverged segment can raise
+        # chromadb's rust-level pyo3_runtime.PanicException or hard-segfault
+        # (#1222) -- neither of which the except Exception below can catch,
+        # since a native crash takes the whole process down regardless of
+        # any Python try/except. A diverged palace must never reach count()
+        # here; this bookkeeping-only identity check simply skips itself
+        # (count treated as unknown, matching the except-Exception fallback
+        # already below) rather than risk the read.
         try:
-            count = collection.count()
+            from .backends.chroma import hnsw_capacity_status
+
+            diverged = hnsw_capacity_status(str(palace_path), str(collection_name)).get("diverged")
         except Exception:
+            diverged = False
+        if diverged:
             count = None
+        else:
+            try:
+                count = collection.count()
+            except Exception:
+                count = None
         if count == 0:
             if create:
                 try:
@@ -187,9 +227,14 @@ def get_collection(
     collection_name: Optional[str] = None,
     create: bool = True,
     backend: Optional[str] = None,
+    read_only: bool = False,
     _skip_identity_check: bool = False,
 ):
     """Get the palace collection through the backend layer.
+
+    ``read_only=True`` asks local backends to open storage without schema
+    initialization, migrations, or metadata writes. Backends that support a
+    genuine read-only mode receive it through the backend ``options`` mapping.
 
     `collection_name=None` (the fork-side convention) and
     `collection_name=DEFAULT_COLLECTION_NAME` (#665's convention) both mean
@@ -215,20 +260,57 @@ def get_collection(
     backend_name = resolve_backend_name(palace_path, explicit=backend)
     backend_obj = get_backend(backend_name)
     palace_ref = PalaceRef(id=palace_path, local_path=palace_path)
-    kwargs = {"palace": palace_ref, "collection_name": collection_name, "create": create}
+    backend_options = {}
+    if read_only:
+        backend_options["read_only"] = True
     if backend_name == "postgres" and config.postgres_dsn:
         # Fork-side postgres backend needs its DSN threaded through (#665).
-        kwargs["options"] = {"dsn": config.postgres_dsn}
+        backend_options["dsn"] = config.postgres_dsn
+    preferred_kwargs = {
+        "palace": palace_ref,
+        "collection_name": collection_name,
+        "create": create,
+    }
+    if backend_options:
+        preferred_kwargs["options"] = backend_options
     try:
-        collection = backend_obj.get_collection(**kwargs)
+        collection = backend_obj.get_collection(**preferred_kwargs)
     except TypeError as exc:
-        if "unexpected keyword argument 'palace'" not in str(exc):
+        msg = str(exc)
+        # Plugin backends may still use the pre-options signature. Drop
+        # ``options`` first so read_only degrades gracefully instead of
+        # hard-failing TypeError on third-party entry points.
+        if backend_options is not None and "options" in msg:
+            preferred_kwargs.pop("options", None)
+            try:
+                collection = backend_obj.get_collection(**preferred_kwargs)
+            except TypeError as nested:
+                if "unexpected keyword argument 'palace'" not in str(nested):
+                    raise
+                collection = backend_obj.get_collection(
+                    palace_path,
+                    collection_name=collection_name,
+                    create=create,
+                )
+        elif "unexpected keyword argument 'palace'" not in msg:
             raise
-        collection = backend_obj.get_collection(
-            palace_path,
-            collection_name=collection_name,
-            create=create,
-        )
+        else:
+            legacy_kwargs = {
+                "collection_name": collection_name,
+                "create": create,
+            }
+            if backend_options is not None:
+                legacy_kwargs["options"] = backend_options
+            try:
+                collection = backend_obj.get_collection(palace_path, **legacy_kwargs)
+            except TypeError as nested:
+                if backend_options is None or "options" not in str(nested):
+                    raise
+                collection = backend_obj.get_collection(
+                    palace_path,
+                    collection_name=collection_name,
+                    create=create,
+                )
     if "requires_explicit_embeddings" in getattr(backend_obj, "capabilities", frozenset()):
         collection = EmbeddingCollection(collection)
     if backend_name == "postgres" and hasattr(collection, "set_kg_writethrough"):
@@ -423,6 +505,29 @@ def resolve_backend_name(palace_path: str, explicit: Optional[str] = None) -> st
             f"but {selected!r} was selected"
         )
     return selected
+
+
+_MULTI_PROCESS_WRITER_BACKENDS = frozenset({"pgvector", "qdrant"})
+
+
+def backend_requires_single_writer(backend_name: str) -> bool:
+    """Return whether a backend needs one process-lifetime writer owner.
+
+    Local file-backed backends cannot safely coordinate independent long-lived
+    clients by serializing only individual calls: each process may retain
+    SQLite/WAL, FTS, or vector-index state across operations. Unknown and
+    plugin backends are treated conservatively. Only backends whose storage
+    service is explicitly responsible for cross-process concurrency opt out.
+    """
+    normalized = backend_name.strip().lower()
+    if normalized == "milvus":
+        # Only embedded Milvus Lite is local single-writer storage. A remote
+        # Milvus server or Zilliz Cloud coordinates concurrent clients itself.
+        from .backends.milvus import milvus_uri_is_server
+        from .config import MempalaceConfig
+
+        return not milvus_uri_is_server(MempalaceConfig().milvus_uri)
+    return normalized not in _MULTI_PROCESS_WRITER_BACKENDS
 
 
 def get_backend_for_palace(palace_path: str, explicit: Optional[str] = None):
@@ -645,9 +750,12 @@ def _candidate_entity_words(text: str) -> list:
             except re.error:
                 continue
         _CANDIDATE_RX_CACHE = rxs
+    # Defuse ReDoS on long ASCII blobs before matching (#2063); see
+    # entity_detector._collapse_long_ascii_runs.
+    stripped = _collapse_long_ascii_runs(text)
     words = []
     for rx in _CANDIDATE_RX_CACHE:
-        words.extend(rx.findall(text))
+        words.extend(rx.findall(stripped))
     return words
 
 
@@ -1043,18 +1151,31 @@ def _validate_palace_fts5_after_mine(palace_path: str) -> None:
     Reuses the same primitive that `cmd_repair` already runs as preflight so the
     operator sees the same recovery banner regardless of which command surfaces
     the bug.
+
+    An isolated FTS5 inverted-index corruption (the common case after a
+    killed-mid-write mine, #1596) is auto-healed in place first via the same
+    `maybe_autoheal_fts5_index` rebuild `cmd_repair` already runs as its own
+    preflight step — so a normal `mine` self-heals the recoverable case
+    instead of forcing the operator to run `mempalace repair` by hand for a
+    derived index that regenerates from intact content.
     """
     if resolve_backend_name(palace_path) != "chroma":
         return
 
     # Defer-import: keeps the repair module graph out of mine's hot import path.
-    from .repair import _close_chroma_handles, sqlite_integrity_errors
+    from .repair import _close_chroma_handles, maybe_autoheal_fts5_index, sqlite_integrity_errors
 
     # Pass a ChromaBackend instance so the writer's cached PersistentClient
     # gets closed and WAL flushes before the read-only sqlite3 re-open.
     _close_chroma_handles(palace_path, backend=ChromaBackend())
 
     errors = sqlite_integrity_errors(palace_path)
+    if errors:
+        # progress=logger.info, not the default print: this runs inside the
+        # MCP server process too (mcp_server.tool_mine -> miner.mine), where
+        # stdout is the JSON-RPC transport -- a stray print() here would
+        # corrupt the protocol stream and crash the connection.
+        errors = maybe_autoheal_fts5_index(palace_path, errors, progress=logger.info)
     if errors:
         raise MineValidationError(palace_path, errors)
 
@@ -1277,8 +1398,14 @@ def mine_palace_lock(palace_path: str):
                 ) from exc
         # Record our own identity for any later contender's diagnostic message.
         _write_lock_holder(lf)
-        _mark_held(palace_key)
+        # Mark the hold from inside the try so it always pairs with
+        # _mark_released. If it sat before the try, an async exception
+        # (a SIGINT/KeyboardInterrupt) landing in the gap would orphan
+        # palace_key in the holder set while the outer finally frees the
+        # flock, so the in-memory hold would outlive the OS lock and a later
+        # re-entrant acquire would pass through and write without the flock.
         try:
+            _mark_held(palace_key)
             yield
         finally:
             _mark_released(palace_key)
@@ -1307,10 +1434,26 @@ mine_global_lock = mine_palace_lock
 
 
 def _metadata_matches_extract_mode(meta: dict, extract_mode: Optional[str]) -> bool:
+    """Scope a drawer to a convo-miner extraction mode.
+
+    A missing ``extract_mode`` is treated as a legacy exchange-mode row
+    ONLY when the drawer is otherwise convo_miner's own (no ``ingest_mode``
+    at all -- pre-``ingest_mode``-schema convo drawers -- or the convo
+    miner's own ``"convos"`` tag). A drawer from a different producer that
+    never set ``extract_mode`` because it was never meant to carry one --
+    e.g. the sweeper's ``ingest_mode="sweep"`` rows -- must not match: the
+    legacy-compat rule otherwise scoops every sweeper drawer for a shared
+    transcript into convo_miner's default "exchange" purge/idempotency
+    scope and silently deletes them on the very next re-mine (#104).
+    """
     if extract_mode is None:
         return True
     stored_mode = meta.get("extract_mode")
-    return stored_mode == extract_mode or (extract_mode == "exchange" and stored_mode is None)
+    if stored_mode == extract_mode:
+        return True
+    if stored_mode is not None:
+        return False
+    return extract_mode == "exchange" and meta.get("ingest_mode") in (None, "convos")
 
 
 def file_already_mined(
@@ -1327,9 +1470,15 @@ def file_already_mined(
         schema (triggers silent rebuild after a normalization upgrade)
       - `check_mtime=True` and the file's mtime differs from the stored one
 
-    When check_mtime=True (used by project miner), also re-mines on content
-    change. When check_mtime=False (used by convo miner), transcripts are
-    assumed immutable, so only the version gate triggers a rebuild.
+    When check_mtime=True (used by the project miner, and by the convo
+    miner's in-lock recheck), also re-mines on content change. Conversation
+    transcripts are NOT assumed immutable: a Claude Code session keeps
+    appending to its own file while active, and /compact or /clear can
+    rewrite one in place. The convo miner's bulk skip-check uses
+    prefetch_mined_set()'s stored mtimes instead of calling this function
+    per file (same mtime-aware decision, without the O(n) per-file query
+    cost); this function's check_mtime=True path remains its per-file,
+    lock-held race-condition recheck.
 
     When extract_mode is set (used by convo miner), idempotency is scoped to
     that extraction mode so exchange-mode and general-mode drawers can coexist
@@ -1386,42 +1535,25 @@ def file_already_mined(
         return False
 
 
-def bulk_check_mined(collection) -> dict[str, float]:
-    """Pre-fetch source_file/source_mtime pairs for all documents in the collection.
+def prefetch_mined_set(
+    collection, extract_mode: Optional[str] = None
+) -> dict[str, Optional[float]]:
+    """Pre-fetch source_file -> stored source_mtime for files already mined
+    at the current NORMALIZE_VERSION, in one bulk pass instead of one
+    ChromaDB query per file.
 
-    Returns a dict mapping source_file -> source_mtime (as float) for every
-    document that has both fields.  Callers can check membership and compare
-    mtimes locally instead of issuing one ChromaDB query per file.
-
-    Fetches the full collection in paginated batches (like palace_graph.py)
-    since a WHERE-IN filter on thousands of paths is not supported by ChromaDB.
-    """
-    mined: dict[str, float] = {}
-    try:
-        total = collection.count()
-        offset = 0
-        while offset < total:
-            batch = collection.get(limit=1000, offset=offset, include=["metadatas"])
-            for meta in batch["metadatas"]:
-                src = meta.get("source_file")
-                mtime = meta.get("source_mtime")
-                if src and mtime is not None:
-                    mined[src] = float(mtime)
-            if not batch["ids"]:
-                break
-            offset += len(batch["ids"])
-    except Exception:
-        logger.warning("bulk_check_mined: partial fetch, %d files loaded", len(mined))
-    return mined
-
-
-def prefetch_mined_set(collection, extract_mode: Optional[str] = None) -> set[str]:
-    """Pre-fetch the set of source_files already mined at the current NORMALIZE_VERSION.
-
-    Mirrors file_already_mined()'s version-gate semantics (check_mtime=False
-    branch) but in one bulk pass instead of one ChromaDB query per file.
-    Returns a set of source_file paths whose stored drawers are at or above
-    NORMALIZE_VERSION; callers do `if path in result_set: skip`.
+    Return type is a dict rather than a bare set so callers get mtime
+    awareness "for free": conversation transcripts are not immutable once
+    mined (a Claude Code session keeps appending to the same file while
+    active, and /compact or /clear can rewrite one in place), so "we've
+    seen this source_file before" is not suffient to skip it -- the caller
+    must also confirm its current on-disk mtime still matches what was
+    stored. `if src in mined_set` still means the same thing as the old
+    set-based return (dict `in` checks keys); a caller that wants staleness
+    detection reads `mined_set[src]` and compares against
+    os.path.getmtime(src) itself. `None` means either no mtime was ever
+    stored (drawers written before this field existed) or getmtime failed
+    when the drawer was written -- both should be treated as stale.
 
     When extract_mode is set, mirrors file_already_mined(..., extract_mode=...)
     so conversation mines skip per extraction mode rather than per source file.
@@ -1431,7 +1563,7 @@ def prefetch_mined_set(collection, extract_mode: Optional[str] = None) -> set[st
     palace, making a 2000-file sweep take >1h of pure skip-checking. This
     helper drops that to a single paginated scan plus O(1) lookups.
     """
-    mined: set[str] = set()
+    mined: dict[str, Optional[float]] = {}
     try:
         total = collection.count()
         offset = 0
@@ -1447,10 +1579,69 @@ def prefetch_mined_set(collection, extract_mode: Optional[str] = None) -> set[st
                 # Same default as file_already_mined: missing version == 1
                 version = meta.get("normalize_version", 1)
                 if version >= NORMALIZE_VERSION:
-                    mined.add(src)
+                    stored_mtime = meta.get("source_mtime")
+                    mined[src] = float(stored_mtime) if stored_mtime is not None else None
             if not batch["ids"]:
                 break
             offset += len(batch["ids"])
     except Exception:
         logger.warning("prefetch_mined_set: partial fetch, %d files loaded", len(mined))
     return mined
+
+
+def prefetch_content_hashes(
+    collection, extract_mode: Optional[str] = None
+) -> dict[tuple[str, str], str]:
+    """Pre-fetch (wing, content_hash) -> source_file for drawers already
+    filed at the current NORMALIZE_VERSION, in one bulk pass.
+
+    Repeated exports from Claude/ChatGPT land under a new filename each run
+    (timestamped bundle, regenerated slug, etc.) even when the conversation
+    itself hasn't changed. `prefetch_mined_set` only recognizes a file as
+    already-mined by its exact path, so the same conversation re-exported
+    under a new path always looked "new" and got re-mined as a duplicate
+    drawer. This does the same bulk scan but keyed on the SHA-256 of the
+    normalized transcript text, so the convo miner can recognize "this exact
+    conversation is already filed under a different path" and skip it.
+
+    Keyed by (wing, content_hash) rather than content_hash alone — mining
+    the same transcript into a second wing is a deliberate re-file, not a
+    duplicate, and should produce real drawers in that wing rather than
+    just the registry sentinel.
+
+    A drawer's ``content_hash`` metadata may hold several comma-joined
+    SHA-256 hashes: a privacy-export bundle normalizes to one conversation
+    per drawer set, but the hash is computed per conversation so that a
+    re-export with one new conversation added doesn't change the hash of
+    the ones that didn't. Only the first source_file seen for a given
+    (wing, hash) pair is kept — good enough to detect and skip a repeat,
+    the point is not to track every alias.
+    """
+    hashes: dict[tuple[str, str], str] = {}
+    try:
+        total = collection.count()
+        offset = 0
+        while offset < total:
+            batch = collection.get(limit=1000, offset=offset, include=["metadatas"])
+            for meta in batch["metadatas"]:
+                meta = meta or {}
+                content_hash_field = meta.get("content_hash")
+                src = meta.get("source_file")
+                wing = meta.get("wing")
+                if not content_hash_field or not src or not wing:
+                    continue
+                if not _metadata_matches_extract_mode(meta, extract_mode):
+                    continue
+                version = meta.get("normalize_version", 1)
+                if version < NORMALIZE_VERSION:
+                    continue
+                for content_hash in content_hash_field.split(","):
+                    key = (wing, content_hash)
+                    if content_hash and key not in hashes:
+                        hashes[key] = src
+            if not batch["ids"]:
+                break
+            offset += len(batch["ids"])
+    except Exception:
+        logger.warning("prefetch_content_hashes: partial fetch, %d hashes loaded", len(hashes))
+    return hashes

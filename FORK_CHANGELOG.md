@@ -21,6 +21,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [2026-08-09]
 
 
+### Changed
+
+
+- **Sync upstream/develop through v3.7.0 (8516db7f): 433 commits — hub forward, temp-collection repair promote, round-trippable drawer IDs, kg_supersede, HNSW CLI fence, 62 conflict files resolved** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+  Second large sync (the first was ``b46f18d``, post-v3.5.0). Brings
+  v3.6.0 + v3.7.0: the ``mempalace serve`` hub + hook forwarding,
+  temp-collection repair promotion with backup-restore semantics,
+  round-trippable drawer IDs (#2090), ``kg_supersede`` (#2014-family),
+  the CLI HNSW-divergence fence, ``normalize_conversations``
+  per-conversation dedup, daemon lock-contention retry (#2029), and
+  repair ``--dry-run`` honored for ``--mode from-sqlite`` (#2138).
+
+  Fork-preserved through 62 conflict files: the postgres/pgvector/AGE
+  backend dispatch (incl. the ``96f83d7`` union-merge guard, now with
+  upstream's ``drawer_id`` field composed in — ``TestUnionPostgresPath``
+  green), ``_coerce_wing``, daemon-strict hook routing (now nested
+  inside upstream's one-probe ``_hook_write_routing_context``),
+  ``hook_verbatim_mode`` threaded through upstream's restructured
+  ``normalize``/``convo_miner``, the #1367 embeddings-preserve ported
+  onto the new repair flow, adaptmem_ft dispatch, and the daemon-routed
+  CLI surface. Precompact adopts upstream's active-transcript-only
+  mining. MCP tool surface is now 48 tools (upstream additions on the
+  fork's 39); doc/manifest counts reconciled against ``mcp_server.TOOLS``.
+
+
 ### Fixed
 
 

@@ -29,6 +29,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.diary_ingest`](./diary_ingest) — diary_ingest.py — Ingest daily summary files into the palace.
 - [`mempalace.dynamics`](./dynamics) — dynamics.py — Living-connection math for halls + tunnels.
 - [`mempalace.embedding`](./embedding) — Embedding function factory with hardware acceleration.
+- [`mempalace.encoding_repair`](./encoding_repair) — Safely repair high-confidence UTF-8 mojibake in MemPalace drawers.
 - [`mempalace.entities`](./entities) — No-LLM structural entity extraction for the associative graph.
 - [`mempalace.entity_detector`](./entity_detector) — entity_detector.py — Auto-detect people and projects from file content.
 - [`mempalace.entity_registry`](./entity_registry) — entity_registry.py — Persistent personal entity registry for MemPalace.
@@ -37,6 +38,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.format_miner`](./format_miner) — format_miner.py — proposed for mempalace 3.3.6.
 - [`mempalace.general_extractor`](./general_extractor) — general_extractor.py — Extract 5 types of memories from text.
 - [`mempalace.hallways`](./hallways) — Hallways — within-wing entity-to-entity connectors.
+- [`mempalace.hlc`](./hlc) — hlc.py — Hybrid Logical Clock for RFC 004 op ordering
 - [`mempalace.hook_shell`](./hook_shell) — Compatibility helpers for legacy shell hooks.
 - [`mempalace.hooks_cli`](./hooks_cli) — Hook logic for MemPalace — Python implementation of session-start, stop, session-end, and precompact hooks.
 - [`mempalace.ids`](./ids) — Centralized drawer/triple ID construction with collision-safe delimiter.
@@ -52,6 +54,8 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.layers`](./layers) — layers.py — 4-Layer Memory Stack for mempalace
 - [`mempalace.llm_client`](./llm_client) — llm_client.py — Minimal provider abstraction for LLM-assisted entity refinement.
 - [`mempalace.llm_refine`](./llm_refine) — llm_refine.py — Optional LLM refinement of regex-detected entities.
+- [`mempalace.logstream`](./logstream) — logstream.py — Agent coordination event log for MemPalace (RFC 003)
+- [`mempalace.logsync`](./logsync) — logsync.py — Anti-entropy sync engine for the logstream (RFC 004 step 0)
 - [`mempalace.mcp_server`](./mcp_server) — MemPalace MCP Server — read/write palace access for Claude Code
 - [`mempalace.migrate`](./migrate) — mempalace migrate — Recover a palace created with a different ChromaDB version.
 - [`mempalace.migrate_to_postgres`](./migrate_to_postgres) — ChromaDB → Postgres (pgvector + AGE) migration tool.
@@ -70,10 +74,12 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.ratings`](./ratings) — Feedback ratings for search results (#159, Tier 1).
 - [`mempalace.recency`](./recency) — Recency weighting for search results (#158).
 - [`mempalace.repair`](./repair) — repair.py — Scan, prune corrupt entries, and rebuild HNSW index
+- [`mempalace.replica`](./replica) — replica.py — Per-palace replica identity (RFC 004 transport seam / provenance)
 - [`mempalace.room_detector_local`](./room_detector_local) — room_detector_local.py — Local setup, no API required.
 - [`mempalace.room_taxonomy`](./room_taxonomy) — Canonical room taxonomy — soft-warn validation.
 - [`mempalace.rrf`](./rrf) — Reciprocal Rank Fusion — combine ranked lists from N retrievers.
 - [`mempalace.searcher`](./searcher) — searcher.py — Find anything. Exact words.
+- [`mempalace.server_registry`](./server_registry) — Per-palace discovery registry for the MemPalace HTTP MCP hub.
 - [`mempalace.service`](./service) — Shared service operations used by daemon-backed entry points.
 - [`mempalace.sources`](./sources) — Source adapter subsystem (RFC 002).
 - [`mempalace.spellcheck`](./spellcheck) — spellcheck.py — Spell-correct user messages before palace filing.
@@ -82,8 +88,10 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.sync`](./sync) — sync.py — Gitignore-aware drawer prune (#1252).
 - [`mempalace.tag_extraction`](./tag_extraction) — TF-IDF auto-tag extraction for drawer write time (#201).
 - [`mempalace.tags`](./tags) — Multi-label tags for drawers (techempower-org/mempalace#39).
+- [`mempalace.transport`](./transport) — transport.py — The RFC 004 transport seam (Layer 1).
 - [`mempalace.version`](./version) — Single source of truth for the MemPalace package version.
 - [`mempalace.wal`](./wal) — Side-effect-free write-ahead log for MemPalace write operations.
+- [`mempalace.write_routing`](./write_routing) — Shared daemon-routing policy for MemPalace write callers.
 - [`mempalace.write_sanitizer`](./write_sanitizer) — write_sanitizer.py — Observation-grade input hygiene for the write path (#40).
 
 ### auto_query
@@ -101,6 +109,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.backends.base`](./backends/base) — Storage backend contract for MemPalace (RFC 001).
 - [`mempalace.backends.chroma`](./backends/chroma) — ChromaDB-backed MemPalace storage backend (RFC 001 reference implementation).
 - [`mempalace.backends.embedding_wrapper`](./backends/embedding_wrapper) — Core-side embedding adapter for explicit-vector backends.
+- [`mempalace.backends.milvus`](./backends/milvus) — Milvus backend for MemPalace.
 - [`mempalace.backends.pgvector`](./backends/pgvector) — Postgres + pgvector backend for MemPalace.
 - [`mempalace.backends.postgres`](./backends/postgres) — Optional PostgreSQL-backed MemPalace storage backend.
 - [`mempalace.backends.qdrant`](./backends/qdrant) — Qdrant REST backend for MemPalace.

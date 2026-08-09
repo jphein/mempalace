@@ -276,6 +276,20 @@ letting Chroma open it can SIGSEGV before Python fallback code runs.
 The original directory is renamed, not deleted, so recovery remains
 possible if the heuristic ever misfires.
 
+### `reset_hnsw_capacity_cache`
+
+```python
+def reset_hnsw_capacity_cache() -> None
+```
+
+Forget every cached capacity verdict.
+
+The signature check already picks up on-disk changes on its own; this is
+for callers that drop all cached palace state at once (``tool_reconnect``,
+``_force_chroma_cache_reset``) and for tests that want a probe to run
+unconditionally. Bumps the generation so a probe already running cannot
+re-store the entry this call just dropped.
+
 ### `hnsw_capacity_status`
 
 ```python
@@ -301,6 +315,28 @@ Returns a dict with:
 * ``message``          — human-readable summary
 
 Never raises — a probe that throws would defeat the point.
+
+A fully-measured verdict is cached per ``(palace_path, collection_name)``
+and reused while every file the probe reads is unchanged on disk (#1471).
+Each call otherwise costs a ``COUNT(*)`` over the embeddings table and a
+full unpickle of the segment metadata — the two dominant costs — plus a few
+small sqlite reads, on a path every search, duplicate check and status call
+runs through. A verdict the probe could not fully measure (``sqlite_count``
+is ``None`` from a locked database, or there is no palace yet) is returned
+but never cached, so a transient failure cannot pin a false reading.
+
+Freshness comes from an ``(inode, mtime_ns, size)`` signature rather than a
+wall-clock TTL, so an external writer — ``mempalace repair``, a peer mine,
+another process — invalidates the verdict as soon as it touches the files,
+instead of leaving the #1222 guard blind for a fixed window.
+``_CAPACITY_CACHE_MAX_AGE_SECONDS`` caps how long one verdict may be
+reused, but only as a backstop for filesystems with coarse timestamps; the
+signature is what makes the verdict fresh.
+
+Unlike :meth:`ChromaBackend._client`, which tolerates a 0.01 s mtime
+epsilon to avoid rebuilding an expensive client, this compares exactly:
+re-running the probe costs milliseconds, whereas serving one stale verdict
+can route a query into a diverged segment.
 
 ### `quarantine_invalid_hnsw_metadata`
 

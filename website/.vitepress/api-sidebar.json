@@ -84,6 +84,10 @@
         "link": "/reference/python-api/embedding"
       },
       {
+        "text": "mempalace.encoding_repair",
+        "link": "/reference/python-api/encoding_repair"
+      },
+      {
         "text": "mempalace.entities",
         "link": "/reference/python-api/entities"
       },
@@ -114,6 +118,10 @@
       {
         "text": "mempalace.hallways",
         "link": "/reference/python-api/hallways"
+      },
+      {
+        "text": "mempalace.hlc",
+        "link": "/reference/python-api/hlc"
       },
       {
         "text": "mempalace.hook_shell",
@@ -174,6 +182,14 @@
       {
         "text": "mempalace.llm_refine",
         "link": "/reference/python-api/llm_refine"
+      },
+      {
+        "text": "mempalace.logstream",
+        "link": "/reference/python-api/logstream"
+      },
+      {
+        "text": "mempalace.logsync",
+        "link": "/reference/python-api/logsync"
       },
       {
         "text": "mempalace.mcp_server",
@@ -248,6 +264,10 @@
         "link": "/reference/python-api/repair"
       },
       {
+        "text": "mempalace.replica",
+        "link": "/reference/python-api/replica"
+      },
+      {
         "text": "mempalace.room_detector_local",
         "link": "/reference/python-api/room_detector_local"
       },
@@ -262,6 +282,10 @@
       {
         "text": "mempalace.searcher",
         "link": "/reference/python-api/searcher"
+      },
+      {
+        "text": "mempalace.server_registry",
+        "link": "/reference/python-api/server_registry"
       },
       {
         "text": "mempalace.service",
@@ -296,12 +320,20 @@
         "link": "/reference/python-api/tags"
       },
       {
+        "text": "mempalace.transport",
+        "link": "/reference/python-api/transport"
+      },
+      {
         "text": "mempalace.version",
         "link": "/reference/python-api/version"
       },
       {
         "text": "mempalace.wal",
         "link": "/reference/python-api/wal"
+      },
+      {
+        "text": "mempalace.write_routing",
+        "link": "/reference/python-api/write_routing"
       },
       {
         "text": "mempalace.write_sanitizer",
@@ -358,6 +390,10 @@
       {
         "text": "mempalace.backends.embedding_wrapper",
         "link": "/reference/python-api/backends/embedding_wrapper"
+      },
+      {
+        "text": "mempalace.backends.milvus",
+        "link": "/reference/python-api/backends/milvus"
       },
       {
         "text": "mempalace.backends.pgvector",

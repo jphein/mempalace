@@ -31,13 +31,19 @@ Usage (from CLI):
 ### `get_source_groups`
 
 ```python
-def get_source_groups(col, min_count = MIN_DRAWERS_TO_CHECK, source_pattern = None, wing = None)
+def get_source_groups(col, min_count = MIN_DRAWERS_TO_CHECK, source_pattern = None, wing = None, palace_path = None)
 ```
 
 Group drawers by source_file, return groups with min_count+ entries.
 
 If wing is specified, only considers drawers in that wing. This catches
 cross-wing duplicates when the same source was mined into multiple wings.
+
+``palace_path``, when passed, preflights HNSW divergence before count():
+a diverged segment can hit the #1222 SIGSEGV/panic class, which a
+try/except around count() cannot catch. Omitted by existing callers
+that don't have a palace_path handy (e.g. tests) -- the check is simply
+skipped in that case, matching this function's pre-existing behavior.
 
 ### `dedup_source_group`
 

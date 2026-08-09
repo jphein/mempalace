@@ -11,6 +11,9 @@ instead of the real user profile.
 """
 
 import os
+import hashlib
+import math
+import re
 import shutil
 import tempfile
 
@@ -45,6 +48,63 @@ import pytest  # noqa: E402
 from mempalace.config import MempalaceConfig  # noqa: E402
 from mempalace.knowledge_graph import KnowledgeGraph  # noqa: E402
 
+_TEST_EMBED_DIM = 384
+_TEST_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
+_REAL_EMBEDDING_TEST_MODULES = {
+    "test_embedding",
+    "test_embeddinggemma",
+    # Fork: adaptmem_ft dispatch tests assert on the real encoder classes;
+    # the stub EF would swallow the model= dispatch they exist to verify.
+    "test_adaptmem_ft",
+}
+
+
+def _stable_test_embedding(text: str) -> list[float]:
+    """Small deterministic embedding for tests that do not test ONNX itself."""
+    vec = [0.0] * _TEST_EMBED_DIM
+    tokens = _TEST_TOKEN_RE.findall((text or "").lower())
+    if not tokens:
+        tokens = [""]
+    for token in tokens:
+        digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+        vec[int.from_bytes(digest[:4], "little") % _TEST_EMBED_DIM] += 1.0
+    norm = math.sqrt(sum(v * v for v in vec)) or 1.0
+    return [v / norm for v in vec]
+
+
+class _StableTestEmbeddingFunction:
+    @staticmethod
+    def name() -> str:
+        return "default"
+
+    @staticmethod
+    def build_from_config(config):
+        _StableTestEmbeddingFunction.validate_config(config)
+        return _StableTestEmbeddingFunction()
+
+    @staticmethod
+    def validate_config(config) -> None:
+        return
+
+    def get_config(self) -> dict:
+        return {}
+
+    def is_legacy(self) -> bool:
+        return False
+
+    def default_space(self) -> str:
+        return "cosine"
+
+    def supported_spaces(self) -> list[str]:
+        return ["cosine", "l2", "ip"]
+
+    def embed_query(self, input):
+        return self(input=input)
+
+    def __call__(self, input):
+        return [_stable_test_embedding(str(text)) for text in list(input or [])]
+
+
 # Redirect ChromaDB's ONNX model cache back to the real user's cache so tests
 # don't re-download the 79 MB model on every run. The HOME redirect above
 # would otherwise point ONNXMiniLM_L6_V2.DOWNLOAD_PATH at the empty temp dir.
@@ -64,7 +124,40 @@ except ImportError:
 
 
 @pytest.fixture(autouse=True)
-def _reset_mcp_cache():
+def _stable_embedding_function_for_tests(request, monkeypatch):
+    """Keep ordinary tests off ChromaDB's native ONNX embedding path.
+
+    Module-sized Windows runs were crashing inside onnxruntime after many raw
+    Chroma add/query calls. The embedding-specific tests opt out below; every
+    other test gets a deterministic in-process EF so it still exercises vector
+    writes/search without loading native ONNX sessions.
+    """
+    module_name = getattr(getattr(request, "module", None), "__name__", "")
+    if module_name in _REAL_EMBEDDING_TEST_MODULES:
+        yield
+        return
+
+    ef = _StableTestEmbeddingFunction()
+
+    import mempalace.backends.chroma as chroma_mod
+    import mempalace.backends.embedding_wrapper as embedding_wrapper
+    import mempalace.embedding as embedding_mod
+    from chromadb.api.types import DefaultEmbeddingFunction
+
+    monkeypatch.setattr(DefaultEmbeddingFunction, "__call__", lambda self, input: ef(input=input))
+    monkeypatch.setattr(
+        DefaultEmbeddingFunction, "embed_query", lambda self, input: ef(input=input)
+    )
+    monkeypatch.setattr(embedding_mod, "get_embedding_function", lambda *_, **__: ef)
+    monkeypatch.setattr(
+        chroma_mod.ChromaBackend, "_resolve_embedding_function", staticmethod(lambda: ef)
+    )
+    monkeypatch.setattr(embedding_wrapper, "_embed_texts", lambda texts: ef(input=list(texts)))
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _reset_mcp_cache():  # noqa: C901 — merged fork+upstream cached-module resets; see #383 sync
     """Reset cached MCP state between tests without importing mcp_server.
 
     If mempalace.mcp_server is already imported, close/clear its KG cache and
@@ -131,10 +224,37 @@ def _reset_mcp_cache():
 
         try:
             # Reset the per-process quarantine gate so tests don't leak
-            # state through ChromaBackend._quarantined_paths.
-            from mempalace.backends.chroma import ChromaBackend
+            # state through ChromaBackend._quarantined_paths, and drop cached
+            # HNSW capacity verdicts (#1471) for the same reason — a test that
+            # reuses a palace path would otherwise inherit the previous test's
+            # verdict.
+            from mempalace.backends.chroma import ChromaBackend, reset_hnsw_capacity_cache
 
             ChromaBackend._quarantined_paths.clear()
+            reset_hnsw_capacity_cache()
+        except (ImportError, AttributeError):
+            pass
+
+        # Release chromadb clients opened through the backend layer. Many tests
+        # reach the store via palace.get_collection() (sweep, repair, CLI, ...),
+        # which caches one PersistentClient per palace_path on the long-lived
+        # backend singleton and never closes it. chromadb frees the rust-side
+        # SQLite/HNSW file handles only on client.close(); on POSIX the open
+        # handles are harmless, but on Windows they stay locked and accumulate
+        # across the session until a later test's HNSW segment write fails
+        # (#1128 Windows CI). close_palace() closes the client and drops the
+        # handle without marking the backend closed, so it stays reusable.
+        try:
+            from mempalace import palace as _palace
+
+            backend = getattr(_palace, "_DEFAULT_BACKEND", None)
+            clients = getattr(backend, "_clients", None)
+            if clients:
+                for path in list(clients):
+                    try:
+                        backend.close_palace(path)
+                    except Exception:
+                        pass
         except (ImportError, AttributeError):
             pass
 

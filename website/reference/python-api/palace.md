@@ -24,13 +24,30 @@ def __init__(self, palace_path: str, errors: list[str]) -> None
 
 ## Functions
 
+### `clear_validated_embedder_identity`
+
+```python
+def clear_validated_embedder_identity(palace_path: Optional[str] = None) -> None
+```
+
+Drop cached embedder-identity verdicts so the next open re-checks.
+
+Read-only opens of an empty collection can mark a key as validated without
+recording identity on disk (``create=False``). When MCP later promotes that
+reader to a writable owner, the writable open must re-run enforcement so
+the first drawers still get labelled with the active model.
+
 ### `get_collection`
 
 ```python
-def get_collection(palace_path: str, collection_name: Optional[str] = None, create: bool = True, backend: Optional[str] = None, _skip_identity_check: bool = False)
+def get_collection(palace_path: str, collection_name: Optional[str] = None, create: bool = True, backend: Optional[str] = None, read_only: bool = False, _skip_identity_check: bool = False)
 ```
 
 Get the palace collection through the backend layer.
+
+``read_only=True`` asks local backends to open storage without schema
+initialization, migrations, or metadata writes. Backends that support a
+genuine read-only mode receive it through the backend ``options`` mapping.
 
 `collection_name=None` (the fork-side convention) and
 `collection_name=DEFAULT_COLLECTION_NAME` (#665's convention) both mean
@@ -91,6 +108,20 @@ Public resolution order:
 If artifacts for a different backend are already present, raise
 ``BackendMismatchError`` so normal write paths cannot silently mix storage
 formats in one palace directory.
+
+### `backend_requires_single_writer`
+
+```python
+def backend_requires_single_writer(backend_name: str) -> bool
+```
+
+Return whether a backend needs one process-lifetime writer owner.
+
+Local file-backed backends cannot safely coordinate independent long-lived
+clients by serializing only individual calls: each process may retain
+SQLite/WAL, FTS, or vector-index state across operations. Unknown and
+plugin backends are treated conservatively. Only backends whose storage
+service is explicitly responsible for cross-process concurrency opt out.
 
 ### `get_backend_for_palace`
 
@@ -209,42 +240,43 @@ Returns False (so the file gets re-mined) when:
     schema (triggers silent rebuild after a normalization upgrade)
   - `check_mtime=True` and the file's mtime differs from the stored one
 
-When check_mtime=True (used by project miner), also re-mines on content
-change. When check_mtime=False (used by convo miner), transcripts are
-assumed immutable, so only the version gate triggers a rebuild.
+When check_mtime=True (used by the project miner, and by the convo
+miner's in-lock recheck), also re-mines on content change. Conversation
+transcripts are NOT assumed immutable: a Claude Code session keeps
+appending to its own file while active, and /compact or /clear can
+rewrite one in place. The convo miner's bulk skip-check uses
+prefetch_mined_set()'s stored mtimes instead of calling this function
+per file (same mtime-aware decision, without the O(n) per-file query
+cost); this function's check_mtime=True path remains its per-file,
+lock-held race-condition recheck.
 
 When extract_mode is set (used by convo miner), idempotency is scoped to
 that extraction mode so exchange-mode and general-mode drawers can coexist
 for the same source transcript. Legacy drawers without extract_mode are
 treated as exchange-mode drawers.
 
-### `bulk_check_mined`
-
-```python
-def bulk_check_mined(collection) -> dict[str, float]
-```
-
-Pre-fetch source_file/source_mtime pairs for all documents in the collection.
-
-Returns a dict mapping source_file -> source_mtime (as float) for every
-document that has both fields.  Callers can check membership and compare
-mtimes locally instead of issuing one ChromaDB query per file.
-
-Fetches the full collection in paginated batches (like palace_graph.py)
-since a WHERE-IN filter on thousands of paths is not supported by ChromaDB.
-
 ### `prefetch_mined_set`
 
 ```python
-def prefetch_mined_set(collection, extract_mode: Optional[str] = None) -> set[str]
+def prefetch_mined_set(collection, extract_mode: Optional[str] = None) -> dict[str, Optional[float]]
 ```
 
-Pre-fetch the set of source_files already mined at the current NORMALIZE_VERSION.
+Pre-fetch source_file -> stored source_mtime for files already mined
+at the current NORMALIZE_VERSION, in one bulk pass instead of one
+ChromaDB query per file.
 
-Mirrors file_already_mined()'s version-gate semantics (check_mtime=False
-branch) but in one bulk pass instead of one ChromaDB query per file.
-Returns a set of source_file paths whose stored drawers are at or above
-NORMALIZE_VERSION; callers do `if path in result_set: skip`.
+Return type is a dict rather than a bare set so callers get mtime
+awareness "for free": conversation transcripts are not immutable once
+mined (a Claude Code session keeps appending to the same file while
+active, and /compact or /clear can rewrite one in place), so "we've
+seen this source_file before" is not suffient to skip it -- the caller
+must also confirm its current on-disk mtime still matches what was
+stored. `if src in mined_set` still means the same thing as the old
+set-based return (dict `in` checks keys); a caller that wants staleness
+detection reads `mined_set[src]` and compares against
+os.path.getmtime(src) itself. `None` means either no mtime was ever
+stored (drawers written before this field existed) or getmtime failed
+when the drawer was written -- both should be treated as stale.
 
 When extract_mode is set, mirrors file_already_mined(..., extract_mode=...)
 so conversation mines skip per extraction mode rather than per source file.
@@ -253,3 +285,34 @@ The convo miner walks thousands of transcript files; per-file
 `collection.get(where={"source_file": X})` costs ~2s on a 150k-drawer
 palace, making a 2000-file sweep take >1h of pure skip-checking. This
 helper drops that to a single paginated scan plus O(1) lookups.
+
+### `prefetch_content_hashes`
+
+```python
+def prefetch_content_hashes(collection, extract_mode: Optional[str] = None) -> dict[tuple[str, str], str]
+```
+
+Pre-fetch (wing, content_hash) -> source_file for drawers already
+filed at the current NORMALIZE_VERSION, in one bulk pass.
+
+Repeated exports from Claude/ChatGPT land under a new filename each run
+(timestamped bundle, regenerated slug, etc.) even when the conversation
+itself hasn't changed. `prefetch_mined_set` only recognizes a file as
+already-mined by its exact path, so the same conversation re-exported
+under a new path always looked "new" and got re-mined as a duplicate
+drawer. This does the same bulk scan but keyed on the SHA-256 of the
+normalized transcript text, so the convo miner can recognize "this exact
+conversation is already filed under a different path" and skip it.
+
+Keyed by (wing, content_hash) rather than content_hash alone — mining
+the same transcript into a second wing is a deliberate re-file, not a
+duplicate, and should produce real drawers in that wing rather than
+just the registry sentinel.
+
+A drawer's ``content_hash`` metadata may hold several comma-joined
+SHA-256 hashes: a privacy-export bundle normalizes to one conversation
+per drawer set, but the hash is computed per conversation so that a
+re-export with one new conversation added doesn't change the hash of
+the ones that didn't. Only the first source_file seen for a given
+(wing, hash) pair is kept — good enough to detect and skip a repeat,
+the point is not to track every alias.

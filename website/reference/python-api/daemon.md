@@ -62,7 +62,7 @@ def enqueue(self, kind: str, payload: dict[str, Any], *, dedupe_key: str | None 
 #### `claim_next`
 
 ```python
-def claim_next(self) -> Job | None
+def claim_next(self, *, exclude: set[str] | None = None) -> Job | None
 ```
 
 #### `finish`
@@ -70,6 +70,35 @@ def claim_next(self) -> Job | None
 ```python
 def finish(self, job_id: str, *, state: str, result: dict[str, Any] | None = None, error: dict[str, Any] | None = None, only_if_running: bool = False) -> Job
 ```
+
+#### `defer`
+
+```python
+def defer(self, job_id: str, *, claimed_started_at: str | None = None, error: dict[str, Any] | None = None) -> Job
+```
+
+Return a job refused the palace write lock to ``queued``, unspent.
+
+``mine_palace_lock`` wraps the palace write itself, so a refusal means
+no drawer was filed and re-running cannot duplicate palace content.
+That is what separates it from the failure ``MAX_ATTEMPTS`` guards -- a
+daemon that died mid-execution, whose outcome is unknown and whose blind
+retry would re-file verbatim content. Undoing ``claim_next``'s increment
+keeps a palace that stays locked from spending the retry budget of work
+that never landed.
+
+``error`` records why the job went back to the queue, so a job parked
+behind a lock is distinguishable from one merely awaiting its turn.
+``claim_next`` clears it on the next claim, so the reason never outlives
+the claim it describes.
+
+The ``state = 'running'`` guard mirrors ``finish(only_if_running=True)``:
+if shutdown already cancelled this job, deferring must not resurrect it.
+``claimed_started_at`` narrows the update further, to the claim that was
+actually refused: if the row was re-queued and re-claimed in the window
+(recover_running on another daemon start), a late defer must not throw
+away that newer claim by re-queuing -- and refunding -- work it does not
+own. ``None`` skips the check.
 
 #### `get`
 
@@ -156,7 +185,7 @@ def list_jobs(self, limit: int = 20) -> list[dict[str, Any]]
 #### `wait`
 
 ```python
-def wait(self, job_id: str, *, timeout: float = DEFAULT_WAIT_TIMEOUT) -> dict[str, Any]
+def wait(self, job_id: str, *, timeout: float = DEFAULT_WAIT_TIMEOUT, stop_on_lock_deferral: bool = False) -> dict[str, Any]
 ```
 
 #### `shutdown`
@@ -221,6 +250,24 @@ def pid_path(palace_path: str) -> Path
 def queue_path(palace_path: str) -> Path
 ```
 
+### `job_deferred_by_lock`
+
+```python
+def job_deferred_by_lock(job: dict[str, Any]) -> bool
+```
+
+True when a job's last claim was refused the palace lock.
+
+Such a job is deferred, not failed (#2014): it went back to the queue and
+runs once the lock frees. That makes it non-terminal, so a caller blocking
+until ``TERMINAL_STATES`` would wait out the holder -- which can be a
+long-lived session. Interactive callers use this to report the parked job
+instead of stranding the terminal.
+
+Keyed on the reason ``defer`` records, which ``claim_next`` clears on the
+next claim: the answer is about the claim that just ended, not a live probe
+of the lock (the holder may already have exited during the backoff).
+
 ### `job_to_dict`
 
 ```python
@@ -254,7 +301,7 @@ def ensure_client(palace_path: str, *, backend: str | None = None, auto_start: b
 ### `submit_job`
 
 ```python
-def submit_job(kind: str, payload: dict[str, Any], *, palace_path: str | None = None, backend: str | None = None, dedupe_key: str | None = None, priority: int = 0, wait: bool = True, auto_start: bool = False, timeout: float = DEFAULT_WAIT_TIMEOUT) -> dict[str, Any]
+def submit_job(kind: str, payload: dict[str, Any], *, palace_path: str | None = None, backend: str | None = None, dedupe_key: str | None = None, priority: int = 0, wait: bool = True, auto_start: bool = False, timeout: float = DEFAULT_WAIT_TIMEOUT, stop_on_lock_deferral: bool = False) -> dict[str, Any]
 ```
 
 ### `stop_daemon`
