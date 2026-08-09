@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **Sync upstream/develop through v3.7.0 (8516db7f): 433 commits — hub forward, temp-collection repair promote, round-trippable drawer IDs, kg_supersede, HNSW CLI fence, 62 conflict files resolved** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Sync upstream/develop through v3.7.0 (8516db7f): 433 commits — hub forward, temp-collection repair promote, round-trippable drawer IDs, kg_supersede, HNSW CLI fence, 62 conflict files resolved** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   Second large sync (the first was ``b46f18d``, post-v3.5.0). Brings
   v3.6.0 + v3.7.0: the ``mempalace serve`` hub + hook forwarding,
   temp-collection repair promotion with backup-restore semantics,
@@ -323,7 +323,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Performance
 
 
-- **AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **AGE graph-walk: auto edge-endpoint indexes in backfill + bind anonymous RELATION targets (mempalace#335)** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   Follow-ups to the Cat 7b hybrid-latency root-cause (palace-daemon
   ``docs/perf/2026-05-30-hybrid-graph-walk-latency.md``): the per-entity
   graph-walk Cypher in ``searcher._graph_expand_*`` and the daemon's
@@ -636,7 +636,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **README.md landscape table — refresh upstream MemPalace star count from ~23K → ~53K (current 2026-05-28)** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   The verbatim-first landscape table in README.md cited MemPalace
   upstream as "~23K stars" — stale since 2026-04. ``gh api
   /repos/MemPalace/mempalace`` returns 52,993 stars / 6,995 forks
@@ -1128,7 +1128,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`, `tests/test_cli_stats.py`
 
 
-- **Calibrated confidence field on search results + Brier-score eval column** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Calibrated confidence field on search results + Brier-score eval column** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   Surfaces an optional ``confidence`` field alongside each search hit:
   a calibrated probability that the hit is relevant, derived from the
   raw ``similarity`` via isotonic regression on a labeled probe set.
@@ -1158,7 +1158,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/calibration.py`, `mempalace/searcher.py`, `mempalace/config.py`, `scripts/eval_multi_encoder_rrf.py`, `tests/test_calibration.py`, `tests/test_searcher_confidence.py`, `tests/test_config.py`
 
 
-- **Evaluation doc: curated-authority vs auto-mined separation (#202)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Evaluation doc: curated-authority vs auto-mined separation (#202)** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   ``docs/research/2026-05-26-multi-palace-separation.md`` — a
   principle-first evaluation companion to the engineering design at
   ``docs/designs/multi-palace-separation.md``. Frames the
@@ -1237,7 +1237,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `mempalace/cli.py`, `tests/test_cli_stats.py`
 
 
-- **Formalize wing/room derivation order; demote entity detector to last-resort hint (#157)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Formalize wing/room derivation order; demote entity detector to last-resort hint (#157)** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   Document and enforce the derivation order for wing/room assignment
   as an explicit contract:
   ``cwd > transcript path > project directory hint > (optional) entity
@@ -1268,7 +1268,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
-- **Apply AGE statement_timeout in same transaction as cypher() (PR #228 follow-up)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Apply AGE statement_timeout in same transaction as cypher() (PR #228 follow-up)** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   The PR #228 hotfix added ``SET LOCAL statement_timeout = '3s'`` to
   ``_graph_expand_from_entities`` but ran it as a bare ``execute()``
   under ``conn.autocommit = True``. With autocommit, each
@@ -1473,7 +1473,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 
-- **Standalone essay: the verbatim-vs-derivative axis (#47)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Standalone essay: the verbatim-vs-derivative axis (#47)** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   ``docs/research/verbatim-vs-derivative-axis.md`` — 3300-word
   essay developing the fork's core architectural claim: store
   verbatim, derive lazily, derivatives are replaceable. Covers
@@ -1484,7 +1484,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `docs/research/verbatim-vs-derivative-axis.md`
 
 
-- **Research doc: uncertainty-aware retrieval analysis (#84)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Research doc: uncertainty-aware retrieval analysis (#84)** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   ``docs/research/uncertainty-aware-retrieval.md`` analyses the
   MIT CSAIL paper *Beyond Binary Rewards* (Damani et al.,
   arXiv:2507.16806) for applicability to mempalace's hybrid
@@ -1496,7 +1496,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   *Files:* `docs/research/uncertainty-aware-retrieval.md`
 
 
-- **Design doc: scope/collection filter on mempalace_search (#76)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Design doc: scope/collection filter on mempalace_search (#76)** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   ``docs/designs/scope-collection-filter.md`` evaluates the four
   design alternatives raised in
   techempower-org/mempalace#76 for whether ``mempalace_search``
@@ -1578,7 +1578,7 @@ TestParserAcceptsFlags (8).
   *Files:* `mempalace/cli.py`, `tests/test_cli_json.py`
 
 
-- **Design eval: multi-palace separation — curated vs auto-mined (#45)** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Design eval: multi-palace separation — curated vs auto-mined (#45)** ([`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4))
   ``docs/designs/multi-palace-separation.md`` evaluates two
   architectures for @kostadis's curated-vs-auto-mined separation
   raised in upstream discussion #1018: collection partitioning
