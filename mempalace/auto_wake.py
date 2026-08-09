@@ -126,11 +126,13 @@ def attempt_wake(daemon_url: str, settings: dict) -> bool:
 def urlopen_with_wake(req, timeout):
     """``urllib.request.urlopen`` with an optional wake-and-retry.
 
-    Drop-in replacement for the CLI's daemon calls: on a connection-level
-    failure with ``auto_wake`` configured, wake the host, wait for
-    ``/health``, and retry the request once. Everything else — HTTP
-    errors, disabled config, failed wake — re-raises the original error
-    unchanged so existing ``DaemonError`` handling is untouched.
+    Drop-in replacement for the CLI's daemon calls: on a wake-eligible
+    failure with ``auto_wake`` configured — a connection-level error, or
+    a proxy's 502/504 standing in for the sleeping host — wake the host,
+    wait for ``/health``, and retry the request once. Everything else —
+    other HTTP errors, disabled config, failed wake — re-raises the
+    original error unchanged so existing ``DaemonError`` handling is
+    untouched.
     """
     from .config import MempalaceConfig
 
