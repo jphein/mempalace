@@ -24,6 +24,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 
+- **Postgres backend: _coerce_wing write guard — wing-less writes land in 'general' (not the '' column default) and separator/case variants normalize; scripts/wing_hygiene.py migrates the historical rows (dry-run default)** ([`979da51`](https://github.com/techempower-org/mempalace/commit/979da51))
+  The drawers table's wing column defaults to ``''::text``, so any
+  writer that omitted the key filed drawers under an unreachable
+  empty-string wing (54 smoke-test drawers leaked on 2026-05-12),
+  and raw-dirname writers forked near-duplicate wings
+  (``kiyo-xhci-fix`` vs ``kiyo_xhci_fix``). ``_coerce_wing`` now
+  guards every postgres write choke point — upsert, update, and
+  ``rename_wing``'s destination (the source stays literal so
+  operators can rename *away* from a malformed wing). The one-off
+  migration for historical rows is ``scripts/wing_hygiene.py``
+  (dry-run by default; ``--commit`` / ``--delete-debris`` are
+  operator calls, tracked in #381). Issue #381.
+
+  *Tests:* 18 pure tests (test_wing_coercion.py) + 2 TEST_POSTGRES_DSN-gated integration tests
+  *Files:* `mempalace/backends/postgres.py`, `scripts/wing_hygiene.py`, `tests/test_wing_coercion.py`, `tests/test_backends_postgres.py`
+
+
+- **sync-outline: empty-secret env vars fall back to documented defaults; unreachable nightly cron retired (0-for-41 by construction) — workflow_dispatch stays** ([`5227da4`](https://github.com/techempower-org/mempalace/commit/5227da4))
+  Part of #368. With the ``OUTLINE_BASE_URL`` secret absent, CI
+  substitutes an empty string that the ``.get`` default passed
+  through, breaking every URL join; ``or``-fallbacks fix that.
+  The nightly schedule could never succeed from hosted runners —
+  ``outline.jphe.in`` resolves to a Tailscale CGNAT address — so
+  the cron trigger is retired in favor of manual dispatch until
+  the homelab-timer half of #368 lands.
+
+  *Files:* `scripts/sync-outline.py`, `.github/workflows/sync-outline.yml`
+
+
 - **Searcher: restore mempalace_search on postgres — guard capability-path conversion in union merge (UnboundLocalError since the 2026-07-02 sync)** ([`96f83d7`](https://github.com/techempower-org/mempalace/commit/96f83d7))
   The ``b46f18d`` upstream sync kept upstream's unconditional tail of
   ``_merge_bm25_union_candidates`` (``bm25_extra = []`` + ``for hit in
