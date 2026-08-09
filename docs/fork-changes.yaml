@@ -2259,7 +2259,7 @@ entries:
       Per-user setups should use `~/.config/opencode/opencode.jsonc`
       with the daemon-aware wrapper (see `docs/integrations/opencode.md`).
     pr: 1567
-    pr_state: OPEN
+    pr_state: CLOSED
     files:
       - .opencode/opencode.json
 

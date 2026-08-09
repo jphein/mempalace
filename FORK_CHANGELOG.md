@@ -1778,7 +1778,7 @@ TestParserAcceptsFlags (8).
   Per-user setups should use `~/.config/opencode/opencode.jsonc`
   with the daemon-aware wrapper (see `docs/integrations/opencode.md`).
 
-  *Upstream:* [PR #1567](https://github.com/MemPalace/mempalace/pull/1567) (OPEN)
+  *Upstream:* [PR #1567](https://github.com/MemPalace/mempalace/pull/1567) (CLOSED)
   *Files:* `.opencode/opencode.json`
 
 
