@@ -12,6 +12,7 @@ import logging
 import os
 from typing import Any, Optional
 
+from ..config import normalize_wing_name
 from .base import (
     BackendClosedError,
     BaseBackend,
@@ -26,6 +27,12 @@ from .base import (
 )
 
 logger = logging.getLogger("mempalace.postgres")
+
+# Where wing-less writes land. The drawers table's schema default for the
+# wing column is ''::text, so before the _coerce_wing guard any writer that
+# omitted the key filed drawers under an unreachable empty-string wing
+# (54 smoke-test drawers leaked there on 2026-05-12, issue #381).
+FALLBACK_WING = "general"
 
 EMBEDDING_DIM = 384
 EMBEDDING_MODEL = "chroma-default-all-MiniLM-L6-v2"
@@ -102,6 +109,29 @@ def _metadata_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+
+
+def _coerce_wing(raw: Any) -> str:
+    """Normalize a wing slug at the write choke point (issue #381).
+
+    Every postgres write funnels through here, so this is where the two
+    wing-hygiene classes get stopped at the door:
+
+    - missing/empty/whitespace wing → ``FALLBACK_WING`` instead of the
+      schema's ``''`` column default (which made drawers unreachable);
+    - separator/case variants → the same ``normalize_wing_name`` rule that
+      ``init`` applies, so ``Kiyo-XHCI-Fix`` and ``kiyo_xhci_fix`` can't
+      fork into near-duplicate wings again.
+
+    Reads stay literal: filters match stored values, which are normalized
+    from here on and converged historically by scripts/wing_hygiene.py.
+    """
+    if raw is None:
+        return FALLBACK_WING
+    wing = _metadata_value(raw)
+    if not wing.strip():
+        return FALLBACK_WING
+    return normalize_wing_name(wing) or FALLBACK_WING
 
 
 def _validate_write_lengths(
@@ -236,7 +266,7 @@ class PostgresCollection(BaseCollection):
         metadata_by_id: dict[str, dict[str, Any]] = {}
         for index, (doc_id, document) in enumerate(zip(ids, documents)):
             metadata = dict(metadatas[index]) if metadatas else {}
-            wing = _metadata_value(metadata.pop("wing", ""))
+            wing = _coerce_wing(metadata.pop("wing", ""))
             room = _metadata_value(metadata.pop("room", ""))
             embedding = _vec_literal(embeddings[index])
             if doc_id not in rows_by_id:
@@ -633,7 +663,7 @@ class PostgresCollection(BaseCollection):
             params: list[Any] = []
             if raw_wing is not None:
                 set_parts.append(self._sql.SQL("wing = %s"))
-                params.append(_metadata_value(raw_wing))
+                params.append(_coerce_wing(raw_wing))
             if raw_room is not None:
                 set_parts.append(self._sql.SQL("room = %s"))
                 params.append(_metadata_value(raw_room))
@@ -649,6 +679,10 @@ class PostgresCollection(BaseCollection):
             )
 
     def rename_wing(self, *, from_wing: str, to_wing: str, batch_size: int = 500) -> dict:
+        # from_wing stays literal so operators can rename AWAY from a
+        # malformed wing (incl. the empty string); the destination gets the
+        # same guard as writes so a rename can't mint a new malformed wing.
+        to_wing = _coerce_wing(to_wing)
         self._ensure_setup(create=True)
         cur = self._get_conn().cursor()
         renamed = 0

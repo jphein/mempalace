@@ -200,3 +200,71 @@ def test_maybe_create_vector_index_recognizes_offname_hnsw():
         col.delete(ids=["seed"])
     finally:
         conn.close()
+
+
+def test_postgres_write_guard_wing_never_empty():
+    """Writes that omit wing land in FALLBACK_WING, not the '' column default (#381)."""
+    from mempalace.backends.postgres import FALLBACK_WING
+
+    backend = get_backend("postgres")
+    palace = _palace_ref("smoke_test_palace")
+    col = backend.get_collection(
+        palace=palace,
+        collection_name="smoke_test_drawers",
+        create=True,
+        options={"dsn": POSTGRES_DSN},
+    )
+    ids = ["wingless_d1", "hyphen_d1"]
+    try:
+        col.delete(ids=ids)
+    except Exception:
+        pass
+
+    col.add(
+        ids=ids,
+        documents=["no wing at all", "hyphenated dirname wing"],
+        embeddings=[[0.1] * 384, [0.2] * 384],
+        metadatas=[{"room": "smoke"}, {"wing": "Kiyo-XHCI-Fix", "room": "smoke"}],
+    )
+    try:
+        res = col.get(ids=ids)
+        by_id = dict(zip(res["ids"], res["metadatas"]))
+        assert by_id["wingless_d1"]["wing"] == FALLBACK_WING
+        assert by_id["hyphen_d1"]["wing"] == "kiyo_xhci_fix"
+    finally:
+        col.delete(ids=ids)
+
+
+def test_postgres_update_and_rename_guard_wing():
+    """update() and rename_wing() apply the same wing coercion as writes (#381)."""
+    backend = get_backend("postgres")
+    palace = _palace_ref("smoke_test_palace")
+    col = backend.get_collection(
+        palace=palace,
+        collection_name="smoke_test_drawers",
+        create=True,
+        options={"dsn": POSTGRES_DSN},
+    )
+    try:
+        col.delete(ids=["renorm_d1"])
+    except Exception:
+        pass
+
+    col.add(
+        ids=["renorm_d1"],
+        documents=["update path coercion"],
+        embeddings=[[0.3] * 384],
+        metadatas=[{"wing": "test", "room": "smoke"}],
+    )
+    try:
+        col.update(ids=["renorm_d1"], metadatas=[{"wing": "Renamed-Wing"}])
+        res = col.get(ids=["renorm_d1"])
+        assert res["metadatas"][0]["wing"] == "renamed_wing"
+
+        # rename_wing coerces the destination so it can't mint a malformed wing.
+        stats = col.rename_wing(from_wing="renamed_wing", to_wing="Renamed-Wing-2")
+        assert stats["renamed"] == 1
+        res = col.get(ids=["renorm_d1"])
+        assert res["metadatas"][0]["wing"] == "renamed_wing_2"
+    finally:
+        col.delete(ids=["renorm_d1"])
