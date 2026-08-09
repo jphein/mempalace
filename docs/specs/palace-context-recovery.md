@@ -248,21 +248,21 @@ if source == "compact":
    - `GET /search/fast?q=checkpoint+{session_id}&limit=2` — the stop-hook diary checkpoints
 2. Format results into a compact context packet (target: 500-1000 tokens):
 
-```
-[mempalace:compact-recovery]
-Context was just compacted. Here is your recent session state from the palace:
-
-Wing: {wing} ({drawer_count} drawers)
-Last checkpoint: {checkpoint_summary}
-
-Recent context (top 3 matches):
-1. {drawer_1_summary} (wing/{room}, {timestamp})
-2. {drawer_2_summary} (wing/{room}, {timestamp})
-3. {drawer_3_summary} (wing/{room}, {timestamp})
-
-Use mempalace_search for anything else you need.
-[/mempalace:compact-recovery]
-```
+   ```
+   [mempalace:compact-recovery]
+   Context was just compacted. Here is your recent session state from the palace:
+   
+   Wing: {wing} ({drawer_count} drawers)
+   Last checkpoint: {checkpoint_summary}
+   
+   Recent context (top 3 matches):
+   1. {drawer_1_summary} (wing/{room}, {timestamp})
+   2. {drawer_2_summary} (wing/{room}, {timestamp})
+   3. {drawer_3_summary} (wing/{room}, {timestamp})
+   
+   Use mempalace_search for anything else you need.
+   [/mempalace:compact-recovery]
+   ```
 
 3. Return via `_output()`:
 ```python
