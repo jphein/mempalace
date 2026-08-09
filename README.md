@@ -27,7 +27,7 @@
 
 ## What this is
 
-A verbatim-first local AI memory system. This fork tracks `upstream/develop` through the post-v3.5.0 sync (2026-07-02, commit `da5a48c`) and runs in production on a **411K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon). It carries fork-ahead commits that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. 4935 tests pass on `main`.
+A verbatim-first local AI memory system. This fork tracks `upstream/develop` through the post-v3.5.0 sync (2026-07-02, commit `da5a48c`) and runs in production on a **411K+ drawer Postgres + pgvector + Apache AGE palace** behind [palace-daemon](https://github.com/techempower-org/palace-daemon). It carries fork-ahead commits that compose with — not replace — bensig's release direction; the v3.3.5 release (2026-05-10) includes our co-authored `_get_collection` retry-once via upstream #1377. 4955 tests pass on `main`.
 
 The fork's architectural thinking — the four-layer memory model, the [verbatim-vs-derivative thesis](docs/research/verbatim-vs-derivative-axis.md), design principles, and the two-memory-layer pairing with Auto Dream — lives in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). The new things here are *what we've learned*, not just what we've fixed.
 
@@ -235,7 +235,7 @@ cd mempalace
 uv sync --extra dev                       # recommended; or pip install -e ".[dev]"
 
 # Develop
-uv run pytest tests/ -q                   # 4935 tests (benchmarks deselected)
+uv run pytest tests/ -q                   # 4955 tests (benchmarks deselected)
 uv run mempalace status                   # palace health
 uv run ruff check . && uv run ruff format --check .
 
