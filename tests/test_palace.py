@@ -37,6 +37,10 @@ def test_backend_writer_ownership_remains_conservative_for_unknown_backend():
     assert backend_requires_single_writer("plugin_backend") is True
     assert backend_requires_single_writer("qdrant") is False
     assert backend_requires_single_writer("pgvector") is False
+    # Fork: postgres coordinates concurrent clients server-side; the daemon
+    # must NOT take the writer lease or its spawned /mine CLI subprocesses
+    # self-refuse ("palace is held by PID <daemon>", 2026-08-09 incident).
+    assert backend_requires_single_writer("postgres") is False
 
 
 def _capture():
