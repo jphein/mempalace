@@ -507,7 +507,13 @@ def resolve_backend_name(palace_path: str, explicit: Optional[str] = None) -> st
     return selected
 
 
-_MULTI_PROCESS_WRITER_BACKENDS = frozenset({"pgvector", "qdrant"})
+# Fork: "postgres" (the #665-lineage backend behind palace-daemon) delegates
+# all cross-process concurrency to the postgres server, exactly like
+# "pgvector" — without it here, the daemon's embedded MCP server takes the
+# process-lifetime writer lease and every `mempalace mine` subprocess the
+# daemon spawns for /mine refuses with "palace is held by PID <daemon>"
+# (production incident 2026-08-09, first post-v3.7.0 deploy).
+_MULTI_PROCESS_WRITER_BACKENDS = frozenset({"pgvector", "qdrant", "postgres"})
 
 
 def backend_requires_single_writer(backend_name: str) -> bool:
