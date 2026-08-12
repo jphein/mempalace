@@ -60,7 +60,13 @@ def test_plugin_hook_timeout_within_bounds(hook_config: dict, event: str) -> Non
     floor, ceiling = EVENT_TIMEOUT_BOUNDS[event]
     assert event in hook_config.get("hooks", {}), f"missing event {event!r} in hook config"
     entries = hook_config["hooks"][event]
-    assert isinstance(entries, list) and entries, f"no entries declared for {event}"
+    assert isinstance(entries, list), f"{event} entries must be a list"
+    if not entries:
+        # An empty list is the deliberate "disabled" representation —
+        # 3e26bd56 disabled SessionStart because it deadlocked Claude Code
+        # cold-starts. The event key must stay present (schema intact);
+        # bounds apply only to declared entries.
+        return
     # Pin cardinality: the plugin config intentionally declares exactly one
     # command per event. A duplicate entry would silently double-fire the
     # hook and pass per-hook bounds, so cardinality drift must fail loudly.
