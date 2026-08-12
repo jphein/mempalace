@@ -157,6 +157,31 @@ class TestPostDaemonMineCli:
         err = capsys.readouterr().err
         assert "boom" in err or "daemon" in err.lower()
 
+    def test_surfaces_http_error_detail(self, capsys):
+        """A 4xx from the daemon must print the response body's detail, not
+        a bare 'HTTP Error 400'. The body says WHY — e.g. the daemon host
+        cannot see a client-only path — and the user needs that to act."""
+        import io
+        import urllib.error
+
+        from mempalace.cli import _post_daemon_mine_cli
+
+        body = b'{"detail": "Directory does not exist: /home/u/.claude/projects/x/scratch/notes"}'
+
+        def fake_urlopen(req, timeout=None):
+            raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", None, io.BytesIO(body))
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with patch.dict("os.environ", env, clear=True):
+            with patch("urllib.request.urlopen", side_effect=fake_urlopen):
+                ok = _post_daemon_mine_cli("/home/u/.claude/projects/x/scratch/notes", wing="w")
+
+        assert ok is False
+        err = capsys.readouterr().err
+        assert "Directory does not exist" in err
+        # Path-not-visible gets an actionable hint about sync/staging.
+        assert "sync" in err.lower()
+
 
 # ── cmd_status routing ─────────────────────────────────────────────────
 
