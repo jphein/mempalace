@@ -336,6 +336,30 @@ def _post_daemon_mine_cli(directory: str, wing: str, mode: str = "convos") -> bo
             body = resp.read().decode("utf-8", errors="replace")
         print(f"  Daemon mine accepted: {body[:200]}")
         return True
+    except urllib.error.HTTPError as e:
+        # The response body carries the daemon's actual reason ("Directory
+        # does not exist: …") — a bare "HTTP Error 400" hides the one thing
+        # the user needs to act on.
+        try:
+            raw = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            raw = ""
+        try:
+            detail = json.loads(raw).get("detail", "") if raw else ""
+        except (ValueError, AttributeError):
+            detail = raw[:200]
+        msg = f"{e}: {detail}" if detail else str(e)
+        print(f"  ERROR: daemon mine failed: {msg}", file=sys.stderr)
+        if "does not exist" in detail:
+            print(
+                "  HINT: the daemon may run on another host and can only mine"
+                " paths that exist there (synced or PALACE_DAEMON_PATH_MAP-"
+                "mapped). ~/.claude/projects/*/scratch is excluded from sync"
+                " by default — stage files in a synced location (e.g."
+                " ~/.claude/projects/<proj>/palace-inbox/) and mine that path.",
+                file=sys.stderr,
+            )
+        return False
     except (urllib.error.URLError, ConnectionError, OSError) as e:
         print(f"  ERROR: daemon mine failed: {e}", file=sys.stderr)
         return False
