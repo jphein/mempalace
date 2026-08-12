@@ -169,14 +169,12 @@ class TestPostDaemonMineCli:
         body = b'{"detail": "Directory does not exist: /home/u/.claude/projects/x/scratch/notes"}'
 
         def fake_urlopen(req, timeout=None):
-            raise urllib.error.HTTPError(
-                req.full_url, 400, "Bad Request", None, io.BytesIO(body))
+            raise urllib.error.HTTPError(req.full_url, 400, "Bad Request", None, io.BytesIO(body))
 
         env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
         with patch.dict("os.environ", env, clear=True):
             with patch("urllib.request.urlopen", side_effect=fake_urlopen):
-                ok = _post_daemon_mine_cli(
-                    "/home/u/.claude/projects/x/scratch/notes", wing="w")
+                ok = _post_daemon_mine_cli("/home/u/.claude/projects/x/scratch/notes", wing="w")
 
         assert ok is False
         err = capsys.readouterr().err
