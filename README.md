@@ -258,7 +258,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | Sync upstream/develop through v3.8.0 (3e56979f): 166 commits — date-window search (since/before), openai-compat embeddings, RFC 002 adapter dispatch (#2062), mcp_proxy entry point, chunk_total metadata; ancestry repaired so future syncs replay only new commits | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
+| 1 | Sync upstream/develop through v3.8.0 (3e56979f): 166 commits — date-window search (since/before), openai-compat embeddings, RFC 002 adapter dispatch (#2062), mcp_proxy entry point, chunk_total metadata; ancestry repaired so future syncs replay only new commits | — | [`b3527b1`](https://github.com/techempower-org/mempalace/commit/b3527b1) |
 | 2 | Sync upstream/develop through v3.7.0 (8516db7f): 433 commits — hub forward, temp-collection repair promote, round-trippable drawer IDs, kg_supersede, HNSW CLI fence, 62 conflict files resolved | — | [`43547c4`](https://github.com/techempower-org/mempalace/commit/43547c4) |
 | 3 | Postgres backend: _coerce_wing write guard — wing-less writes land in 'general' (not the '' column default) and separator/case variants normalize; scripts/wing_hygiene.py migrates the historical rows (dry-run default) | — | [`979da51`](https://github.com/techempower-org/mempalace/commit/979da51) |
 | 4 | sync-outline: empty-secret env vars fall back to documented defaults; unreachable nightly cron retired (0-for-41 by construction) — workflow_dispatch stays | — | [`5227da4`](https://github.com/techempower-org/mempalace/commit/5227da4) |
