@@ -475,6 +475,69 @@ disabled vector index cannot answer at all; the tool says so
 explicitly rather than claiming "not a duplicate", and we always exit
 2 on it so a guard never reads silence as novelty.
 
+### `cmd_diary`
+
+```python
+def cmd_diary(args)
+```
+
+``mempalace diary write|read`` — the agent diary at the CLI (#354).
+
+``write`` wraps ``mempalace_diary_write``; ``read`` wraps
+``mempalace_diary_read``. Both require an agent name (``--agent`` or
+``MEMPALACE_AGENT_NAME``) because the diary is per-agent in the tool
+contract. ``read``'s ``--topic`` / ``--since`` filters are applied
+client-side — the tool has no such parameters.
+
+### `cmd_kg`
+
+```python
+def cmd_kg(args)
+```
+
+``mempalace kg add|invalidate|timeline`` — KG writes + temporal read (#357).
+
+Deviations from issue #357's sketch, driven by the tool schemas:
+``kg invalidate`` addresses a fact by ``--subject/--predicate/--object``
+(``mempalace_kg_invalidate`` has no triple ids and no reason field), and
+``kg timeline``'s ``--limit`` truncates client-side because
+``mempalace_kg_timeline`` takes only ``(entity, as_of)``.
+
+A ``--limit`` above ``_KG_TIMELINE_TOOL_CAP`` cannot be honoured: the
+graph backend's own ``timeline()`` stops at that many rows and the tool
+doesn't expose the parameter, so the CLI reports how many it actually
+received rather than implying the requested window was searched. Seen
+live: ``kg timeline JP --limit 200`` returns ``count: 100``.
+
+### `cmd_walk`
+
+```python
+def cmd_walk(args)
+```
+
+``mempalace walk`` — traverse the palace graph (#359).
+
+Two tools behind one verb: ``--follow palace`` (default) calls
+``mempalace_walk_palace`` from a ``--wing`` / ``--room`` / ``--entity``
+anchor, and ``--follow tunnels`` calls ``mempalace_traverse`` from a
+``--room`` anchor with ``--depth`` as its hop budget. Issue #359's
+``--from &lt;drawer_id>`` is not offered: neither tool accepts a drawer
+anchor (``mempalace why &lt;drawer_id>`` is the per-drawer view).
+
+### `cmd_rate`
+
+```python
+def cmd_rate(args)
+```
+
+``mempalace rate &lt;drawer_id> --useful|--not-useful`` (#361).
+
+``mempalace_rate_memory`` records a boolean, not a 1–5 score, and has
+no field for a free-text reason — so issue #361's ``--score N
+--reason "..."`` sketch is expressed as the two boolean flags. The
+rating lands in drawer metadata and becomes a bounded ranking signal;
+it never touches verbatim content.
+
 ### `cmd_logstream`
 
 ```python

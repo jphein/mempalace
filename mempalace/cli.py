@@ -6483,6 +6483,650 @@ def _logstream_watch(ls, args, as_json):
         _logstream_fail(str(exc), as_json)
 
 
+# ── mempalace diary / kg / walk / rate ────────────────────────────────
+#
+# Slices of #191: four MCP tool families that had no CLI verb —
+# ``mempalace_diary_write`` / ``mempalace_diary_read`` (#354),
+# ``mempalace_kg_add`` / ``_invalidate`` / ``_timeline`` (#357),
+# ``mempalace_walk_palace`` + ``mempalace_traverse`` (#359), and
+# ``mempalace_rate_memory`` (#361).
+#
+# Routing mirrors cmd_wakeup / cmd_mined: daemon-strict and no
+# ``--palace`` → the daemon's /mcp endpoint; otherwise the local
+# ``mempalace.mcp_server`` tool function, imported inside the command so
+# the CLI's import cost is unchanged and ``--palace`` can seed
+# MEMPALACE_PALACE_PATH before mcp_server builds its module config.
+#
+# Exit codes follow the sibling read commands: 1 = daemon unreachable,
+# 2 = client error or inner-error envelope.
+
+
+def _resolve_tool_format(args) -> str:
+    """``--format`` wins, then the ``--json`` shorthand, default ``table``.
+
+    Same contract as the per-command ``_resolve_*_format`` helpers, shared
+    across the diary/kg/walk/rate families so four identical clones don't
+    accumulate.
+    """
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def _call_tool_routed(args, daemon_tool: str, local_fn: str, payload: dict) -> dict:
+    """Run one MCP tool through the daemon, or locally when not daemon-strict.
+
+    Raises :class:`DaemonError` when the daemon path fails. Local failures
+    surface as the tool's own ``{"error": ...}`` / ``{"success": False}``
+    envelope — the tool functions never raise for bad input.
+
+    The local path goes through ``_local_mcp_server`` (the read family's
+    context manager, #356/#362) rather than importing ``mcp_server``
+    directly: it composes the drawer family's ``_import_mcp_server``
+    stdout repair (#355) with a *scoped* ``MEMPALACE_PALACE_PATH``
+    override, so a ``--palace`` on one invocation cannot leak into a
+    later command that passed none.
+    """
+    palace = getattr(args, "palace", None)
+    if _daemon_strict() and not palace:
+        return _call_daemon_tool(daemon_tool, payload)
+    with _local_mcp_server(palace) as mcp_server:
+        fn = getattr(mcp_server, local_fn, None)
+        if fn is None:  # pragma: no cover — guards a rename of the tool function
+            raise DaemonError(f"local tool function {local_fn} is missing")
+        return fn(**payload)
+
+
+def _fail_daemon(err, want_json: bool) -> None:
+    """Daemon call failed → exit 1 (matches cmd_why / cmd_tags / cmd_graph).
+
+    ``DaemonError`` covers two different situations and the distinction
+    matters to whoever reads the line: a transport failure (the daemon is
+    asleep, wrong port, no route) versus a JSON-RPC error the daemon
+    itself returned (the tool raised server-side — e.g. a dropped
+    postgres connection under an AGE query). Reporting the second as
+    "unreachable" sends the reader after the wrong problem, so keep the
+    sibling commands' wording for transport and say what actually
+    happened otherwise.
+    """
+    text = str(err)
+    if want_json:
+        _emit_json({"error": text, "source": "daemon"})
+    elif text.startswith("daemon error"):
+        print(
+            f"palace daemon at {_daemon_url()} rejected the call — {text}",
+            file=sys.stderr,
+        )
+    else:
+        print(
+            f"palace daemon unreachable at {_daemon_url()} — "
+            f"see mempalace status for diagnostics ({err})",
+            file=sys.stderr,
+        )
+    sys.exit(1)
+
+
+def _fail_tool(data, want_json: bool) -> None:
+    """Inner-error envelope from a tool call → exit 2."""
+    payload = data if isinstance(data, dict) else {"error": str(data)}
+    msg = str(payload.get("error") or "tool call failed")
+    if want_json:
+        _emit_json(payload)
+    else:
+        print(f"\n  {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def _fail_client(msg: str, want_json: bool, **extra) -> None:
+    """Bad CLI input → exit 2 (the issue #44 client-error code)."""
+    if want_json:
+        _emit_json({"error": msg, "source": "cli", **extra})
+    else:
+        print(f"error: {msg}", file=sys.stderr)
+    sys.exit(2)
+
+
+def _tool_failed(data) -> bool:
+    """True when a tool envelope reports failure.
+
+    The write tools answer ``{"success": False, "error": ...}``; the read
+    tools answer a bare ``{"error": ...}``. Treat either as a failure.
+    """
+    if not isinstance(data, dict):
+        return False
+    if data.get("success") is False:
+        return True
+    return "error" in data
+
+
+# ── mempalace diary (#354) ────────────────────────────────────────────
+
+_DIARY_DEFAULT_LIMIT = 10
+_DIARY_MAX_LIMIT = 100  # tool_diary_read clamps last_n to 100
+
+
+def _resolve_agent_name(args):
+    """``--agent`` wins, else ``MEMPALACE_AGENT_NAME`` from the environment.
+
+    ``mempalace_diary_write`` / ``_read`` both require ``agent_name`` — the
+    diary is per-agent by design — so issue #354's proposed shape
+    (``mempalace diary write "text" --topic X``) needs one more input than
+    the issue text shows. The env var keeps hook and agent wrappers from
+    repeating the flag on every call.
+    """
+    agent = getattr(args, "agent", None)
+    if agent and str(agent).strip():
+        return str(agent).strip()
+    env_agent = os.environ.get("MEMPALACE_AGENT_NAME", "").strip()
+    return env_agent or None
+
+
+def _read_diary_entry(args, want_json: bool) -> str:
+    """Resolve the entry text: positional argument, or stdin for ``-``.
+
+    Reading from stdin keeps hooks and shell pipelines from having to
+    shell-quote a multi-line AAAK entry.
+    """
+    entry = getattr(args, "entry", None)
+    if entry is None or entry == "-":
+        try:
+            entry = sys.stdin.read()
+        except (OSError, ValueError) as e:
+            _fail_client(f"could not read the diary entry from stdin: {e}", want_json)
+    if not entry or not entry.strip():
+        _fail_client(
+            "diary write requires entry text (positional argument, or '-' to read stdin)",
+            want_json,
+        )
+    return entry
+
+
+def _print_diary_write(data: dict) -> None:
+    """One-line confirmation: entry id, wing/topic, chunk count."""
+    chunks = int(data.get("chunks") or 1)
+    chunk_note = f" ({chunks} chunks)" if chunks > 1 else ""
+    print(f"\n  Diary entry filed{chunk_note}")
+    print(f"    id     {data.get('entry_id') or '?'}")
+    print(f"    agent  {data.get('agent') or '?'}")
+    print(f"    topic  {data.get('topic') or 'general'}")
+    if data.get("timestamp"):
+        print(f"    when   {data['timestamp']}")
+    for warning in data.get("warnings") or []:
+        print(f"    warn   {warning}")
+    print()
+
+
+def _filter_diary_entries(entries: list, topic=None, since=None) -> list:
+    """Client-side ``--topic`` / ``--since`` narrowing.
+
+    ``mempalace_diary_read`` takes only ``(agent_name, last_n, wing)``, so
+    issue #354's ``--topic`` / ``--since`` filters run here over the
+    fetched page rather than in the tool. Prefix-compare on the ISO
+    timestamp keeps ``--since 2026-06-28`` working against both
+    ``date`` (YYYY-MM-DD) and full ``filed_at`` timestamps.
+    """
+    rows = list(entries or [])
+    if topic:
+        wanted = str(topic).strip().lower()
+        rows = [r for r in rows if str(r.get("topic") or "").lower() == wanted]
+    if since:
+        floor = str(since).strip()
+        rows = [
+            r for r in rows if str(r.get("timestamp") or r.get("date") or "")[: len(floor)] >= floor
+        ]
+    return rows
+
+
+def _print_diary_entries(agent: str, entries: list, total=None) -> None:
+    """Newest-first entry list — header line per entry, then its content."""
+    if not entries:
+        print(f"\n  No diary entries for '{agent}'.\n")
+        return
+    suffix = f" of {total}" if total is not None else ""
+    print(
+        f"\n  DIARY — {agent}  ({len(entries)} entr{'y' if len(entries) == 1 else 'ies'}{suffix})"
+    )
+    for entry in entries:
+        stamp = entry.get("timestamp") or entry.get("date") or "?"
+        topic = entry.get("topic") or "general"
+        print(f"\n  [{stamp}]  {topic}  ({entry.get('drawer_id') or '?'})")
+        for line in str(entry.get("content") or "").splitlines():
+            print(f"    {line}")
+    print()
+
+
+def cmd_diary(args):
+    """``mempalace diary write|read`` — the agent diary at the CLI (#354).
+
+    ``write`` wraps ``mempalace_diary_write``; ``read`` wraps
+    ``mempalace_diary_read``. Both require an agent name (``--agent`` or
+    ``MEMPALACE_AGENT_NAME``) because the diary is per-agent in the tool
+    contract. ``read``'s ``--topic`` / ``--since`` filters are applied
+    client-side — the tool has no such parameters.
+    """
+    fmt = _resolve_tool_format(args)
+    want_json = fmt == "json"
+    action = getattr(args, "diary_action", None)
+
+    agent = _resolve_agent_name(args)
+    if not agent:
+        _fail_client(
+            "diary requires an agent name — pass --agent NAME or set MEMPALACE_AGENT_NAME",
+            want_json,
+        )
+
+    if action == "write":
+        payload = {"agent_name": agent, "entry": _read_diary_entry(args, want_json)}
+        if getattr(args, "topic", None):
+            payload["topic"] = args.topic
+        if getattr(args, "wing", None):
+            payload["wing"] = args.wing
+        if getattr(args, "session_id", None):
+            payload["session_id"] = args.session_id
+        try:
+            data = _call_tool_routed(args, "mempalace_diary_write", "tool_diary_write", payload)
+        except DaemonError as e:
+            _fail_daemon(e, want_json)
+        if _tool_failed(data):
+            _fail_tool(data, want_json)
+        if want_json:
+            _emit_json(data)
+            return
+        _print_diary_write(data or {})
+        return
+
+    # read
+    topic = getattr(args, "topic", None)
+    since = getattr(args, "since", None)
+    limit = max(1, min(int(getattr(args, "limit", None) or _DIARY_DEFAULT_LIMIT), _DIARY_MAX_LIMIT))
+    # With a client-side filter in play, ask for the whole page the tool
+    # will give us (capped at 100) and narrow afterwards — otherwise
+    # ``--topic X --limit 5`` could return nothing while matching entries
+    # sit just outside the requested window.
+    fetch_n = _DIARY_MAX_LIMIT if (topic or since) else limit
+    payload = {"agent_name": agent, "last_n": fetch_n}
+    if getattr(args, "wing", None):
+        payload["wing"] = args.wing
+    try:
+        data = _call_tool_routed(args, "mempalace_diary_read", "tool_diary_read", payload)
+    except DaemonError as e:
+        _fail_daemon(e, want_json)
+    if _tool_failed(data):
+        _fail_tool(data, want_json)
+
+    data = data or {}
+    entries = _filter_diary_entries(data.get("entries") or [], topic=topic, since=since)[:limit]
+    if want_json:
+        out = dict(data)
+        out["entries"] = entries
+        out["showing"] = len(entries)
+        if topic:
+            out["topic_filter"] = topic
+        if since:
+            out["since_filter"] = since
+        _emit_json(out)
+        return
+    _print_diary_entries(data.get("agent") or agent, entries, total=data.get("total"))
+
+
+# ── mempalace kg (#357) ───────────────────────────────────────────────
+#
+# ``mempalace kg stats`` is deliberately absent: issue #357 asked us to
+# verify the overlap first, and ``mempalace stats --section kg`` already
+# renders the same entity/triple/relationship-type block (and
+# ``mempalace graph`` embeds ``kg_stats`` in its snapshot). A third
+# spelling of the same read would be redundant surface.
+
+_KG_TIMELINE_DEFAULT_LIMIT = 20
+# The graph backends' ``timeline()`` returns at most this many rows and the MCP
+# tool doesn't expose the parameter, so a larger ``--limit`` is a request the
+# read path cannot satisfy. Confirmed live: ``--limit 200`` → ``count: 100``.
+_KG_TIMELINE_TOOL_CAP = 100
+
+
+def _print_kg_fact(data: dict, verb: str) -> None:
+    """Confirmation line for kg add / kg invalidate."""
+    fact = data.get("fact") or ""
+    print(f"\n  {verb}: {fact}")
+    for key in ("valid_from", "valid_to", "ended", "context"):
+        if data.get(key):
+            print(f"    {key:<11}{data[key]}")
+    print()
+
+
+def _print_kg_timeline(data: dict, rows: list) -> None:
+    """Chronological fact rows: valid_from · subject → predicate → object."""
+    entity = data.get("entity") or "all"
+    if not rows:
+        print(f"\n  No timeline facts for '{entity}'.\n")
+        return
+    as_of = data.get("as_of")
+    scope = f"  as_of={as_of}" if as_of else ""
+    print(f"\n  TIMELINE — {entity}  ({len(rows)} of {data.get('count', len(rows))} facts){scope}")
+    for row in rows:
+        start = str(row.get("valid_from") or "—")
+        end = str(row.get("valid_to") or "")
+        window = f"{start} → {end}" if end else start
+        subject = row.get("subject") or "?"
+        predicate = row.get("predicate") or "?"
+        obj = row.get("object") or "?"
+        line = f"    {window:<24}  {subject} → {predicate} → {obj}"
+        if row.get("context"):
+            line += f"   [{row['context']}]"
+        print(line)
+    print()
+
+
+def _kg_invalidate_confirmed(args, fact_label: str, want_json: bool) -> bool:
+    """Confirmation gate before retracting a fact.
+
+    ``--confirm`` skips the gate. On a TTY (and not json) we prompt and
+    proceed only on y/yes. Non-interactive or json without ``--confirm``
+    is refused with exit 2 — mirrors ``_bulk_move_confirm`` so no pipeline
+    can silently rewrite graph history.
+    """
+    if bool(getattr(args, "confirm", False)):
+        return True
+    msg = f"refusing to invalidate '{fact_label}' without --confirm in a non-interactive shell"
+    try:
+        interactive = sys.stdin.isatty()
+    except (AttributeError, ValueError):
+        interactive = False
+    if want_json or not interactive:
+        if want_json:
+            _emit_json({"error": "confirmation_required", "hint": msg, "fact": fact_label})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+    answer = input(f"Invalidate '{fact_label}'? [y/N] ").strip().lower()
+    return answer in ("y", "yes")
+
+
+def cmd_kg(args):
+    """``mempalace kg add|invalidate|timeline`` — KG writes + temporal read (#357).
+
+    Deviations from issue #357's sketch, driven by the tool schemas:
+    ``kg invalidate`` addresses a fact by ``--subject/--predicate/--object``
+    (``mempalace_kg_invalidate`` has no triple ids and no reason field), and
+    ``kg timeline``'s ``--limit`` truncates client-side because
+    ``mempalace_kg_timeline`` takes only ``(entity, as_of)``.
+
+    A ``--limit`` above ``_KG_TIMELINE_TOOL_CAP`` cannot be honoured: the
+    graph backend's own ``timeline()`` stops at that many rows and the tool
+    doesn't expose the parameter, so the CLI reports how many it actually
+    received rather than implying the requested window was searched. Seen
+    live: ``kg timeline JP --limit 200`` returns ``count: 100``.
+    """
+    fmt = _resolve_tool_format(args)
+    want_json = fmt == "json"
+    action = getattr(args, "kg_action", None)
+
+    if action == "add":
+        payload = {
+            "subject": args.subject,
+            "predicate": args.predicate,
+            "object": args.object,
+        }
+        for flag, key in (
+            ("valid_from", "valid_from"),
+            ("valid_to", "valid_to"),
+            ("source_closet", "source_closet"),
+            ("source_file", "source_file"),
+            ("source_drawer_id", "source_drawer_id"),
+            ("context", "context"),
+        ):
+            value = getattr(args, flag, None)
+            if value:
+                payload[key] = value
+        try:
+            data = _call_tool_routed(args, "mempalace_kg_add", "tool_kg_add", payload)
+        except DaemonError as e:
+            _fail_daemon(e, want_json)
+        if _tool_failed(data):
+            _fail_tool(data, want_json)
+        if want_json:
+            _emit_json(data)
+            return
+        _print_kg_fact(data or {}, "Added")
+        return
+
+    if action == "invalidate":
+        fact_label = f"{args.subject} → {args.predicate} → {args.object}"
+        if not _kg_invalidate_confirmed(args, fact_label, want_json):
+            print("  Aborted.")
+            return
+        payload = {
+            "subject": args.subject,
+            "predicate": args.predicate,
+            "object": args.object,
+        }
+        if getattr(args, "ended", None):
+            payload["ended"] = args.ended
+        try:
+            data = _call_tool_routed(args, "mempalace_kg_invalidate", "tool_kg_invalidate", payload)
+        except DaemonError as e:
+            _fail_daemon(e, want_json)
+        if _tool_failed(data):
+            _fail_tool(data, want_json)
+        if want_json:
+            _emit_json(data)
+            return
+        _print_kg_fact(data or {}, "Invalidated")
+        return
+
+    # timeline
+    payload = {}
+    if getattr(args, "entity", None):
+        payload["entity"] = args.entity
+    if getattr(args, "as_of", None):
+        payload["as_of"] = args.as_of
+    try:
+        data = _call_tool_routed(args, "mempalace_kg_timeline", "tool_kg_timeline", payload)
+    except DaemonError as e:
+        _fail_daemon(e, want_json)
+    if _tool_failed(data):
+        _fail_tool(data, want_json)
+
+    data = data or {}
+    limit = max(1, int(getattr(args, "limit", None) or _KG_TIMELINE_DEFAULT_LIMIT))
+    rows = list(data.get("timeline") or [])[:limit]
+    if want_json:
+        out = dict(data)
+        out["timeline"] = rows
+        out["showing"] = len(rows)
+        _emit_json(out)
+        return
+    _print_kg_timeline(data, rows)
+
+
+# ── mempalace walk (#359) ─────────────────────────────────────────────
+
+_WALK_DEFAULT_DEPTH = 2
+_WALK_DEFAULT_LIMIT = 50
+
+
+def _print_walk_rows(data: dict) -> None:
+    """Render ``mempalace_walk_palace``'s wing/room/drawer/entity rows."""
+    rows = data.get("walk") or []
+    start = data.get("start") or {}
+    anchor = ", ".join(f"{k}={v}" for k, v in start.items() if v) or "?"
+    if not rows:
+        print(f"\n  Walk from {anchor} reached nothing.\n")
+        return
+    print(f"\n  WALK — {anchor}  ({len(rows)} rows)")
+    for row in rows:
+        parts = [
+            f"{key}={row[key]}"
+            for key in ("wing", "room", "drawer", "entity")
+            if row.get(key) is not None
+        ]
+        print("    " + "  ".join(parts))
+    stats = data.get("stats") or {}
+    if stats:
+        print("  " + "  ".join(f"{k}={v}" for k, v in stats.items()))
+    print()
+
+
+_TRAVERSE_LIST_PREVIEW = 12
+
+
+def _traverse_rows(data) -> list:
+    """Normalise ``mempalace_traverse``'s payload to a list of hop records.
+
+    Verified live against the production daemon (2026-08-20): the tool
+    answers with a **bare JSON list** of ``{room, wings, halls, ...}``
+    records, not a dict envelope. Older/other backends have wrapped the
+    same rows under a key, so accept both rather than betting on one.
+    """
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        for key in ("connections", "rooms", "path", "tunnels"):
+            rows = data.get(key)
+            if isinstance(rows, list):
+                return rows
+    return []
+
+
+def _print_traverse_rows(data) -> None:
+    """Render the tunnel hops one room at a time, list fields summarised."""
+    rows = _traverse_rows(data)
+    if not rows:
+        print("\n  Tunnel walk returned no connections.\n")
+        return
+    print(f"\n  TUNNEL WALK — {len(rows)} hop(s)")
+    for row in rows:
+        if not isinstance(row, dict):
+            print(f"    {row}")
+            continue
+        label = row.get("room") or row.get("target_room") or "?"
+        print(f"    room={label}")
+        for key, value in row.items():
+            if key in ("room", "target_room"):
+                continue
+            if isinstance(value, list):
+                preview = ", ".join(str(v) for v in value[:_TRAVERSE_LIST_PREVIEW])
+                if len(value) > _TRAVERSE_LIST_PREVIEW:
+                    preview += " …"
+                print(f"      {key} ({len(value)}): {preview}")
+            elif value is not None:
+                print(f"      {key}: {value}")
+    print()
+
+
+def cmd_walk(args):
+    """``mempalace walk`` — traverse the palace graph (#359).
+
+    Two tools behind one verb: ``--follow palace`` (default) calls
+    ``mempalace_walk_palace`` from a ``--wing`` / ``--room`` / ``--entity``
+    anchor, and ``--follow tunnels`` calls ``mempalace_traverse`` from a
+    ``--room`` anchor with ``--depth`` as its hop budget. Issue #359's
+    ``--from <drawer_id>`` is not offered: neither tool accepts a drawer
+    anchor (``mempalace why <drawer_id>`` is the per-drawer view).
+    """
+    fmt = _resolve_tool_format(args)
+    want_json = fmt == "json"
+
+    depth = max(1, min(int(getattr(args, "depth", None) or _WALK_DEFAULT_DEPTH), 5))
+    limit = max(1, min(int(getattr(args, "limit", None) or _WALK_DEFAULT_LIMIT), 500))
+    wing = getattr(args, "wing", None)
+    room = getattr(args, "room", None)
+    entity = getattr(args, "entity", None)
+    anchors = [a for a in (wing, room, entity) if a]
+
+    if getattr(args, "follow", "palace") == "tunnels":
+        if not room or wing or entity:
+            _fail_client(
+                "walk --follow tunnels traverses from a room — pass exactly --room NAME",
+                want_json,
+            )
+        try:
+            data = _call_tool_routed(
+                args,
+                "mempalace_traverse",
+                "tool_traverse_graph",
+                {"start_room": room, "max_hops": depth},
+            )
+        except DaemonError as e:
+            _fail_daemon(e, want_json)
+        if _tool_failed(data):
+            _fail_tool(data, want_json)
+        if want_json:
+            _emit_json(data)
+            return
+        _print_traverse_rows(data or {})
+        return
+
+    if len(anchors) != 1:
+        _fail_client(
+            "walk needs exactly one anchor — pass one of --wing, --room, --entity",
+            want_json,
+        )
+    payload: dict = {"depth": depth, "limit": limit}
+    if wing:
+        payload["start_wing"] = wing
+    elif room:
+        payload["start_room"] = room
+    else:
+        payload["start_entity"] = entity
+    try:
+        data = _call_tool_routed(args, "mempalace_walk_palace", "tool_walk_palace", payload)
+    except DaemonError as e:
+        _fail_daemon(e, want_json)
+    if _tool_failed(data):
+        _fail_tool(data, want_json)
+    if want_json:
+        _emit_json(data)
+        return
+    _print_walk_rows(data or {})
+
+
+# ── mempalace rate (#361) ─────────────────────────────────────────────
+
+
+def cmd_rate(args):
+    """``mempalace rate <drawer_id> --useful|--not-useful`` (#361).
+
+    ``mempalace_rate_memory`` records a boolean, not a 1–5 score, and has
+    no field for a free-text reason — so issue #361's ``--score N
+    --reason "..."`` sketch is expressed as the two boolean flags. The
+    rating lands in drawer metadata and becomes a bounded ranking signal;
+    it never touches verbatim content.
+    """
+    fmt = _resolve_tool_format(args)
+    want_json = fmt == "json"
+
+    drawer_id = getattr(args, "drawer_id", None)
+    if not drawer_id or not str(drawer_id).strip():
+        _fail_client("rate requires a drawer ID (positional argument)", want_json)
+
+    useful = getattr(args, "useful", None)
+    if useful is None:
+        _fail_client("rate requires --useful or --not-useful", want_json)
+
+    payload = {"drawer_id": str(drawer_id).strip(), "useful": bool(useful)}
+    try:
+        data = _call_tool_routed(args, "mempalace_rate_memory", "tool_rate_memory", payload)
+    except DaemonError as e:
+        _fail_daemon(e, want_json)
+    if _tool_failed(data):
+        _fail_tool(data, want_json)
+    if want_json:
+        _emit_json(data)
+        return
+    data = data or {}
+    verdict = "useful" if payload["useful"] else "not useful"
+    print(f"\n  Rated {payload['drawer_id']} {verdict}")
+    print(
+        f"    useful={data.get('rating_useful', '?')}  "
+        f"not_useful={data.get('rating_not_useful', '?')}  "
+        f"net={data.get('net_rating', '?')}\n"
+    )
+
+
 def cmd_logstream(args):
     import json
 
@@ -9647,6 +10291,255 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     p_aaak_spec.add_argument("--json", "-j", dest="json", action="store_true", default=False)
     p_aaak_spec.add_argument("--quiet", "-q", dest="quiet", action="store_true", default=False)
 
+    # diary — agent diary write/read (slice of #191, issue #354)
+    p_diary = sub.add_parser(
+        "diary",
+        help="Write or read agent diary entries (mempalace_diary_write / _read)",
+    )
+    diary_sub = p_diary.add_subparsers(dest="diary_action")
+    p_diary_write = diary_sub.add_parser("write", help="File a diary entry")
+    p_diary_write.add_argument(
+        "entry",
+        nargs="?",
+        default=None,
+        help="Entry text (AAAK encouraged). Omit or pass '-' to read stdin.",
+    )
+    p_diary_write.add_argument(
+        "--agent",
+        default=None,
+        help="Agent name whose diary this is (default: $MEMPALACE_AGENT_NAME)",
+    )
+    p_diary_write.add_argument("--topic", default=None, help="Topic tag (default: general)")
+    p_diary_write.add_argument(
+        "--wing",
+        default=None,
+        help="Target wing (default: wing_<agent>)",
+    )
+    p_diary_write.add_argument(
+        "--session-id",
+        dest="session_id",
+        default=None,
+        help="Session id to stamp on the entry (optional)",
+    )
+    p_diary_write.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format (default table; --json is shorthand for --format json)",
+    )
+    p_diary_write.add_argument(
+        "--json", "-j", dest="json", action="store_true", default=False, help=argparse.SUPPRESS
+    )
+    p_diary_read = diary_sub.add_parser("read", help="Read recent diary entries")
+    p_diary_read.add_argument(
+        "--agent",
+        default=None,
+        help="Agent name whose diary to read (default: $MEMPALACE_AGENT_NAME)",
+    )
+    p_diary_read.add_argument(
+        "--limit",
+        type=int,
+        default=_DIARY_DEFAULT_LIMIT,
+        help=f"Entries to show (default {_DIARY_DEFAULT_LIMIT}, max {_DIARY_MAX_LIMIT})",
+    )
+    p_diary_read.add_argument(
+        "--wing",
+        default=None,
+        help="Read from one wing only (default: every wing this agent wrote to)",
+    )
+    p_diary_read.add_argument(
+        "--topic",
+        default=None,
+        help="Only entries with this topic (filtered client-side — the tool has no topic filter)",
+    )
+    p_diary_read.add_argument(
+        "--since",
+        default=None,
+        help="Only entries at or after this date (YYYY-MM-DD, filtered client-side)",
+    )
+    p_diary_read.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format (default table; --json is shorthand for --format json)",
+    )
+    p_diary_read.add_argument(
+        "--json", "-j", dest="json", action="store_true", default=False, help=argparse.SUPPRESS
+    )
+
+    # kg — knowledge-graph writes + temporal read (slice of #191, issue #357)
+    p_kg = sub.add_parser(
+        "kg",
+        help="Knowledge-graph facts: add, invalidate, timeline (see also: stats --section kg)",
+    )
+    kg_sub = p_kg.add_subparsers(dest="kg_action")
+    p_kg_add = kg_sub.add_parser("add", help="Add a fact (subject → predicate → object)")
+    p_kg_add.add_argument("--subject", required=True, help="Entity doing/being something")
+    p_kg_add.add_argument("--predicate", required=True, help="Relationship type (e.g. maintains)")
+    p_kg_add.add_argument("--object", required=True, help="Entity being connected to")
+    p_kg_add.add_argument(
+        "--valid-from",
+        dest="valid_from",
+        default=None,
+        help="When it became true (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ)",
+    )
+    p_kg_add.add_argument(
+        "--valid-to",
+        dest="valid_to",
+        default=None,
+        help="When it stopped being true — backfills an already-ended fact",
+    )
+    p_kg_add.add_argument(
+        "--source-closet", dest="source_closet", default=None, help="Closet id provenance"
+    )
+    p_kg_add.add_argument(
+        "--source-file", dest="source_file", default=None, help="Source file provenance"
+    )
+    p_kg_add.add_argument(
+        "--source-drawer-id",
+        dest="source_drawer_id",
+        default=None,
+        help="Drawer id the fact was extracted from",
+    )
+    p_kg_add.add_argument(
+        "--context",
+        default=None,
+        help="SPOC anchor — where the fact was witnessed (e.g. drawer:abc123)",
+    )
+    p_kg_add.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format (default table; --json is shorthand for --format json)",
+    )
+    p_kg_add.add_argument(
+        "--json", "-j", dest="json", action="store_true", default=False, help=argparse.SUPPRESS
+    )
+    p_kg_inv = kg_sub.add_parser(
+        "invalidate",
+        help="Mark a fact as no longer true (requires --confirm)",
+    )
+    p_kg_inv.add_argument("--subject", required=True, help="Entity")
+    p_kg_inv.add_argument("--predicate", required=True, help="Relationship type")
+    p_kg_inv.add_argument("--object", required=True, help="Connected entity")
+    p_kg_inv.add_argument(
+        "--ended",
+        default=None,
+        help="When it stopped being true (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SSZ, default: today)",
+    )
+    p_kg_inv.add_argument(
+        "--confirm",
+        action="store_true",
+        default=False,
+        help="Required outside an interactive TTY — retracting a fact rewrites graph history",
+    )
+    p_kg_inv.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format (default table; --json is shorthand for --format json)",
+    )
+    p_kg_inv.add_argument(
+        "--json", "-j", dest="json", action="store_true", default=False, help=argparse.SUPPRESS
+    )
+    p_kg_tl = kg_sub.add_parser("timeline", help="Chronological facts for an entity (or all)")
+    p_kg_tl.add_argument(
+        "entity",
+        nargs="?",
+        default=None,
+        help="Entity to time-line (omit for the full timeline)",
+    )
+    p_kg_tl.add_argument(
+        "--as-of",
+        dest="as_of",
+        default=None,
+        help="Only facts valid at this date/datetime (AGE backend only)",
+    )
+    p_kg_tl.add_argument(
+        "--limit",
+        type=int,
+        default=_KG_TIMELINE_DEFAULT_LIMIT,
+        help=(
+            f"Facts to show (default {_KG_TIMELINE_DEFAULT_LIMIT}); truncates client-side "
+            "because mempalace_kg_timeline takes no limit — and the backend itself "
+            f"returns at most {_KG_TIMELINE_TOOL_CAP} facts, so a larger value cannot "
+            "widen the window"
+        ),
+    )
+    p_kg_tl.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format (default table; --json is shorthand for --format json)",
+    )
+    p_kg_tl.add_argument(
+        "--json", "-j", dest="json", action="store_true", default=False, help=argparse.SUPPRESS
+    )
+
+    # walk — palace graph traversal (slice of #191, issue #359)
+    p_walk = sub.add_parser(
+        "walk",
+        help="Walk the palace graph from a wing/room/entity (mempalace_walk_palace)",
+    )
+    p_walk.add_argument("--wing", default=None, help="Walk from this wing")
+    p_walk.add_argument("--room", default=None, help="Walk from this room")
+    p_walk.add_argument("--entity", default=None, help="Inverse walk from this entity")
+    p_walk.add_argument(
+        "--depth",
+        type=int,
+        default=_WALK_DEFAULT_DEPTH,
+        help=f"Walk depth 1..5 (default {_WALK_DEFAULT_DEPTH}); hop budget under --follow tunnels",
+    )
+    p_walk.add_argument(
+        "--limit",
+        type=int,
+        default=_WALK_DEFAULT_LIMIT,
+        help=f"Max rows 1..500 (default {_WALK_DEFAULT_LIMIT})",
+    )
+    p_walk.add_argument(
+        "--follow",
+        choices=("palace", "tunnels"),
+        default="palace",
+        help=(
+            "palace (default) walks wings/rooms/drawers/entities; "
+            "tunnels follows cross-wing connections from --room"
+        ),
+    )
+    p_walk.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format (default table; --json is shorthand for --format json)",
+    )
+
+    # rate — record whether a drawer was useful (slice of #191, issue #361)
+    p_rate = sub.add_parser(
+        "rate",
+        help="Record drawer feedback that nudges search ranking (mempalace_rate_memory)",
+    )
+    p_rate.add_argument("drawer_id", help="Drawer being rated")
+    rate_group = p_rate.add_mutually_exclusive_group(required=True)
+    rate_group.add_argument(
+        "--useful",
+        dest="useful",
+        action="store_true",
+        default=None,
+        help="The drawer was helpful",
+    )
+    rate_group.add_argument(
+        "--not-useful",
+        dest="useful",
+        action="store_false",
+        default=None,
+        help="The drawer was noise",
+    )
+    p_rate.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format (default table; --json is shorthand for --format json)",
+    )
+
     # ── Propagate --json/--quiet to every subparser (issue #44) ─────
     # argparse parses pre-subcommand flags into ``args.json`` /
     # ``args.quiet`` only if they appear BEFORE the subcommand. To let
@@ -9757,6 +10650,20 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         cmd_aaak(args)
         return
 
+    if args.command == "diary":
+        if not getattr(args, "diary_action", None):
+            p_diary.print_help()
+            return
+        cmd_diary(args)
+        return
+
+    if args.command == "kg":
+        if not getattr(args, "kg_action", None):
+            p_kg.print_help()
+            return
+        cmd_kg(args)
+        return
+
     dispatch = {
         "init": cmd_init,
         "mine": cmd_mine,
@@ -9796,6 +10703,9 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         "wings": cmd_wings,
         "checkpoint": cmd_checkpoint,
         "taxonomy": cmd_taxonomy,
+        # graph + diary family — slices of #191 (issues #359, #361)
+        "walk": cmd_walk,
+        "rate": cmd_rate,
     }
 
     # Issue #49: announce the routing decision to stderr when daemon_url is
