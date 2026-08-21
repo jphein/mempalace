@@ -1089,24 +1089,66 @@ class TestReadFamilyRouting:
         rest.assert_not_called()
         assert json.loads(capsys.readouterr().out) == {"wings": {"w": 1}}
 
-    def test_importing_mcp_server_does_not_steal_stdout(self, capsys, tmp_path):
+    def test_importing_mcp_server_does_not_steal_stdout(self, tmp_path):
         """``mempalace.mcp_server`` hijacks stdio at IMPORT time (#225):
         ``sys.stdout = sys.stderr`` plus an fd-level ``os.dup2(2, 1)``, so
-        a stray print cannot corrupt its JSON-RPC stream. A CLI that
-        imports it inherits that for the rest of the process — every
+        a stray print cannot corrupt its JSON-RPC stream. A CLI process
+        that imports it inherits that for the rest of its life — every
         ``--json`` document would land on stderr and every pipe would read
-        empty, silently. ``_local_mcp_server`` must undo it."""
+        empty, with nothing raised anywhere.
+
+        The import is forced by dropping the module first. Without that
+        this test passes **vacuously**: the module is already in
+        ``sys.modules`` by the time it runs, so ``dup2`` never re-fires and
+        there is nothing to restore. Verified by disabling the fix — the
+        unforced version stayed green in a whole-file run and only failed
+        when it happened to be the first test to import the module.
+
+        Dropping it takes **both** handles. ``from . import mcp_server``
+        resolves through ``getattr(mempalace, "mcp_server")`` before it
+        consults ``sys.modules``, so popping ``sys.modules`` alone hands
+        back the cached module and the import never re-runs. Both are
+        restored afterwards for the same reason in reverse: a stale
+        package attribute would make every later
+        ``mock.patch("mempalace.mcp_server.tool_x")`` in the suite patch a
+        ghost module.
+        """
         import sys as _sys
 
+        import mempalace
         from mempalace import cli
 
-        before = _sys.stdout
-        with patch("mempalace.mcp_server.tool_list_wings", return_value={"wings": {"w": 1}}):
-            with cli._local_mcp_server(str(tmp_path)):
+        popped = _sys.modules.pop("mempalace.mcp_server", None)
+        package_attr = getattr(mempalace, "mcp_server", None)
+        if package_attr is not None:
+            delattr(mempalace, "mcp_server")
+        try:
+            before = _sys.stdout
+            with cli._local_mcp_server(str(tmp_path)) as reimported:
+                # The import really did re-run, so the hijack really did
+                # re-fire and really was undone.
+                assert reimported is not popped
                 assert _sys.stdout is before
+            assert _sys.stdout is before
+        finally:
+            if popped is not None:
+                _sys.modules["mempalace.mcp_server"] = popped
+            if package_attr is not None:
+                # Restoring sys.modules alone is not enough:
+                # ``mock.patch("mempalace.mcp_server.tool_x")`` resolves
+                # through the PACKAGE ATTRIBUTE, so leaving the re-imported
+                # module bound there would make every later patch in the
+                # suite target a ghost module.
+                mempalace.mcp_server = package_attr
+
+    def test_local_path_json_document_arrives_on_stdout(self, capsys, tmp_path):
+        """The end-to-end consequence of the hijack: `--json | jq` must
+        actually receive the document, and stderr must stay clean."""
+        from mempalace import cli
+
+        with patch("mempalace.mcp_server.tool_list_wings", return_value={"wings": {"w": 1}}):
             cli.cmd_wings(_args(palace=str(tmp_path), format="json"))
 
-        assert _sys.stdout is before
         captured = capsys.readouterr()
         assert json.loads(captured.out) == {"wings": {"w": 1}}
         assert captured.err == ""
