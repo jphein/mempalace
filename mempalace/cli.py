@@ -6781,6 +6781,10 @@ def cmd_diary(args):
 # spelling of the same read would be redundant surface.
 
 _KG_TIMELINE_DEFAULT_LIMIT = 20
+# The graph backends' ``timeline()`` returns at most this many rows and the MCP
+# tool doesn't expose the parameter, so a larger ``--limit`` is a request the
+# read path cannot satisfy. Confirmed live: ``--limit 200`` → ``count: 100``.
+_KG_TIMELINE_TOOL_CAP = 100
 
 
 def _print_kg_fact(data: dict, verb: str) -> None:
@@ -6849,6 +6853,12 @@ def cmd_kg(args):
     (``mempalace_kg_invalidate`` has no triple ids and no reason field), and
     ``kg timeline``'s ``--limit`` truncates client-side because
     ``mempalace_kg_timeline`` takes only ``(entity, as_of)``.
+
+    A ``--limit`` above ``_KG_TIMELINE_TOOL_CAP`` cannot be honoured: the
+    graph backend's own ``timeline()`` stops at that many rows and the tool
+    doesn't expose the parameter, so the CLI reports how many it actually
+    received rather than implying the requested window was searched. Seen
+    live: ``kg timeline JP --limit 200`` returns ``count: 100``.
     """
     fmt = _resolve_tool_format(args)
     want_json = fmt == "json"
@@ -10451,7 +10461,9 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         default=_KG_TIMELINE_DEFAULT_LIMIT,
         help=(
             f"Facts to show (default {_KG_TIMELINE_DEFAULT_LIMIT}); truncates client-side "
-            "because mempalace_kg_timeline takes no limit"
+            "because mempalace_kg_timeline takes no limit — and the backend itself "
+            f"returns at most {_KG_TIMELINE_TOOL_CAP} facts, so a larger value cannot "
+            "widen the window"
         ),
     )
     p_kg_tl.add_argument(

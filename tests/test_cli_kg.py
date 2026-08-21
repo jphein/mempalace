@@ -367,6 +367,31 @@ class TestKgTimeline:
         assert "mempalace" in out
         assert "old-project" not in out
 
+    def test_limit_above_the_backend_cap_reports_what_arrived(self, capsys):
+        """A --limit past the backend's own ceiling can't widen the window.
+
+        The graph backends' ``timeline()`` stops at 100 rows and the MCP tool
+        doesn't expose the parameter, so asking for 200 must not imply 200
+        were searched. Confirmed live: ``kg timeline JP --limit 200`` returns
+        ``count: 100``.
+        """
+        from mempalace import cli
+
+        capped = {
+            "entity": "JP",
+            "as_of": None,
+            "timeline": [dict(_TIMELINE_OK["timeline"][0], object=f"o{i}") for i in range(100)],
+            "count": 100,
+        }
+        strict, call, fake = _daemon(capped)
+        with strict, call:
+            cli.cmd_kg(_tl_args(limit=200, json=True))
+
+        assert "limit" not in fake.call_args[0][1]
+        payload = json.loads(capsys.readouterr().out)
+        assert payload["showing"] == cli._KG_TIMELINE_TOOL_CAP == 100
+        assert payload["count"] == 100
+
     def test_json_reports_showing_count(self, capsys):
         from mempalace import cli
 
