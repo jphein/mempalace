@@ -155,6 +155,33 @@ sleeping 250-1000 ms with jitter. Timeouts are clamped to
 ``filters`` accepts the same keyword filters as :meth:`list_events`.
 ``poll_interval_s`` pins the sleep (tests); default is jittered.
 
+#### `watch_events`
+
+```python
+def watch_events(self, *, cursor: str = None, poll_timeout_ms: int = MAX_WAIT_TIMEOUT_MS, limit: int = DEFAULT_LIST_LIMIT, poll_interval_s: float = None, **spec)
+```
+
+Yield ``(matched_events, cursor)`` forever as new events arrive.
+
+The long-poll primitive :meth:`wait_events` caps at
+``MAX_WAIT_TIMEOUT_MS`` and reports a timeout, which makes it a
+building block rather than a watcher: every caller ends up writing
+the same re-arm loop, and each one has to remember to carry the
+cursor forward. This owns both.
+
+An idle poll yields ``([], cursor)`` rather than blocking silently,
+so a caller can implement an idle timeout, emit a heartbeat, or
+checkpoint its cursor without running a second clock.
+
+``poll_timeout_ms`` may be a callable returning the timeout for
+this iteration so a caller can cap it to a remaining idle
+deadline (an idle of 400ms must not wait out a 300s long-poll).
+
+The cursor advances past every event *examined*, not merely those
+that matched, so a watcher that restarts never rescans what it has
+already judged. ``spec`` takes the set-valued filters described by
+:func:`event_matches_watch`.
+
 #### `version_vector`
 
 ```python
@@ -209,3 +236,120 @@ Fold one remote artifact in, idempotently, verifying its hash.
 
 Content is verbatim; the sha256 must match or the artifact is
 rejected — a corrupt transfer must never enter the store.
+
+## Functions
+
+### `normalize_watch_values`
+
+```python
+def normalize_watch_values(value) -> Optional[set]
+```
+
+Coerce a watch filter argument to a set of strings, or ``None``.
+
+``None`` means "any" — an absent filter, not an empty one. An argument
+holding only blanks collapses to ``None`` for the same reason, so a
+stray ``--type ""`` cannot silently match nothing forever.
+
+### `event_matches_watch`
+
+```python
+def event_matches_watch(event: dict, *, streams = None, rooms = None, types = None, statuses = None, to_agents = None, from_agents = None, exclude_from_agents = None, correlation_ids = None) -> bool
+```
+
+Client-side half of a watch filter. Every argument is a set or ``None``.
+
+Exclusion beats every positive match: an event from an excluded writer is
+rejected even when it satisfies the rest of the filter.
+
+### `sanitize_watch_spec`
+
+```python
+def sanitize_watch_spec(spec: dict) -> dict
+```
+
+Validate and normalize every value in a watch spec.
+
+``list_events`` sanitizes the filters it is given, so a *single-valued*
+watch filter is checked for free by being pushed down. Multi-valued ones
+are not pushed down and were therefore compared raw, which made
+validation depend on how many values you happened to pass:
+``--type Task.Request`` alone was rejected, while
+``--type Task.Request --type patch.ready`` was silently accepted and then
+matched nothing, leaving the watcher waiting forever for an event type
+that cannot exist.
+
+Sanitizing here — with the same functions ``list_events`` uses — makes
+the two paths agree, and normalizes values (stripping whitespace) so a
+padded routing value still matches. Raises ``ValueError`` naming the
+offending value.
+
+### `pushdown_watch_filters`
+
+```python
+def pushdown_watch_filters(spec: dict) -> dict
+```
+
+The subset of a watch spec that ``list_events`` can evaluate in SQL.
+
+Only single-valued fields push down. Narrowing the query is an
+optimization, never a correctness dependency — whatever stays behind is
+re-checked by :func:`event_matches_watch` on every candidate row.
+
+### `read_watch_state`
+
+```python
+def read_watch_state(path: str) -> tuple
+```
+
+Return ``(cursor, condition)`` for a watch state file.
+
+A cursor of ``None`` is ambiguous and the ambiguity is dangerous, so the
+condition disambiguates it:
+
+``absent``
+    No state file. A genuine first run — the caller may start at the tip.
+``ok``
+    A usable cursor; resume strictly after it.
+``empty``
+    The file exists and records ``cursor: null`` — the watcher started
+    against an empty log and has not seen an event yet. **Not** a first
+    run: treating it as one and jumping to the tip would skip whatever
+    arrived while the watcher was stopped, and the next checkpoint would
+    make that permanent.
+``corrupt``
+    Unreadable, truncated, or valid JSON that is not an object. Costs a
+    replay, never a skip — refusing to start would cost every event
+    after it, and skipping would lose them silently.
+
+### `read_watch_cursor`
+
+```python
+def read_watch_cursor(path: str) -> Optional[str]
+```
+
+The cursor from a watch state file, or ``None``.
+
+Convenience wrapper over :func:`read_watch_state` for callers that do not
+need to tell a first run from a corrupt file. Watchers should prefer
+``read_watch_state``, because those two cases must not behave alike.
+
+### `write_watch_cursor`
+
+```python
+def write_watch_cursor(path: str, cursor: str, agent: str = None, required: bool = False) -> None
+```
+
+Persist a watch cursor atomically.
+
+Written to a temp file and renamed so a crash mid-write cannot leave a
+half-file that reads back as a *different, earlier* cursor — that would
+silently replay events the watcher had already handled.
+
+Ordinary checkpoints are best effort, because losing one costs a replay
+while crashing the watcher costs every event after it. That trade-off
+inverts for the *first* checkpoint of a fresh watch: if it never lands,
+the next launch sees no state file, calls itself a first run, and starts
+at the tip — skipping everything that arrived in between, permanently.
+Pass ``required=True`` there so the failure is raised rather than
+swallowed.

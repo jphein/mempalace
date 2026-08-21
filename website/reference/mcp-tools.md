@@ -10,7 +10,9 @@ Palace overview: total drawers, wing and room counts, AAAK spec, and memory prot
 
 **Parameters:** None
 
-**Returns:** `{ total_drawers, wings, rooms, protocol, aaak_dialect }`
+**Returns:** `{ total_drawers, wings, rooms, protocol, aaak_dialect, sqlite_integrity, library_versions }`
+
+`library_versions` reports the versions this server loaded and whether they still match what is installed on disk. `stale: true` means they no longer match, which happens when the package is upgraded or removed while the server is running; write tools are then refused with error `-32005` until the server is restarted, unless `MEMPALACE_MCP_ALLOW_STALE_LIBRARY=1` is set in its environment, in which case `gate_disabled_by` names that variable. An `unreadable` key lists the distributions the check is not covering — either their installed metadata could not be read, or they could not be resolved at all when the server started — so `stale: false` is never mistaken for "checked and fine" when nothing was checked.
 
 ---
 
@@ -86,6 +88,8 @@ Returns the AAAK dialect specification.
 ---
 
 ## Palace — Write Tools
+
+Tools that modify the palace are refused with JSON-RPC error `-32005` while the server is running a library version that is no longer the one installed on disk — see `library_versions` under `mempalace_status` above. That set does not line up with this section: the knowledge-graph, navigation and diary writes documented further down are included in it, while `mempalace_get_drawer` and `mempalace_list_drawers` below are reads and are never refused. The error names both versions, sets `action_required: "restart_mcp_server"`, and carries `override_env` naming the variable that disables the check.
 
 ### `mempalace_add_drawer`
 

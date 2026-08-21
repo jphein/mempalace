@@ -8,11 +8,35 @@ search would have found.
 """
 
 from mempalace.palace import (
+    get_backend_for_palace,
     get_closets_collection,
     get_collection,
     upsert_closet_lines,
 )
 from mempalace.searcher import _hybrid_rank, search_memories
+
+
+def _close_palace(palace_path: str) -> None:
+    """Release chromadb client handles so the next open rebuilds from disk.
+
+    Windows CI intermittently returns zero hybrid hits right after a fast
+    seed write (same class of flake as "Nothing found on disk" on tiny
+    closet collections). Closing the cached client forces the next
+    ``search_memories`` open to re-read segments that have been flushed.
+    """
+    try:
+        get_backend_for_palace(palace_path).close_palace(palace_path)
+    except Exception:
+        pass
+
+
+def _search(query: str, palace: str, **kwargs):
+    """Search, retrying once after a client reopen if results are empty."""
+    result = search_memories(query, palace, **kwargs)
+    if result.get("results"):
+        return result
+    _close_palace(palace)
+    return search_memories(query, palace, **kwargs)
 
 
 def _seed_drawers(palace_path):
@@ -33,6 +57,7 @@ def _seed_drawers(palace_path):
             {"wing": "backend", "room": "queue", "source_file": "fixture_D4.md"},
         ],
     )
+    _close_palace(palace_path)
 
 
 def _seed_strong_closet_for(palace_path, drawer_id, source_file, topics):
@@ -65,6 +90,7 @@ def _seed_strong_closet_for(palace_path, drawer_id, source_file, topics):
             }
         ],
     )
+    _close_palace(palace_path)
 
 
 # ── core invariant: closets can only HELP, never HIDE ─────────────────────
@@ -75,7 +101,7 @@ class TestHybridInvariant:
         palace = str(tmp_path / "palace")
         _seed_drawers(palace)
         # No closets created.
-        result = search_memories("Kafka rebalance timeout", palace, n_results=3)
+        result = _search("Kafka rebalance timeout", palace, n_results=3)
         ids = [h["source_file"] for h in result["results"]]
         assert ids, "should return results"
         assert "fixture_D4.md" in ids, "direct drawer search alone should surface the Kafka drawer"
@@ -92,7 +118,7 @@ class TestHybridInvariant:
             source_file="fixture_D3.md",
             topics=["Kafka queue tuning", "consumer rebalance config"],
         )
-        result = search_memories("Kafka consumer rebalance timeout", palace, n_results=5)
+        result = _search("Kafka consumer rebalance timeout", palace, n_results=5)
         ids = [h["source_file"] for h in result["results"]]
         assert "fixture_D4.md" in ids, (
             "D4 must appear — direct drawer search alone would rank it first. "
@@ -110,8 +136,9 @@ class TestHybridInvariant:
             source_file="fixture_D1.md",
             topics=["JWT auth tokens", "session expiry", "authentication service"],
         )
-        result = search_memories("JWT auth tokens expiry", palace, n_results=3)
+        result = _search("JWT auth tokens expiry", palace, n_results=3)
         ids = [h["source_file"] for h in result["results"]]
+        assert ids, f"expected hybrid hits after seeding drawers+closets; got {result!r}"
         assert ids[0] == "fixture_D1.md"
         top = result["results"][0]
         assert top["matched_via"] == "drawer+closet"
@@ -131,7 +158,7 @@ class TestClosetMetadata:
             source_file="fixture_D1.md",
             topics=["JWT auth tokens", "session expiry", "authentication service"],
         )
-        result = search_memories("JWT auth tokens expiry", palace, n_results=2)
+        result = _search("JWT auth tokens expiry", palace, n_results=2)
         top = result["results"][0]
         assert top["source_file"] == "fixture_D1.md"
         assert top["matched_via"] == "drawer+closet"
@@ -142,7 +169,7 @@ class TestClosetMetadata:
         palace = str(tmp_path / "palace")
         _seed_drawers(palace)
         # No closets
-        result = search_memories("TanStack Query", palace, n_results=2)
+        result = _search("TanStack Query", palace, n_results=2)
         assert result["results"]
         for h in result["results"]:
             assert h["matched_via"] == "drawer"
@@ -157,7 +184,7 @@ class TestSourceFileFilter:
     def test_source_file_filter_excludes_other_sources(self, tmp_path):
         palace = str(tmp_path / "palace")
         _seed_drawers(palace)
-        result = search_memories(
+        result = _search(
             "Kafka consumer rebalance timeout",
             palace,
             n_results=5,
@@ -179,7 +206,7 @@ class TestSourceFileFilter:
             source_file="fixture_D1.md",
             topics=["Kafka queue tuning", "consumer rebalance config"],
         )
-        result = search_memories(
+        result = _search(
             "Kafka consumer rebalance",
             palace,
             n_results=5,

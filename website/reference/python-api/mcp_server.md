@@ -51,7 +51,7 @@ def tool_get_taxonomy()
 ### `tool_search`
 
 ```python
-def tool_search(query: str, limit: int = 15, wing: str = None, room: str = None, tags: list = None, source_file: str = None, max_distance: float = 1.5, min_similarity: float = None, context: str = None, candidate_strategy: str = 'hybrid', fusion_mode: str = 'convex', include_trace: bool = False)
+def tool_search(query: str, limit: int = 15, wing: str = None, room: str = None, tags: list = None, source_file: str = None, since: str = None, before: str = None, max_distance: float = 1.5, min_similarity: float = None, context: str = None, candidate_strategy: str = 'hybrid', fusion_mode: str = 'convex', include_trace: bool = False)
 ```
 
 ### `tool_check_duplicate`
@@ -586,8 +586,9 @@ List coordination events with structured filters, oldest first.
 
 ``preview=True`` truncates each event's verbatim body to a short excerpt
 (marking ``body_truncated`` + ``body_length``) so scanning many events
-stays cheap; re-fetch a specific event's full body with a targeted
-``since_event_id``.
+stays cheap. ``since_event_id`` is strictly after that id, so do not
+pass the truncated event's own id to re-fetch it — repeat the original
+filters with ``preview=false``.
 
 ### `tool_event_wait`
 

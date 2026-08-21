@@ -29,7 +29,7 @@ directly without going through ``ChromaBackend``.
 #### `__init__`
 
 ```python
-def __init__(self, collection, palace_path: Optional[str] = None)
+def __init__(self, collection, palace_path: Optional[str] = None, backend = None)
 ```
 
 #### `add`
@@ -337,6 +337,55 @@ Unlike :meth:`ChromaBackend._client`, which tolerates a 0.01 s mtime
 epsilon to avoid rebuilding an expensive client, this compares exactly:
 re-running the probe costs milliseconds, whereas serving one stale verdict
 can route a query into a diverged segment.
+
+### `sqlite_room_wing_hall_counts`
+
+```python
+def sqlite_room_wing_hall_counts(palace_path: str, collection_name: str) -> Optional[list[tuple]]
+```
+
+Grouped ``(room, wing, hall, n, last_date)`` from ``chroma.sqlite3``.
+
+``last_date`` is the newest ``date`` metadata value in the group, so
+``find_tunnels`` can still report ``recent`` without paging every drawer
+(``build_graph`` only ever uses the maximum). Returns ``None`` when sqlite
+cannot be trusted, so the caller falls back to the client path.
+
+### `sqlite_list_id_metadata`
+
+```python
+def sqlite_list_id_metadata(palace_path: str, collection_name: str, where: Optional[dict] = None) -> Optional[tuple[list[str], list[dict]]]
+```
+
+All matching drawer ids + metadata from sqlite, without opening HNSW.
+
+Documents are deliberately excluded: ``chroma:document`` lives in the same
+``embedding_metadata`` table, and joining it in would materialize the whole
+palace's verbatim text (hundreds of MB on a six-figure palace) just to
+render one page of previews. Callers hydrate the page they display via
+:func:`sqlite_documents_for_ids`.
+
+``where`` supports equality on ``wing``/``room`` and ``$and`` of those,
+matching ``tool_list_drawers``; it is applied in SQL. Returns ``None`` when
+sqlite cannot be trusted so the caller can fall back to ``col.get`` paging.
+
+### `sqlite_documents_for_ids`
+
+```python
+def sqlite_documents_for_ids(palace_path: str, collection_name: str, ids: list) -> Optional[dict]
+```
+
+``&#123;drawer_id: document}`` for ``ids`` only, straight from sqlite.
+
+Hydrates previews for the page being displayed without opening HNSW and
+without reading the rest of the palace's text.
+
+Resolved in two indexed steps rather than one join: ``embedding_id`` is
+only indexed as part of ``UNIQUE (segment_id, embedding_id)``, so a join
+that filters on it alone degenerates into a full scan of
+``embedding_metadata`` — 5.7s for a 20-row page on a 165k-drawer palace.
+Seeking the segment first, then ``embedding_metadata``'s ``(id, key)``
+primary key, keeps both steps on an index.
 
 ### `quarantine_invalid_hnsw_metadata`
 

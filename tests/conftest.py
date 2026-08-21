@@ -52,6 +52,7 @@ _TEST_EMBED_DIM = 384
 _TEST_TOKEN_RE = re.compile(r"\w+", re.UNICODE)
 _REAL_EMBEDDING_TEST_MODULES = {
     "test_embedding",
+    "test_embedding_api",
     "test_embeddinggemma",
     # Fork: adaptmem_ft dispatch tests assert on the real encoder classes;
     # the stub EF would swallow the model= dispatch they exist to verify.

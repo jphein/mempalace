@@ -3,6 +3,9 @@
 All ChromaDB access is mocked — no real database needed.
 """
 
+import json
+import os
+
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -320,8 +323,6 @@ class TestFuzzyMatch:
 # --- Postgres aggregate fast path (#95) ---
 
 
-import os  # noqa: E402
-
 POSTGRES_DSN = os.environ.get("TEST_POSTGRES_DSN")
 pgmark = pytest.mark.skipif(
     POSTGRES_DSN is None,
@@ -590,3 +591,52 @@ class TestPostgresFastPath:
             nodes2, _ = build_graph(col=col)
             assert nodes1 == nodes2
             fake_psycopg2.connect.assert_not_called()
+
+
+# --- sqlite fast path backend gating ---
+
+
+class TestSqliteGroupedCountsReader:
+    """The sqlite graph path must follow configuration, not the filesystem."""
+
+    MAGIC = b"SQLite format 3\x00"
+
+    def _config(self, palace_path):
+        from mempalace.config import MempalaceConfig
+
+        cfg_dir = os.path.join(os.path.dirname(palace_path), "config")
+        os.makedirs(cfg_dir, exist_ok=True)
+        with open(os.path.join(cfg_dir, "config.json"), "w") as f:
+            json.dump({"palace_path": palace_path}, f)
+        return MempalaceConfig(config_dir=cfg_dir)
+
+    def test_chroma_palace_resolves_a_reader(self, tmp_path):
+        from mempalace.backends.chroma import sqlite_room_wing_hall_counts
+        from mempalace.palace_graph import sqlite_grouped_counts_reader
+
+        palace = tmp_path / "palace"
+        palace.mkdir()
+        (palace / "chroma.sqlite3").write_bytes(self.MAGIC)
+        assert (
+            sqlite_grouped_counts_reader(self._config(str(palace))) is sqlite_room_wing_hall_counts
+        )
+
+    def test_missing_database_falls_back_to_the_client(self, tmp_path):
+        """No db file means no fast path — that is how a broken palace still
+        reports a diagnostic instead of an empty graph."""
+        from mempalace.palace_graph import sqlite_grouped_counts_reader
+
+        palace = tmp_path / "palace"
+        palace.mkdir()
+        assert sqlite_grouped_counts_reader(self._config(str(palace))) is None
+
+    def test_mixed_backend_artifacts_do_not_get_sniffed(self, tmp_path):
+        """Two backends' files in one directory is a ``BackendMismatchError``
+        on every normal path; picking one by file order would hide that."""
+        from mempalace.palace_graph import sqlite_grouped_counts_reader
+
+        palace = tmp_path / "palace"
+        palace.mkdir()
+        (palace / "chroma.sqlite3").write_bytes(self.MAGIC)
+        (palace / "sqlite_exact.sqlite3").write_bytes(self.MAGIC)
+        assert sqlite_grouped_counts_reader(self._config(str(palace))) is None

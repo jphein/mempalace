@@ -4,11 +4,13 @@ Source: [`mempalace/embedding.py`](https://github.com/techempower-org/mempalace/
 
 Embedding function factory with hardware acceleration.
 
-Returns a ChromaDB-compatible embedding function bound to a user-selected
-ONNX Runtime execution provider.
+Returns a ChromaDB-compatible embedding function — either a local ONNX model
+bound to a user-selected ONNX Runtime execution provider, or an
+OpenAI-compatible HTTP ``/v1/embeddings`` endpoint.
 
-Three embedding models are available, selected via ``MEMPALACE_EMBEDDING_MODEL``
-or ``embedding_model`` in ``~/.mempalace/config.json``:
+Four embedding-model options are available, selected via
+``MEMPALACE_EMBEDDING_MODEL`` or ``embedding_model`` in
+``~/.mempalace/config.json``:
 
 * ``minilm`` (default) — ``all-MiniLM-L6-v2``, 384-dim, English-only training.
   ChromaDB's default; what every existing palace was built with.
@@ -25,6 +27,16 @@ or ``embedding_model`` in ``~/.mempalace/config.json``:
   MiniLM, so it drops into existing collections, but it is a different vector
   space — switching requires ``mempalace repair rebuild-index``. Requires the
   ``sentence-transformers`` package.
+* ``openai-compat`` — embeddings served by any OpenAI-compatible
+  ``/v1/embeddings`` endpoint (LM Studio, llama.cpp, vLLM, Ollama's OpenAI
+  shim, or a self-hosted server) instead of a local ONNX model. Useful for
+  larger / multilingual embedders (e.g. Qwen3-Embedding) or GPU offload.
+  Endpoint settings are read from ``config.json`` as ``embedding_api_url`` /
+  ``embedding_api_model`` / ``embedding_api_key`` (each overridable via the
+  matching ``MEMPALACE_EMBEDDING_API_*`` env var). Vectors are L2-normalized
+  for the cosine collection; the dimension is whatever the server returns, so
+  switching to/from this backend also requires ``mempalace repair
+  rebuild-index``. Stays local when the endpoint is on your machine/LAN.
 
 Supported devices (env ``MEMPALACE_EMBEDDING_DEVICE`` or ``embedding_device``
 in ``~/.mempalace/config.json``):
@@ -37,6 +49,10 @@ in ``~/.mempalace/config.json``):
 
 Requesting an unavailable accelerator emits a warning and falls back to CPU
 rather than hard-failing — mining must still work on a laptop without CUDA.
+The same applies to an accelerator that runs but computes the model wrongly:
+``embeddinggemma`` on CoreML returns NaN or all-zero vectors without raising,
+so ``auto`` never selects CoreML for it and an explicitly requested one is
+rejected by a witness embedding at load time.
 
 ## Classes
 
@@ -82,6 +98,44 @@ def embed_documents(self, input: list[str]) -> list[list[float]]
 
 Embed a batch of documents (ChromaDB EF protocol).
 
+### `class EmbeddingAPIError(RuntimeError)`
+
+Raised when the embedding API is unreachable or returns an invalid body.
+
+Module-specific subclass mirroring ``llm_client.LLMError`` so callers can
+distinguish embedding-endpoint failures; subclasses ``RuntimeError`` so
+existing ``except RuntimeError`` paths still catch it.
+
+### `class OpenAICompatEmbeddingFunction`
+
+ChromaDB-compatible EF backed by an OpenAI-compatible ``/v1/embeddings``
+endpoint (LM Studio, llama.cpp, vLLM, Ollama's OpenAI shim, etc.).
+
+Selected via ``embedding_model == "openai-compat"``. Vectors are produced
+server-side and fetched over HTTP, which changes the vector space — so
+``name()`` encodes the model id: ChromaDB persists the EF name on the
+collection and rejects mismatched reads, the signal to run ``mempalace
+repair rebuild-index`` after changing model/endpoint. stdlib ``urllib``
+only, no new dependency.
+
+#### `__init__`
+
+```python
+def __init__(self, base_url: str, model: str, api_key: Optional[str] = None)
+```
+
+#### `name`
+
+```python
+def name(self) -> str
+```
+
+#### `embed_query`
+
+```python
+def embed_query(self, input)
+```
+
 ## Functions
 
 ### `get_embedding_function`
@@ -100,13 +154,15 @@ provider list + model so we only pay model-load cost once per process.
 ### `describe_device`
 
 ```python
-def describe_device(device: Optional[str] = None) -> str
+def describe_device(device: Optional[str] = None, model: Optional[str] = None) -> str
 ```
 
-Return a short human-readable label for the resolved device.
+Return a short human-readable label for the resolved embedding backend.
 
-Used by the miner CLI header so users can see at a glance whether GPU
-acceleration actually engaged.
+Used by the miner CLI header / MCP status so users can see at a glance
+whether GPU acceleration engaged — or, for the ``openai-compat`` backend,
+that embeddings are served by a remote endpoint rather than local hardware
+(in which case the ``embedding_device`` accelerator label is irrelevant).
 
 ### `current_model_name`
 

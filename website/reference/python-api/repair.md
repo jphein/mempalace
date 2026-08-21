@@ -189,15 +189,26 @@ Rebuild a malformed FTS5 inverted index in place; return remaining errors.
 
 The repair preflight aborts when ``PRAGMA quick_check`` reports SQLite-layer
 corruption. After concurrent killed-mid-write mines (#1596) the common
-failure is an isolated ``malformed inverted index for FTS5 table``, which is
-fully recoverable: the index rebuilds from the intact
-``embedding_fulltext_search_content`` table without touching drawer rows.
+failure is an isolated ``malformed inverted index for FTS5 table``, and
+``rebuild`` recovers it by regenerating the index from
+``embedding_fulltext_search_content``.
 
-When the errors are isolated to FTS5, rebuild the index under the palace
-write lock (so a live mine cannot race the rebuild) and re-run quick_check.
-Returns the remaining quick_check errors — empty when the heal succeeded.
-Broader corruption, a lock held by another writer, or a rebuild failure
-leaves ``errors`` unchanged so the caller still aborts with the banner.
+That error says the index and the content table disagree; it does not say
+which of them is wrong. So the content table is checked against
+``embedding_metadata`` first, and any row that disagrees is restored from it
+before the rebuild reads it — otherwise a rebuild over a damaged content
+table would overwrite an index that still held the drawer's own words and
+leave quick_check clean, reporting success for a palace that lost full-text
+reach. Both writes are derived from ``embedding_metadata``; rows that
+table cannot speak for are left untouched.
+
+Everything happens under the palace write lock (so a live mine cannot race
+it) and in one transaction, which is why a restored row cannot outlive a
+rebuild that then fails. Returns the remaining quick_check errors — empty
+when the heal succeeded. Broader corruption, a lock held by another writer,
+a content table that cannot be checked or cannot be brought into agreement,
+a rebuild failure, or a quick_check still dirty afterwards leaves ``errors``
+unchanged so the caller still aborts with the banner.
 
 ### `index_read_recovery_guidance`
 
@@ -413,10 +424,12 @@ for a palace the tool repairs by itself.
 
 The prediction is deliberately the optimistic branch, and it is stated as
 an attempt rather than a promise: the real heal still returns the errors
-unchanged when another process holds the mine lock, when the rebuild
-raises, or when ``quick_check`` is still dirty afterwards. A dry run cannot
-tell those apart without taking the lock and writing, which is exactly what
-it must not do, so the wording names them instead.
+unchanged when another process holds the mine lock, when the content table
+cannot be checked against ``embedding_metadata`` or cannot be brought into
+agreement with it, when the rebuild raises, or when ``quick_check`` is still
+dirty afterwards. A dry run cannot tell those apart without taking the lock
+and writing, which is exactly what it must not do, so the wording names them
+instead.
 
 ### `status`
 

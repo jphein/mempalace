@@ -115,6 +115,12 @@ def delete(self, *, ids = None, where = None)
 def count(self) -> int
 ```
 
+#### `facet_counts`
+
+```python
+def facet_counts(self, field: str, where: Optional[dict] = None, limit: int = 1000) -> dict[str, int]
+```
+
 #### `lexical_search`
 
 ```python
