@@ -446,6 +446,35 @@ in 2+ wings, inferred from the palace graph — see issue #75).
 
 Daemon unreachable → exit 1; inner-error envelope → exit 2.
 
+### `cmd_drawer`
+
+```python
+def cmd_drawer(args)
+```
+
+Single-drawer CRUD by ID — get / add / delete / update (#355).
+
+### `cmd_duplicate`
+
+```python
+def cmd_duplicate(args)
+```
+
+Check whether content already exists in the palace (#363).
+
+Wraps ``mempalace_check_duplicate``. A completed check exits 0
+whatever the verdict — ``is_duplicate`` in the payload is the answer,
+and overloading the exit code by default would collide with the
+daemon-unreachable 1 that every sibling command uses.
+
+``--fail-on-duplicate`` opts into a scriptable guard: non-zero then
+means "do not file this", which is also what daemon-unreachable and a
+disabled vector index mean, so ``duplicate check --file x
+--fail-on-duplicate && file-it`` fails safe in every branch. A
+disabled vector index cannot answer at all; the tool says so
+explicitly rather than claiming "not a duplicate", and we always exit
+2 on it so a guard never reads silence as novelty.
+
 ### `cmd_logstream`
 
 ```python
