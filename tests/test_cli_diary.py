@@ -348,6 +348,67 @@ class TestDiaryRead:
 
         local.assert_called_once_with(agent_name="morpheus", last_n=4)
 
+    def test_json_survives_the_mcp_server_stdout_hijack(self, capsys):
+        """The local path must not lose stdout to mcp_server's stdio guard.
+
+        ``mempalace.mcp_server`` installs MCP-stdio protection at module
+        scope (#225) — ``os.dup2(2, 1)`` and ``sys.stdout = sys.stderr`` —
+        and only its own ``main()`` undoes it. Dropping the module from
+        ``sys.modules`` makes the local path's import genuinely re-run that
+        hijack, so this asserts the routing helper restores stdout before
+        the command prints: ``diary read --json`` is exactly what a caller
+        pipes, and on stderr it is invisible to them.
+        """
+        import sys
+
+        from mempalace import cli
+
+        saved_module = sys.modules.pop("mempalace.mcp_server", None)
+        saved_stdout = sys.stdout
+        try:
+            # Importing here is what hijacks stdout for the rest of this test.
+            import mempalace.mcp_server  # noqa: F401
+
+            with (
+                patch("mempalace.cli._daemon_strict", return_value=False),
+                patch("mempalace.mcp_server.tool_diary_read", return_value=_READ_OK),
+            ):
+                cli.cmd_diary(_read_args(json=True))
+        finally:
+            sys.stdout = saved_stdout
+            if saved_module is not None:
+                # Both handles matter: ``patch("mempalace.mcp_server.X")``
+                # resolves through sys.modules while ``from . import
+                # mcp_server`` reads the package attribute. Leave only one
+                # of them pointing at the freshly-imported copy and later
+                # tests patch a module the CLI never sees.
+                sys.modules["mempalace.mcp_server"] = saved_module
+                import mempalace
+
+                mempalace.mcp_server = saved_module
+
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert payload["agent"] == "morpheus"
+        assert "morpheus" not in captured.err
+
+    def test_import_helper_restores_a_hijacked_stdout(self):
+        from mempalace import cli
+
+        real = __import__("sys").stdout
+        sys_mod = __import__("sys")
+        sys_mod.stdout = sys_mod.stderr
+        try:
+            module = cli._import_mcp_server()
+            assert sys_mod.stdout is not sys_mod.stderr
+            assert hasattr(module, "tool_diary_read")
+            # Idempotent: a second call must not raise on the already-closed
+            # duplicate file descriptor.
+            cli._import_mcp_server()
+            assert sys_mod.stdout is not sys_mod.stderr
+        finally:
+            sys_mod.stdout = real
+
     def test_palace_flag_forces_local_path(self, tmp_path):
         from mempalace import cli
 
