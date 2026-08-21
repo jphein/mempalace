@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **Sync upstream/develop through v3.8.0 (3e56979f): 166 commits — date-window search (since/before), openai-compat embeddings, RFC 002 adapter dispatch (#2062), mcp_proxy entry point, chunk_total metadata; ancestry repaired so future syncs replay only new commits** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Sync upstream/develop through v3.8.0 (3e56979f): 166 commits — date-window search (since/before), openai-compat embeddings, RFC 002 adapter dispatch (#2062), mcp_proxy entry point, chunk_total metadata; ancestry repaired so future syncs replay only new commits** ([`b3527b1`](https://github.com/techempower-org/mempalace/commit/b3527b1))
   Third large sync. Ancestry first: #394 landed as a squash merge, so
   git's merge base stayed pre-v3.7 and this sync initially wanted to
   replay all 433 already-resolved commits. A tree-identical

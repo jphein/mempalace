@@ -27,7 +27,7 @@ entries:
   - id: sync-upstream-v380
     date: 2026-08-20
     bucket: Changed
-    commit: TBD
+    commit: b3527b1
     area: Reliability
     summary: "Sync upstream/develop through v3.8.0 (3e56979f): 166 commits — date-window search (since/before), openai-compat embeddings, RFC 002 adapter dispatch (#2062), mcp_proxy entry point, chunk_total metadata; ancestry repaired so future syncs replay only new commits"
     body: |
