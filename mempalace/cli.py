@@ -5660,22 +5660,35 @@ def _resolve_drawer_format(args) -> str:
 def _import_mcp_server():
     """Import ``mempalace.mcp_server`` without losing the CLI's stdout.
 
-    ``mcp_server`` redirects stdout → stderr at import time — both at the
-    Python level and via ``os.dup2(2, 1)`` — so chromadb/onnxruntime
-    banners cannot corrupt the MCP stdio protocol (#225). It restores the
-    real stdout inside its own ``main()``, which a CLI process never
-    reaches. Importing it from a CLI command therefore silently rewires
-    every subsequent ``print`` to stderr, and a ``--json`` pipeline would
-    read an empty document.
+    **The upstream mechanism.** ``mempalace/mcp_server.py`` redirects
+    stdout → stderr at *module scope* — the statements run during import,
+    before any function is called — at both the Python level
+    (``sys.stdout = sys.stderr``) and the file-descriptor level
+    (``os.dup2(2, 1)``). That is deliberate and correct for its own
+    purpose: chromadb/onnxruntime print banners, sometimes from C, and
+    they would corrupt Claude Desktop's JSON parser (#225). The module
+    undoes it in ``_restore_stdout()``, called from its own ``main()``
+    before entering the protocol loop — a path a CLI process never
+    reaches. So a bare ``from . import mcp_server`` inside a CLI command
+    silently rewires every later ``print`` to stderr, and a ``--json``
+    pipeline reads an empty document.
 
-    So: import it, then hand stdout back. ``sys.stdout is sys.stderr`` is
-    the redirect's exact signature, and testing for it (rather than
-    diffing against the pre-import stream) also repairs the case where
-    something *else* imported the module first — the damage is identical
-    and the CLI is still the one that has to undo it.
-    ``mcp_server._restore_stdout()`` reverses the fd-level ``dup2`` as
-    well; the saved-stream reassignment is a fallback for a stale
-    ``_REAL_STDOUT`` snapshot.
+    **Why ``sys.stdout is sys.stderr`` is the right probe.** It tests for
+    the damage rather than for the event that caused it, which buys three
+    properties at once. It is *idempotent* — once repaired the condition
+    is false, so calling this helper on every command is free and a
+    double call cannot double-restore. It is *order-independent* —
+    comparing against the stream saved just before the import would see
+    no change when some earlier command already imported the module, and
+    would then skip a repair that is still needed, because the damage is
+    identical regardless of who triggered it. And it is *narrow* — it
+    fires only on the exact aliasing the redirect creates, never on a
+    legitimately-replaced stdout (a pytest capture object, a pipe).
+
+    ``mcp_server._restore_stdout()`` is preferred over a bare
+    reassignment because it also reverses the fd-level ``dup2``; the
+    saved-stream fallback below covers a stale ``_REAL_STDOUT`` snapshot,
+    which is possible because that snapshot is taken at first import.
 
     Any CLI command routing to a local tool handler must import through
     here rather than calling ``from . import mcp_server`` directly.
