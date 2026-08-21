@@ -7496,24 +7496,38 @@ def _local_mcp_server(palace: str | None):
     ``--palace`` at all. The previous value is restored in a ``finally``,
     including the "was not set" case, so a raising tool cannot leak the
     override either.
+
+    The snapshot is taken **before** the import, not after, because
+    importing ``mcp_server`` is itself an environment mutation.
+    ``mcp_server`` runs ``parse_known_args()`` at *module scope*
+    (``_args = _parse_args()``) against whatever is in ``sys.argv`` — the
+    importing process's own command line — and then sets
+    ``MEMPALACE_PALACE_PATH`` from any ``--palace`` it finds there. So a
+    snapshot taken after the import would capture the value the import
+    just wrote and "restore" that, leaving the override behind. Reading
+    it first restores the environment the command actually started with.
+    (``--backend`` is mutated by the same block and is deliberately not
+    unwound here: the drawer family's ``--backend`` support depends on
+    it, and quietly reverting another lane's mechanism from this helper
+    would be worse than the narrow leak.)
     """
-    mcp_server = _import_mcp_server()
-
-    if not palace:
-        yield mcp_server
-        return
-
     key = "MEMPALACE_PALACE_PATH"
     sentinel = object()
     previous = os.environ.get(key, sentinel)
-    os.environ[key] = os.path.abspath(os.path.expanduser(palace))
-    try:
-        yield mcp_server
-    finally:
+
+    def _restore() -> None:
         if previous is sentinel:
-            del os.environ[key]
+            os.environ.pop(key, None)
         else:
             os.environ[key] = previous
+
+    try:
+        mcp_server = _import_mcp_server()
+        if palace:
+            os.environ[key] = os.path.abspath(os.path.expanduser(palace))
+        yield mcp_server
+    finally:
+        _restore()
 
 
 # ── mempalace wings (issue #356) ──────────────────────────────────────

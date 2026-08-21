@@ -262,6 +262,31 @@ class TestWingsLocalPath:
                     cli.cmd_wings(_args(palace=str(tmp_path)))
             assert "MEMPALACE_PALACE_PATH" not in os.environ
 
+    def test_snapshot_predates_the_import_so_mcp_servers_own_write_is_unwound(self, tmp_path):
+        """Importing ``mcp_server`` is itself an env mutation: it runs
+        ``parse_known_args()`` at module scope against the importing
+        process's ``sys.argv`` and sets ``MEMPALACE_PALACE_PATH`` from any
+        ``--palace`` it finds. A snapshot taken *after* the import would
+        capture that write and restore it, leaving the override behind —
+        which is exactly what a live `mempalace --palace X wings --json`
+        run did before the snapshot moved above the import.
+        """
+        from mempalace import cli
+
+        def _import_that_also_writes_env():
+            os.environ["MEMPALACE_PALACE_PATH"] = "/written/by/the/import"
+            import mempalace.mcp_server as m
+
+            return m
+
+        with patch.dict("os.environ", _env(), clear=True):
+            with patch(
+                "mempalace.cli._import_mcp_server", side_effect=_import_that_also_writes_env
+            ):
+                with cli._local_mcp_server(str(tmp_path)):
+                    assert os.environ["MEMPALACE_PALACE_PATH"] == str(tmp_path)
+            assert "MEMPALACE_PALACE_PATH" not in os.environ
+
 
 class TestWingsSortAndLimit:
     def test_sort_count_is_descending(self):
@@ -1112,6 +1137,12 @@ class TestReadFamilyRouting:
         package attribute would make every later
         ``mock.patch("mempalace.mcp_server.tool_x")`` in the suite patch a
         ghost module.
+
+        Targets ``_import_mcp_server`` — the canonical helper from #355 —
+        through ``_local_mcp_server``, which delegates to it. Deliberately
+        a second, independently-written test of the same guarantee: this
+        one forces the import, the drawer family's asserts on the repaired
+        state, and a regression that survives both is genuinely fixed.
         """
         import sys as _sys
 
@@ -1129,6 +1160,7 @@ class TestReadFamilyRouting:
                 # re-fire and really was undone.
                 assert reimported is not popped
                 assert _sys.stdout is before
+                assert _sys.stdout is not _sys.stderr
             assert _sys.stdout is before
         finally:
             if popped is not None:
