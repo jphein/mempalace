@@ -5685,10 +5685,33 @@ def _import_mcp_server():
     fires only on the exact aliasing the redirect creates, never on a
     legitimately-replaced stdout (a pytest capture object, a pipe).
 
-    ``mcp_server._restore_stdout()`` is preferred over a bare
-    reassignment because it also reverses the fd-level ``dup2``; the
-    saved-stream fallback below covers a stale ``_REAL_STDOUT`` snapshot,
-    which is possible because that snapshot is taken at first import.
+    **Repair order, and why the caller's stream wins.**
+    ``mcp_server._restore_stdout()`` runs first because it is the only
+    thing that reverses the fd-level ``dup2`` — a bare reassignment would
+    leave fd 1 pointing at stderr. But *which stream* it installs is
+    ``_REAL_STDOUT``, a snapshot taken when mcp_server was **first**
+    imported in this process, so its age is unbounded: in a long-lived
+    process or a pytest session it can be a stream that has since been
+    replaced or closed. ``saved_stdout`` — read immediately before the
+    import — is by construction the stream this process is writing to
+    *now*. So once the fd is repaired we prefer the caller's stream
+    whenever it is a real one, rather than second-guessing the snapshot.
+
+    Today the two are the same object on the path that matters:
+    ``_REAL_STDOUT = sys.stdout`` is the first statement in mcp_server's
+    module body, above its own imports, so a first import captures
+    exactly what the caller just saved (verified). The preference is
+    therefore currently a no-op — deliberately kept, because that
+    equality is a coincidence of statement order in another module, and
+    an upstream sync that moves the snapshot down or adds an import above
+    it would silently turn it into a real divergence. Correct by
+    construction beats correct by coincidence.
+
+    One residual case is *not* closed and cannot be, from here: if
+    ``sys.stdout`` is already aliased to stderr on entry, then
+    ``saved_stdout`` is stderr too, there is no live stream to prefer,
+    and the repair is only as good as ``_REAL_STDOUT``. Reaching that
+    state needs a second, non-mcp_server hijack; no CLI path does it.
 
     Any CLI command routing to a local tool handler must import through
     here rather than calling ``from . import mcp_server`` directly.
@@ -5699,7 +5722,7 @@ def _import_mcp_server():
     if sys.stdout is sys.stderr:
         with contextlib.suppress(Exception):
             mcp_server._restore_stdout()
-        if sys.stdout is sys.stderr and saved_stdout is not sys.stderr:
+        if saved_stdout is not sys.stderr:
             sys.stdout = saved_stdout
     return mcp_server
 

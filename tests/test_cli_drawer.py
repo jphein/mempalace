@@ -720,6 +720,40 @@ class TestDrawerRouting:
         finally:
             _sys.stdout = real_stdout
 
+    def test_real_stdout_snapshot_matches_the_importers_stream(self):
+        """Pin the coincidence `_import_mcp_server`'s docstring relies on.
+
+        The helper prefers the caller's pre-import stream over whatever
+        ``_restore_stdout()`` installs, because ``_REAL_STDOUT`` is a
+        snapshot of unbounded age. Today the two are the same object,
+        since ``_REAL_STDOUT = sys.stdout`` is the first statement in
+        mcp_server's module body — above its own imports and above the
+        redirect. That equality is a property of statement order in
+        *another* module, so if an upstream sync moves the snapshot down
+        or adds an import above it, this test fails and the docstring's
+        claim gets re-examined rather than quietly going stale.
+
+        Runs in a subprocess because it needs a genuine first import.
+        """
+        import subprocess
+        import sys as _sys
+
+        probe = (
+            "import sys\n"
+            "saved = sys.stdout\n"
+            "from mempalace import mcp_server\n"
+            "print(sys.stdout is sys.stderr, mcp_server._REAL_STDOUT is saved, file=sys.stderr)\n"
+        )
+        result = subprocess.run(
+            [_sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert result.returncode == 0, result.stderr
+        # The import hijacks stdout, and the snapshot is the importer's stream.
+        assert "True True" in result.stderr
+
     def test_local_path_emits_json_on_stdout(self, capsys, tmp_path):
         """End-to-end guard: the local route's JSON must land on stdout."""
         from mempalace import cli
