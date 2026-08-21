@@ -5551,6 +5551,581 @@ def cmd_tunnels(args):
     _print_tunnels_table(data, scope_wing=wing)
 
 
+# ── mempalace drawer / mempalace duplicate ────────────────────────────
+#
+# Single-drawer CRUD (#355) and duplicate detection (#363) — the CLI face
+# of five drawer-family MCP tools. `list` browses by wing/room, `purge`
+# deletes in bulk and `move` relocates, but until now there was no way to
+# get / add / delete / update ONE drawer by ID from the shell.
+#
+# Routing follows `wake-up` (#285): daemon-strict and no ``--palace``
+# sends the call to the daemon's ``/mcp`` endpoint so the daemon stays the
+# single writer for the canonical palace; otherwise the same tool handler
+# runs in-process against the local palace. No silent fallback between the
+# two — that split-brain is what daemon-strict exists to prevent.
+#
+# Three deliberate departures from the issues' proposed shapes:
+#   * ``drawer update`` exposes --wing / --room / --tag but never
+#     --content. ``mempalace_update_drawer`` accepts new content; the
+#     fork's verbatim-always principle forbids the human CLI from
+#     rewriting stored drawer text (same reason `move` has no --content).
+#     #355's own proposal only shows tag/wing/room, so the issue and the
+#     principle agree. Filing new text is `drawer add`.
+#   * ``duplicate`` has no ``scan`` action. #363 sketches one but its
+#     "MCP tools covered" section lists only ``mempalace_check_duplicate``
+#     — no tool performs a corpus-wide sweep, and inventing one
+#     client-side would be a new algorithm, not a CLI binding.
+#   * ``duplicate check`` has no ``--wing``. The tool schema takes only
+#     content + threshold, and post-filtering its top-5 *palace-wide*
+#     candidates by wing would usually render as "not a duplicate" — a
+#     false negative, exactly what the tool's own vector_disabled branch
+#     refuses to emit.
+
+_DRAWER_LOCAL_HANDLERS = {
+    "mempalace_get_drawer": "tool_get_drawer",
+    "mempalace_add_drawer": "tool_add_drawer",
+    "mempalace_delete_drawer": "tool_delete_drawer",
+    "mempalace_update_drawer": "tool_update_drawer",
+    "mempalace_check_duplicate": "tool_check_duplicate",
+}
+
+_DUPLICATE_DEFAULT_THRESHOLD = 0.9
+
+
+def _unit_float(value: str) -> float:
+    """argparse type for a 0-1 similarity threshold.
+
+    A bare ``type=float`` would accept ``--threshold 90`` and silently
+    make every comparison a non-duplicate.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        raise argparse.ArgumentTypeError(
+            f"expected a number between 0 and 1, got {value!r}"
+        ) from None
+    if not 0.0 <= number <= 1.0:
+        raise argparse.ArgumentTypeError(f"--threshold must be between 0 and 1 (got {number})")
+    return number
+
+
+def _add_drawer_format_flag(parser) -> None:
+    """Attach the shared ``--format {table,json}`` flag to a leaf parser."""
+    parser.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, human summary), "
+            "json (tool pass-through; same as --json)"
+        ),
+    )
+
+
+def _add_drawer_output_flags(parser) -> None:
+    """Attach ``--json`` / ``--quiet`` to a nested leaf parser.
+
+    The bulk propagation loop in :func:`main` deliberately skips parsers
+    that own their own subparsers, so two-level commands have to register
+    these themselves (cf. ``logstream`` / ``artifact``).
+    """
+    parser.add_argument(
+        "--json",
+        "-j",
+        dest="json",
+        action="store_true",
+        default=False,
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--quiet",
+        "-q",
+        dest="quiet",
+        action="store_true",
+        default=False,
+        help=argparse.SUPPRESS,
+    )
+
+
+def _resolve_drawer_format(args) -> str:
+    """Pick drawer/duplicate output format. ``--format`` wins, then ``--json``."""
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def _import_mcp_server():
+    """Import ``mempalace.mcp_server`` without losing the CLI's stdout.
+
+    **The upstream mechanism.** ``mempalace/mcp_server.py`` redirects
+    stdout → stderr at *module scope* — the statements run during import,
+    before any function is called — at both the Python level
+    (``sys.stdout = sys.stderr``) and the file-descriptor level
+    (``os.dup2(2, 1)``). That is deliberate and correct for its own
+    purpose: chromadb/onnxruntime print banners, sometimes from C, and
+    they would corrupt Claude Desktop's JSON parser (#225). The module
+    undoes it in ``_restore_stdout()``, called from its own ``main()``
+    before entering the protocol loop — a path a CLI process never
+    reaches. So a bare ``from . import mcp_server`` inside a CLI command
+    silently rewires every later ``print`` to stderr, and a ``--json``
+    pipeline reads an empty document.
+
+    **Why ``sys.stdout is sys.stderr`` is the right probe.** It tests for
+    the damage rather than for the event that caused it, which buys three
+    properties at once. It is *idempotent* — once repaired the condition
+    is false, so calling this helper on every command is free and a
+    double call cannot double-restore. It is *order-independent* —
+    comparing against the stream saved just before the import would see
+    no change when some earlier command already imported the module, and
+    would then skip a repair that is still needed, because the damage is
+    identical regardless of who triggered it. And it is *narrow* — it
+    fires only on the exact aliasing the redirect creates, never on a
+    legitimately-replaced stdout (a pytest capture object, a pipe).
+
+    **Repair order, and why the caller's stream wins.**
+    ``mcp_server._restore_stdout()`` runs first because it is the only
+    thing that reverses the fd-level ``dup2`` — a bare reassignment would
+    leave fd 1 pointing at stderr. But *which stream* it installs is
+    ``_REAL_STDOUT``, a snapshot taken when mcp_server was **first**
+    imported in this process, so its age is unbounded: in a long-lived
+    process or a pytest session it can be a stream that has since been
+    replaced or closed. ``saved_stdout`` — read immediately before the
+    import — is by construction the stream this process is writing to
+    *now*. So once the fd is repaired we prefer the caller's stream
+    whenever it is a real one, rather than second-guessing the snapshot.
+
+    Today the two are the same object on the path that matters:
+    ``_REAL_STDOUT = sys.stdout`` is the first statement in mcp_server's
+    module body, above its own imports, so a first import captures
+    exactly what the caller just saved (verified). The preference is
+    therefore currently a no-op — deliberately kept, because that
+    equality is a coincidence of statement order in another module, and
+    an upstream sync that moves the snapshot down or adds an import above
+    it would silently turn it into a real divergence. Correct by
+    construction beats correct by coincidence.
+
+    One residual case is *not* closed and cannot be, from here: if
+    ``sys.stdout`` is already aliased to stderr on entry, then
+    ``saved_stdout`` is stderr too, there is no live stream to prefer,
+    and the repair is only as good as ``_REAL_STDOUT``. Reaching that
+    state needs a second, non-mcp_server hijack; no CLI path does it.
+
+    Any CLI command routing to a local tool handler must import through
+    here rather than calling ``from . import mcp_server`` directly.
+    """
+    saved_stdout = sys.stdout
+    from . import mcp_server
+
+    if sys.stdout is sys.stderr:
+        with contextlib.suppress(Exception):
+            mcp_server._restore_stdout()
+        if saved_stdout is not sys.stderr:
+            sys.stdout = saved_stdout
+    return mcp_server
+
+
+def _drawer_call(tool: str, arguments: dict, args) -> dict:
+    """Invoke one drawer-family MCP tool, daemon-first.
+
+    Daemon-strict and no ``--palace`` → the daemon's ``/mcp`` endpoint.
+    Otherwise the handler is pulled off ``mempalace.mcp_server`` by name
+    (``getattr`` rather than the ``TOOLS`` registry so the module
+    attribute stays the single patch point for tests) and called
+    in-process. ``DaemonError`` propagates to the caller.
+    """
+    if _daemon_strict() and not getattr(args, "palace", None):
+        return _call_daemon_tool(tool, arguments)
+
+    palace = getattr(args, "palace", None)
+    if palace:
+        # Mirror cmd_init's env-var handoff so mcp_server's lazily-read
+        # ``_config.palace_path`` resolves to the requested palace.
+        os.environ["MEMPALACE_PALACE_PATH"] = os.path.abspath(os.path.expanduser(palace))
+
+    mcp_server = _import_mcp_server()
+    handler = getattr(mcp_server, _DRAWER_LOCAL_HANDLERS[tool])
+    return handler(**arguments)
+
+
+def _drawer_exit_client_error(code: str, message: str, want_json: bool) -> None:
+    """Refuse a malformed invocation before any palace call. Exit 2."""
+    if want_json:
+        _emit_json({"error": code, "hint": message})
+    else:
+        print(f"\n  ERROR: {message}", file=sys.stderr)
+    sys.exit(2)
+
+
+def _drawer_call_or_exit(tool: str, arguments: dict, args, want_json: bool, fallback: str) -> dict:
+    """``_drawer_call`` plus the shared failure mapping.
+
+    Daemon unreachable → exit 1 (sibling parity with cmd_list / cmd_move /
+    cmd_tunnels). Palace reachable but the tool refused the operation
+    (``error`` key, or ``success is False``) → exit 2.
+    """
+    try:
+        data = _drawer_call(tool, arguments, args)
+    except DaemonError as e:
+        if want_json:
+            _emit_json({"error": str(e), "source": "daemon"})
+        else:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({e})",
+                file=sys.stderr,
+            )
+        sys.exit(1)
+
+    if not isinstance(data, dict):
+        data = {"result": data}
+    if data.get("error") or data.get("success") is False:
+        if want_json:
+            _emit_json(data)
+        else:
+            print(f"\n  ERROR: {data.get('error') or fallback}", file=sys.stderr)
+        sys.exit(2)
+    return data
+
+
+def _drawer_tag_line(data: dict) -> str:
+    tags = data.get("tags") or []
+    return ", ".join(str(t) for t in tags) if tags else "—"
+
+
+def _print_drawer_warnings(data: dict) -> None:
+    for warning in data.get("warnings") or []:
+        print(f"    warning: {warning}")
+    flags = data.get("sanitize_flags") or []
+    if flags:
+        print(f"    sanitized: {', '.join(str(f) for f in flags)}")
+
+
+def _print_drawer_get(data: dict) -> None:
+    """Metadata header, then the drawer's content verbatim.
+
+    Content is printed byte-exact — this command is the shell's read path
+    into the palace and a re-wrapped or truncated body would break the
+    verbatim promise. ``--format content`` drops the header entirely for
+    piping.
+    """
+    drawer_id = data.get("drawer_id", "")
+    metadata = data.get("metadata") or {}
+    print()
+    print(f"  DRAWER {drawer_id}")
+    print(f"  {'-' * 68}")
+    print(f"    wing    {data.get('wing') or '—'}")
+    print(f"    room    {data.get('room') or '—'}")
+    print(f"    tags    {_drawer_tag_line(data)}")
+    filed_at = metadata.get("filed_at")
+    if filed_at:
+        print(f"    filed   {filed_at}")
+    added_by = metadata.get("added_by")
+    if added_by:
+        print(f"    by      {added_by}")
+    source_file = metadata.get("source_file")
+    if source_file:
+        print(f"    source  {source_file}")
+    chunks = data.get("chunks")
+    if chunks:
+        print(f"    chunks  {chunks}")
+    print(f"  {'-' * 68}")
+    print()
+    _write_stdout_exact(data.get("content") or "")
+    print()
+
+
+def _print_drawer_add(data: dict) -> None:
+    drawer_id = data.get("drawer_id", "")
+    print()
+    if data.get("reason") == "already_exists":
+        print(f"  Drawer already filed — {drawer_id}")
+        print("    (identical wing/room/content; nothing was written)")
+    else:
+        print(f"  Filed drawer {drawer_id}")
+        print(f"    wing    {data.get('wing') or '—'}")
+        print(f"    room    {data.get('room') or '—'}")
+        chunks = data.get("chunks")
+        if chunks:
+            print(f"    chunks  {chunks}")
+    print(f"    tags    {_drawer_tag_line(data)}")
+    _print_drawer_warnings(data)
+    print()
+
+
+def _print_drawer_delete(data: dict) -> None:
+    rows = data.get("chunks_deleted") or len(data.get("deleted_ids") or [])
+    print()
+    print(f"  Deleted drawer {data.get('drawer_id', '')}")
+    print(f"    rows    {rows}")
+    print()
+
+
+def _print_drawer_update(data: dict, requested: set) -> None:
+    """Confirm which fields the update touched.
+
+    ``requested`` is the set of field names the user actually asked to
+    change. ``mempalace_update_drawer`` echoes the drawer's post-update
+    wing/room regardless of what changed, so untouched fields are marked
+    rather than presented as a move (same convention as
+    ``_print_move_result``).
+    """
+    print()
+    if data.get("noop"):
+        print(f"  Drawer {data.get('drawer_id', '')} unchanged — nothing to update")
+        print()
+        return
+    print(f"  Updated drawer {data.get('drawer_id', '')}")
+    for field in ("wing", "room"):
+        value = data.get(field) or "—"
+        marker = "→" if field in requested else " "
+        suffix = "" if field in requested else "  (unchanged)"
+        print(f"    {field:<7} {marker} {value}{suffix}")
+    if "tags" in requested:
+        print(f"    tags    → {_drawer_tag_line(data)}")
+    else:
+        print(f"    tags      {_drawer_tag_line(data)}  (unchanged)")
+    _print_drawer_warnings(data)
+    print()
+
+
+def _print_duplicate_report(data: dict, threshold: float) -> None:
+    if data.get("vector_disabled"):
+        print()
+        print("  Duplicate detection is UNAVAILABLE — vector search is disabled.")
+        reason = data.get("vector_disabled_reason")
+        if reason:
+            print(f"    reason  {reason}")
+        hint = data.get("hint")
+        if hint:
+            print(f"    hint    {hint}")
+        print()
+        return
+
+    matches = data.get("matches") or []
+    print()
+    if not matches:
+        print(f"  No duplicate found at threshold {threshold}")
+        print()
+        return
+
+    id_w = min(max(len("drawer"), max(len(str(m.get("id") or "")) for m in matches)), 46)
+    wing_w = min(max(len("wing"), max(len(str(m.get("wing") or "")) for m in matches)), 20)
+    room_w = min(max(len("room"), max(len(str(m.get("room") or "")) for m in matches)), 20)
+
+    print(f"  DUPLICATES — {len(matches)} at threshold {threshold}")
+    print(f"  {'-' * (id_w + wing_w + room_w + 16)}")
+    print(f"    {'drawer':<{id_w}}  {'wing':<{wing_w}}  {'room':<{room_w}}  {'sim':>5}")
+    for match in matches:
+        did = str(match.get("id") or "")
+        wing = str(match.get("wing") or "")
+        room = str(match.get("room") or "")
+        if len(did) > id_w:
+            did = did[: id_w - 1] + "…"
+        if len(wing) > wing_w:
+            wing = wing[: wing_w - 1] + "…"
+        if len(room) > room_w:
+            room = room[: room_w - 1] + "…"
+        similarity = match.get("similarity")
+        sim = f"{similarity:.3f}" if isinstance(similarity, (int, float)) else "—"
+        print(f"    {did:<{id_w}}  {wing:<{wing_w}}  {room:<{room_w}}  {sim:>5}")
+    print()
+
+
+def _drawer_delete_confirm(args, drawer_id: str, want_json: bool) -> bool:
+    """Confirmation gate before an irreversible single-drawer delete.
+
+    ``--confirm`` skips the gate. On a TTY (and not JSON) we prompt and
+    proceed only on y/yes. Non-interactive or JSON without ``--confirm``
+    is *refused* (exit 2) — a pipeline must never delete a drawer it
+    wasn't explicitly told to. Returns False on an interactive decline so
+    the caller can report "aborted" and exit 0. Mirrors
+    ``_bulk_move_confirm``.
+    """
+    if bool(getattr(args, "confirm", False)):
+        return True
+    if want_json or not sys.stdin.isatty():
+        msg = f"refusing to delete drawer {drawer_id} without --confirm in a non-interactive shell"
+        if want_json:
+            _emit_json({"error": "confirmation_required", "hint": msg, "drawer_id": drawer_id})
+        else:
+            print(f"\n  ERROR: {msg}", file=sys.stderr)
+        sys.exit(2)
+    answer = input(f"Delete drawer {drawer_id}? This is irreversible. [y/N] ").strip().lower()
+    return answer in ("y", "yes")
+
+
+def _drawer_content_or_exit(args, want_json: bool, *, required: bool):
+    """Resolve ``--content`` / ``--content-file`` into one string.
+
+    Returns None when neither was supplied and ``required`` is False.
+    """
+    try:
+        content = _read_text_arg(
+            getattr(args, "content", None),
+            getattr(args, "content_file", None),
+            default=None,
+        )
+    except (ValueError, OSError) as e:
+        _drawer_exit_client_error("bad_content", str(e), want_json)
+        return None  # pragma: no cover - _drawer_exit_client_error exits
+    if content is None and required:
+        _drawer_exit_client_error(
+            "content_required",
+            "pass the text with --content or --content-file (use '-' for stdin)",
+            want_json,
+        )
+    return content
+
+
+def _drawer_tags_or_exit(args, want_json: bool, *, clear_flag: str):
+    """Resolve repeatable ``--tag`` plus the explicit empty-list flag.
+
+    Returns None to leave the tool's own tag handling alone (auto
+    extraction on add, untouched on update), ``[]`` to clear, or the
+    supplied list.
+    """
+    tags = getattr(args, "tag", None)
+    clear = bool(getattr(args, clear_flag, False))
+    if tags and clear:
+        _drawer_exit_client_error(
+            "tag_conflict",
+            f"pass --tag or --{clear_flag.replace('_', '-')}, not both",
+            want_json,
+        )
+    if clear:
+        return []
+    return list(tags) if tags else None
+
+
+def cmd_drawer(args):
+    """Single-drawer CRUD by ID — get / add / delete / update (#355)."""
+    action = getattr(args, "drawer_action", None)
+    fmt = _resolve_drawer_format(args)
+    want_json = fmt == "json"
+
+    if action == "get":
+        data = _drawer_call_or_exit(
+            "mempalace_get_drawer",
+            {"drawer_id": args.drawer_id},
+            args,
+            want_json,
+            f"drawer not found: {args.drawer_id}",
+        )
+        if want_json:
+            _emit_json(data)
+        elif fmt == "content":
+            _write_stdout_exact(data.get("content") or "")
+        else:
+            _print_drawer_get(data)
+        return
+
+    if action == "add":
+        content = _drawer_content_or_exit(args, want_json, required=True)
+        payload = {
+            "wing": args.wing,
+            "room": args.room,
+            "content": content,
+            "added_by": args.added_by,
+        }
+        if getattr(args, "source", None):
+            payload["source_file"] = args.source
+        tags = _drawer_tags_or_exit(args, want_json, clear_flag="no_tags")
+        if tags is not None:
+            payload["tags"] = tags
+        data = _drawer_call_or_exit("mempalace_add_drawer", payload, args, want_json, "add failed")
+        if want_json:
+            _emit_json(data)
+        else:
+            _print_drawer_add(data)
+        return
+
+    if action == "delete":
+        if not _drawer_delete_confirm(args, args.drawer_id, want_json):
+            print("\n  Aborted — nothing deleted.\n")
+            return
+        data = _drawer_call_or_exit(
+            "mempalace_delete_drawer",
+            {"drawer_id": args.drawer_id},
+            args,
+            want_json,
+            f"drawer not found: {args.drawer_id}",
+        )
+        if want_json:
+            _emit_json(data)
+        else:
+            _print_drawer_delete(data)
+        return
+
+    # update — metadata only, never content (verbatim-always).
+    payload = {"drawer_id": args.drawer_id}
+    if getattr(args, "wing", None) is not None:
+        payload["wing"] = args.wing
+    if getattr(args, "room", None) is not None:
+        payload["room"] = args.room
+    tags = _drawer_tags_or_exit(args, want_json, clear_flag="clear_tags")
+    if tags is not None:
+        payload["tags"] = tags
+    if len(payload) == 1:
+        _drawer_exit_client_error(
+            "no_change",
+            "update requires at least one of --wing / --room / --tag / --clear-tags",
+            want_json,
+        )
+    data = _drawer_call_or_exit(
+        "mempalace_update_drawer", payload, args, want_json, "update failed"
+    )
+    if want_json:
+        _emit_json(data)
+    else:
+        _print_drawer_update(data, requested=set(payload) - {"drawer_id"})
+
+
+def cmd_duplicate(args):
+    """Check whether content already exists in the palace (#363).
+
+    Wraps ``mempalace_check_duplicate``. A completed check exits 0
+    whatever the verdict — ``is_duplicate`` in the payload is the answer,
+    and overloading the exit code by default would collide with the
+    daemon-unreachable 1 that every sibling command uses.
+
+    ``--fail-on-duplicate`` opts into a scriptable guard: non-zero then
+    means "do not file this", which is also what daemon-unreachable and a
+    disabled vector index mean, so ``duplicate check --file x
+    --fail-on-duplicate && file-it`` fails safe in every branch. A
+    disabled vector index cannot answer at all; the tool says so
+    explicitly rather than claiming "not a duplicate", and we always exit
+    2 on it so a guard never reads silence as novelty.
+    """
+    fmt = _resolve_drawer_format(args)
+    want_json = fmt == "json"
+
+    content = _drawer_content_or_exit(args, want_json, required=True)
+    threshold = getattr(args, "threshold", None)
+    if threshold is None:
+        threshold = _DUPLICATE_DEFAULT_THRESHOLD
+
+    data = _drawer_call_or_exit(
+        "mempalace_check_duplicate",
+        {"content": content, "threshold": threshold},
+        args,
+        want_json,
+        "duplicate check failed",
+    )
+
+    if want_json:
+        _emit_json(data)
+    else:
+        _print_duplicate_report(data, threshold)
+
+    if data.get("vector_disabled"):
+        sys.exit(2)
+    if data.get("is_duplicate") and getattr(args, "fail_on_duplicate", False):
+        sys.exit(1)
+
+
 # ── Logstream (RFC 003 agent coordination) ────────────────────────────────
 
 
@@ -8116,6 +8691,133 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         ),
     )
 
+    # drawer — single-drawer CRUD by ID (#355)
+    p_drawer = sub.add_parser(
+        "drawer",
+        help="Get / add / delete / update ONE drawer by ID",
+    )
+    drawer_sub = p_drawer.add_subparsers(dest="drawer_action")
+
+    p_drawer_get = drawer_sub.add_parser("get", help="Fetch one drawer verbatim by ID")
+    p_drawer_get.add_argument("drawer_id", help="ID of the drawer to fetch")
+    p_drawer_get.add_argument(
+        "--format",
+        choices=("table", "json", "content"),
+        default=None,
+        help=(
+            "Output format: table (default, metadata header + verbatim body), "
+            "json (tool pass-through; same as --json), "
+            "content (body only, byte-exact — for piping)"
+        ),
+    )
+    _add_drawer_output_flags(p_drawer_get)
+
+    p_drawer_add = drawer_sub.add_parser("add", help="File verbatim content as a new drawer")
+    p_drawer_add.add_argument("--wing", required=True, help="Wing to file under")
+    p_drawer_add.add_argument("--room", required=True, help="Room to file under")
+    p_drawer_add.add_argument("--content", default=None, help="Verbatim content to store")
+    p_drawer_add.add_argument(
+        "--content-file",
+        dest="content_file",
+        default=None,
+        help="Read content from a file ('-' for stdin) — byte-exact",
+    )
+    p_drawer_add.add_argument(
+        "--source", default=None, help="Where this came from (stored as source_file)"
+    )
+    p_drawer_add.add_argument(
+        "--added-by",
+        dest="added_by",
+        default="cli",
+        help="Who is filing this (default: cli)",
+    )
+    p_drawer_add.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        help="Tag for the drawer (repeatable). Omit to let the palace auto-extract tags.",
+    )
+    p_drawer_add.add_argument(
+        "--no-tags",
+        dest="no_tags",
+        action="store_true",
+        default=False,
+        help="File with an empty tag list, suppressing auto-extraction",
+    )
+    _add_drawer_format_flag(p_drawer_add)
+    _add_drawer_output_flags(p_drawer_add)
+
+    p_drawer_delete = drawer_sub.add_parser("delete", help="Delete one drawer by ID (irreversible)")
+    p_drawer_delete.add_argument("drawer_id", help="ID of the drawer to delete")
+    p_drawer_delete.add_argument(
+        "--confirm",
+        action="store_true",
+        default=False,
+        help="Skip the confirmation prompt (required to delete in a non-interactive shell)",
+    )
+    _add_drawer_format_flag(p_drawer_delete)
+    _add_drawer_output_flags(p_drawer_delete)
+
+    p_drawer_update = drawer_sub.add_parser(
+        "update",
+        help="Update one drawer's wing / room / tags (metadata only — never content)",
+    )
+    p_drawer_update.add_argument("drawer_id", help="ID of the drawer to update")
+    p_drawer_update.add_argument("--wing", default=None, help="New wing (omit to leave unchanged)")
+    p_drawer_update.add_argument("--room", default=None, help="New room (omit to leave unchanged)")
+    p_drawer_update.add_argument(
+        "--tag",
+        action="append",
+        default=None,
+        help="Replace the drawer's tags with these (repeatable)",
+    )
+    p_drawer_update.add_argument(
+        "--clear-tags",
+        dest="clear_tags",
+        action="store_true",
+        default=False,
+        help="Remove every tag from the drawer",
+    )
+    _add_drawer_format_flag(p_drawer_update)
+    _add_drawer_output_flags(p_drawer_update)
+
+    # duplicate — pre-ingest duplicate detection (#363)
+    p_duplicate = sub.add_parser(
+        "duplicate",
+        help="Check whether content is already filed in the palace",
+    )
+    duplicate_sub = p_duplicate.add_subparsers(dest="duplicate_action")
+
+    p_dup_check = duplicate_sub.add_parser("check", help="Semantic duplicate check for content")
+    p_dup_check.add_argument("--content", default=None, help="Content to check")
+    p_dup_check.add_argument(
+        # #363 proposes --file; --content-file is accepted too so muscle
+        # memory from `drawer add` (#355's spelling) works here as well.
+        "--file",
+        "--content-file",
+        dest="content_file",
+        default=None,
+        help="Read the content to check from a file ('-' for stdin)",
+    )
+    p_dup_check.add_argument(
+        "--threshold",
+        type=_unit_float,
+        default=None,
+        help=(
+            "Similarity threshold, 0-1 "
+            f"(default {_DUPLICATE_DEFAULT_THRESHOLD}); higher is stricter"
+        ),
+    )
+    p_dup_check.add_argument(
+        "--fail-on-duplicate",
+        dest="fail_on_duplicate",
+        action="store_true",
+        default=False,
+        help="Exit 1 when a duplicate is found, for use as a pre-ingest guard",
+    )
+    _add_drawer_format_flag(p_dup_check)
+    _add_drawer_output_flags(p_dup_check)
+
     # ── Propagate --json/--quiet to every subparser (issue #44) ─────
     # argparse parses pre-subcommand flags into ``args.json`` /
     # ``args.quiet`` only if they appear BEFORE the subcommand. To let
@@ -8282,6 +8984,24 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     except Exception:
         # Never let routing-announce crash a CLI invocation.
         pass
+
+    # Two-level commands that daemon-route (#355, #363) are dispatched
+    # here rather than beside `hook`/`artifact` above, so the #49 routing
+    # announcement still fires for them — knowing whether `drawer delete`
+    # hit the daemon or a local palace is the whole point of that line.
+    if args.command == "drawer":
+        if not getattr(args, "drawer_action", None):
+            p_drawer.print_help()
+            return
+        cmd_drawer(args)
+        return
+
+    if args.command == "duplicate":
+        if getattr(args, "duplicate_action", None) != "check":
+            p_duplicate.print_help()
+            return
+        cmd_duplicate(args)
+        return
 
     dispatch[args.command](args)
 
