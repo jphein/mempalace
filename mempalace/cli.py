@@ -7365,6 +7365,661 @@ def _reconfigure_stdio_utf8_on_windows():
     reconfigure_stdio_utf8_on_windows(stdout_errors="replace", stderr_errors="replace")
 
 
+# ── read-family commands: wings / hallway / checkpoint / taxonomy / aaak ──
+#
+# Slices of #191 (issues #356, #358, #360, #362). Each command wraps an
+# MCP tool that the daemon already serves but that had no CLI verb.
+#
+# Routing follows the ``cmd_mined`` / ``cmd_wakeup`` dual-path shape
+# (#285): daemon when ``_daemon_strict()`` is on and ``--palace`` was not
+# given, local otherwise. ``--palace`` is an explicit "inspect THAT
+# palace" request and always wins over daemon routing.
+#
+# Exit codes match the sibling read commands (``tags``, ``tunnels``,
+# ``overlap``, ``why``): 0 ok, 1 daemon unreachable, 2 inner-error
+# envelope or client-side validation failure.
+
+_WINGS_SORT_CHOICES = ("name", "count")
+_HALLWAY_DEFAULT_LIMIT = 50
+_CHECKPOINT_DEFAULT_THRESHOLD = 0.9
+
+
+def _resolve_read_format(args) -> str:
+    """``--format`` wins; ``--json`` is the shorthand; table is default.
+
+    Same contract as ``_resolve_tags_format`` / ``_resolve_tunnels_format``
+    — kept as one shared helper for the read family rather than a fourth
+    near-identical copy.
+    """
+    fmt = getattr(args, "format", None)
+    if fmt:
+        return fmt
+    if getattr(args, "json", False):
+        return "json"
+    return "table"
+
+
+def _read_family_fail(message: str, want_json: bool, code: int, source: str = "cli") -> None:
+    """Emit one error in the requested shape and exit with ``code``."""
+    if want_json:
+        _emit_json({"error": message, "source": source})
+    else:
+        print(f"\n  ERROR: {message}", file=sys.stderr)
+    sys.exit(code)
+
+
+def _daemon_tool_or_fail(name: str, arguments: dict, want_json: bool) -> dict:
+    """``_call_daemon_tool`` with the family's uniform failure handling.
+
+    Splits the two failure modes ``DaemonError`` conflates, because the
+    operator response differs and the sibling commands' single
+    "unreachable" message is actively wrong for the second:
+
+    - transport failure (message starts ``daemon unreachable``) → exit 1
+    - JSON-RPC error from a daemon that answered (``daemon error -32001:
+      ... exceeded PALACE_MCP_TOOL_TIMEOUT_SECONDS``) → exit 2, same
+      class as an inner ``{"error": ...}`` envelope
+
+    Never falls back to local: a silent fallback is exactly the
+    split-brain daemon-strict exists to prevent.
+    """
+    try:
+        return _call_daemon_tool(name, arguments)
+    except DaemonError as e:
+        detail = str(e)
+        unreachable = detail.startswith("daemon unreachable")
+        if want_json:
+            _emit_json(
+                {
+                    "error": detail,
+                    "source": "daemon",
+                    "tool": name,
+                    "reachable": not unreachable,
+                }
+            )
+        elif unreachable:
+            print(
+                f"palace daemon unreachable at {_daemon_url()} — "
+                f"see mempalace status for diagnostics ({detail})",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"\n  ERROR: daemon rejected {name}: {detail}",
+                file=sys.stderr,
+            )
+        sys.exit(1 if unreachable else 2)
+
+
+def _fail_on_error_envelope(data, want_json: bool, populated_key: str | None = None) -> None:
+    """Exit 2 when the tool returned an ``{"error": ...}`` envelope.
+
+    ``populated_key`` names the payload key that, when non-empty, means
+    the response is a usable partial rather than a hard failure (the
+    ``partial: true`` case ``tool_list_wings`` / ``tool_get_taxonomy``
+    can emit when a metadata facet read fails midway).
+    """
+    if not isinstance(data, dict) or "error" not in data:
+        return
+    if populated_key and data.get(populated_key):
+        return
+    if want_json:
+        _emit_json(data)
+    else:
+        print(f"\n  {data['error']}", file=sys.stderr)
+    sys.exit(2)
+
+
+@contextlib.contextmanager
+def _local_mcp_server(palace: str | None):
+    """Yield ``mempalace.mcp_server`` scoped to ``palace`` for one call.
+
+    Two concerns, both delegated to the mechanisms the drawer family
+    established in #355 rather than reimplemented here:
+
+    - **stdout** — ``_import_mcp_server()`` is the single canonical fix
+      for the import-time stdio hijack (#225). Its
+      ``sys.stdout is sys.stderr`` probe tests for the *damage* rather
+      than for the import that caused it, which makes it idempotent and
+      order-independent in a way that comparing against a pre-import
+      snapshot is not.
+    - **``--palace``** — ``MempalaceConfig.palace_path`` is a property
+      that re-reads ``MEMPALACE_PALACE_PATH`` on every access, so setting
+      the env var redirects the tool handlers even when ``mcp_server``
+      was imported long ago against a different config object. Rebinding
+      ``mcp_server._config`` would not: an already-imported module keeps
+      whatever singleton it was given.
+
+    What this adds over a bare env assignment is *scope*. ``os.environ``
+    is process-global and the tool handlers read it lazily, so a value
+    left behind would silently redirect a later command that passed no
+    ``--palace`` at all. The previous value is restored in a ``finally``,
+    including the "was not set" case, so a raising tool cannot leak the
+    override either.
+
+    The snapshot is taken **before** the import, not after, because
+    importing ``mcp_server`` is itself an environment mutation.
+    ``mcp_server`` runs ``parse_known_args()`` at *module scope*
+    (``_args = _parse_args()``) against whatever is in ``sys.argv`` — the
+    importing process's own command line — and then sets
+    ``MEMPALACE_PALACE_PATH`` from any ``--palace`` it finds there. So a
+    snapshot taken after the import would capture the value the import
+    just wrote and "restore" that, leaving the override behind. Reading
+    it first restores the environment the command actually started with.
+    (``--backend`` is mutated by the same block and is deliberately not
+    unwound here: the drawer family's ``--backend`` support depends on
+    it, and quietly reverting another lane's mechanism from this helper
+    would be worse than the narrow leak.)
+    """
+    key = "MEMPALACE_PALACE_PATH"
+    sentinel = object()
+    previous = os.environ.get(key, sentinel)
+
+    def _restore() -> None:
+        if previous is sentinel:
+            os.environ.pop(key, None)
+        else:
+            os.environ[key] = previous
+
+    try:
+        mcp_server = _import_mcp_server()
+        if palace:
+            os.environ[key] = os.path.abspath(os.path.expanduser(palace))
+        yield mcp_server
+    finally:
+        _restore()
+
+
+# ── mempalace wings (issue #356) ──────────────────────────────────────
+
+
+def _sorted_wing_rows(wings: dict, sort: str) -> list[tuple[str, int]]:
+    """Wing → count pairs ordered by name (default) or count descending.
+
+    Count order breaks ties by name so repeated runs are byte-identical
+    — a table that reshuffles between invocations is useless in a diff.
+    """
+    rows = [(str(name), int(count or 0)) for name, count in (wings or {}).items()]
+    if sort == "count":
+        rows.sort(key=lambda r: (-r[1], r[0]))
+    else:
+        rows.sort(key=lambda r: r[0])
+    return rows
+
+
+def _print_wings_table(data, sort: str, limit: int) -> None:
+    """Aligned wing rows — name, drawer count, share of the palace."""
+    wings = data.get("wings") if isinstance(data, dict) else None
+    rows = _sorted_wing_rows(wings or {}, sort)
+    if not rows:
+        print("\n  (no wings)\n")
+        return
+
+    total = sum(count for _, count in rows)
+    shown = rows[:limit] if limit else rows
+
+    name_w = max(len("wing"), max(len(name) for name, _ in shown))
+    name_w = min(name_w, 40)
+    count_w = max(len("drawers"), max(len(f"{c:,}") for _, c in shown))
+
+    print(f"\n  WINGS — {len(rows)} ({total:,} drawers)")
+    print(f"  {'-' * (name_w + count_w + 14)}")
+    print(f"    {'wing':<{name_w}}  {'drawers':>{count_w}}  {'share':>6}")
+    for name, count in shown:
+        label = name if len(name) <= name_w else name[: name_w - 1] + "…"
+        share = (count / total * 100) if total else 0.0
+        print(f"    {label:<{name_w}}  {count:>{count_w},}  {share:>5.1f}%")
+    if len(shown) < len(rows):
+        print(f"    … {len(rows) - len(shown):,} more (raise --limit to see them)")
+    print()
+
+
+def cmd_wings(args):
+    """List every wing with its drawer count (slice of #191, issue #356).
+
+    Wraps ``mempalace_list_wings``. On the daemon path the counts come
+    from ``GET /status/fast`` first — that endpoint already aggregates
+    wing counts from the metadata index and answers in well under a
+    second, whereas ``mempalace_list_wings`` over ``/mcp`` walks the
+    facet path and does not return in any usable time on a palace of a
+    few hundred thousand drawers (measured against the production
+    daemon, 2026-08-20). ``mempalace_list_wings`` stays as the fallback
+    for daemons that predate ``/status/fast``. Both shapes are reduced
+    to the tool's ``{"wings": {...}}`` envelope so ``--json`` consumers
+    see one contract regardless of which path served the request.
+
+    The issue also asked for a "last updated" column; ``tool_list_wings``
+    returns counts only and no timestamp is available anywhere on the
+    read path, so the table carries a share-of-palace percentage instead.
+    """
+    want_json = _resolve_read_format(args) == "json"
+    sort = getattr(args, "sort", "name") or "name"
+    limit = max(0, int(getattr(args, "limit", 0) or 0))
+
+    if _daemon_strict() and not getattr(args, "palace", None):
+        try:
+            fast = _call_daemon_rest("/status/fast")
+        except DaemonError as e:
+            _read_family_fail(
+                f"palace daemon unreachable at {_daemon_url()} ({e})", want_json, 1, "daemon"
+            )
+            return
+        if isinstance(fast, dict) and "wings" in fast:
+            data = {"wings": fast.get("wings") or {}}
+        else:
+            data = _daemon_tool_or_fail("mempalace_list_wings", {}, want_json)
+    else:
+        with _local_mcp_server(getattr(args, "palace", None)) as mcp_server:
+            data = mcp_server.tool_list_wings()
+
+    _fail_on_error_envelope(data, want_json, populated_key="wings")
+
+    if want_json:
+        _emit_json(data)
+        return
+    _print_wings_table(data, sort=sort, limit=limit)
+
+
+# ── mempalace taxonomy (issue #362) ───────────────────────────────────
+
+
+def _print_taxonomy_tree(data, wing_filter: str | None) -> None:
+    """Wing → room → count tree, wings ordered by total drawers desc."""
+    taxonomy = data.get("taxonomy") if isinstance(data, dict) else None
+    taxonomy = taxonomy or {}
+    if not taxonomy:
+        scope = f" for wing={wing_filter}" if wing_filter else ""
+        print(f"\n  (no taxonomy{scope})\n")
+        return
+
+    wing_totals = {w: sum(int(n or 0) for n in rooms.values()) for w, rooms in taxonomy.items()}
+    total = sum(wing_totals.values())
+    print(f"\n  TAXONOMY — {len(taxonomy)} wing(s), {total:,} drawers")
+    for wing in sorted(taxonomy, key=lambda w: (-wing_totals[w], w)):
+        rooms = taxonomy[wing] or {}
+        print(f"\n    {wing}  ({wing_totals[wing]:,})")
+        for room in sorted(rooms, key=lambda r: (-int(rooms[r] or 0), r)):
+            print(f"      {room:<28} {int(rooms[room] or 0):>10,}")
+    print()
+
+
+def cmd_taxonomy(args):
+    """Print the wing → room → drawer-count tree (slice of #191, issue #362).
+
+    Wraps ``mempalace_get_taxonomy``. ``--wing`` narrows the output to
+    one wing; the underlying tool takes no arguments, so the filter is
+    applied client-side after the tree comes back (documented here
+    because it does not reduce the work the daemon does).
+    """
+    want_json = _resolve_read_format(args) == "json"
+    wing = getattr(args, "wing", None)
+
+    if _daemon_strict() and not getattr(args, "palace", None):
+        data = _daemon_tool_or_fail("mempalace_get_taxonomy", {}, want_json)
+    else:
+        with _local_mcp_server(getattr(args, "palace", None)) as mcp_server:
+            data = mcp_server.tool_get_taxonomy()
+
+    _fail_on_error_envelope(data, want_json, populated_key="taxonomy")
+
+    if wing and isinstance(data, dict) and isinstance(data.get("taxonomy"), dict):
+        tree = data["taxonomy"]
+        data = dict(data)
+        data["taxonomy"] = {wing: tree[wing]} if wing in tree else {}
+        data["wing_filter"] = wing
+
+    if want_json:
+        _emit_json(data)
+        return
+    _print_taxonomy_tree(data, wing_filter=wing)
+
+
+# ── mempalace aaak spec (issue #362) ──────────────────────────────────
+
+
+def cmd_aaak(args):
+    """Print the AAAK dialect specification (slice of #191, issue #362).
+
+    Wraps ``mempalace_get_aaak_spec``. Routed rather than read straight
+    out of the local package on purpose: when a daemon is configured,
+    the spec that matters is the one the daemon is actually filing
+    against, which can differ from the locally installed version.
+    """
+    want_json = _resolve_read_format(args) == "json"
+
+    if _daemon_strict() and not getattr(args, "palace", None):
+        data = _daemon_tool_or_fail("mempalace_get_aaak_spec", {}, want_json)
+    else:
+        with _local_mcp_server(getattr(args, "palace", None)) as mcp_server:
+            data = mcp_server.tool_get_aaak_spec()
+
+    _fail_on_error_envelope(data, want_json, populated_key="aaak_spec")
+
+    if want_json:
+        _emit_json(data)
+        return
+
+    spec = (data or {}).get("aaak_spec") if isinstance(data, dict) else None
+    if not spec:
+        print("\n  (no AAAK spec returned)\n", file=sys.stderr)
+        sys.exit(2)
+    print(spec if spec.endswith("\n") else spec + "\n", end="")
+
+
+# ── mempalace hallway list|delete (issue #358) ────────────────────────
+
+
+def _hallway_rows(data) -> list[dict]:
+    """Normalise the tool response to a list of hallway records.
+
+    ``mempalace_list_hallways`` returns a bare list; tolerate a future
+    ``{"hallways": [...]}`` wrapping the way ``_print_tunnels_table``
+    does for its sibling tool.
+    """
+    if isinstance(data, dict):
+        return list(data.get("hallways") or data.get("data") or [])
+    return list(data or [])
+
+
+def _print_hallways_table(rows: list[dict], scope_wing: str | None, limit: int) -> None:
+    """Aligned hallway rows — id, wing, entity_a ↔ entity_b, co-occurrences."""
+    scope_label = f" — wing={scope_wing}" if scope_wing else ""
+    if not rows:
+        print(
+            f"\n  (no hallways{scope_label}) — they are built from drawer entities when you mine."
+        )
+        print()
+        return
+
+    shown = rows[:limit] if limit else rows
+    id_w = min(max(len("id"), max(len(str(h.get("id") or "")) for h in shown)), 34)
+    wing_w = min(max(len("wing"), max(len(str(h.get("wing") or "")) for h in shown)), 22)
+
+    def _pair(h: dict) -> str:
+        return f"{h.get('entity_a', '?')} ↔ {h.get('entity_b', '?')}"
+
+    pair_w = min(max(len("entities"), max(len(_pair(h)) for h in shown)), 44)
+
+    print(f"\n  HALLWAYS — {len(rows)}{scope_label}")
+    print(f"  {'-' * (id_w + wing_w + pair_w + 16)}")
+    print(f"    {'id':<{id_w}}  {'wing':<{wing_w}}  {'entities':<{pair_w}}  {'count':>6}")
+    for h in shown:
+        hid = _truncate_cell(str(h.get("id") or ""), id_w)
+        wing = _truncate_cell(str(h.get("wing") or ""), wing_w)
+        pair = _truncate_cell(_pair(h), pair_w)
+        count = int(h.get("co_occurrence_count") or 0)
+        print(f"    {hid:<{id_w}}  {wing:<{wing_w}}  {pair:<{pair_w}}  {count:>6,}")
+    if len(shown) < len(rows):
+        print(f"    … {len(rows) - len(shown):,} more (raise --limit to see them)")
+    print()
+
+
+def _truncate_cell(value: str, width: int) -> str:
+    return value if len(value) <= width else value[: width - 1] + "…"
+
+
+def cmd_hallway_list(args):
+    """List within-wing entity hallways (slice of #191, issue #358).
+
+    Wraps ``mempalace_list_hallways``. The pre-existing ``mempalace
+    hallways`` verb stays as a back-compatible local-only alias; this is
+    the daemon-routed superset with ``--json`` and stable ordering.
+    """
+    want_json = _resolve_read_format(args) == "json"
+    wing = getattr(args, "wing", None)
+    limit = max(0, int(getattr(args, "limit", _HALLWAY_DEFAULT_LIMIT) or 0))
+
+    if _daemon_strict() and not getattr(args, "palace", None):
+        arguments = {"wing": wing} if wing else {}
+        data = _daemon_tool_or_fail("mempalace_list_hallways", arguments, want_json)
+    else:
+        with _local_mcp_server(getattr(args, "palace", None)) as mcp_server:
+            data = mcp_server.tool_list_hallways(wing)
+
+    _fail_on_error_envelope(data, want_json)
+
+    rows = _hallway_rows(data)
+    # Deterministic order: strongest link first, id as the tiebreak.
+    rows.sort(key=lambda h: (-int(h.get("co_occurrence_count") or 0), str(h.get("id") or "")))
+
+    if want_json:
+        _emit_json({"hallways": rows, "wing_filter": wing, "total": len(rows)})
+        return
+    _print_hallways_table(rows, scope_wing=wing, limit=limit)
+
+
+def cmd_hallway_delete(args):
+    """Delete one hallway record by id (slice of #191, issue #358).
+
+    Destructive, so it refuses to act without ``--confirm``. On an
+    interactive terminal the flag can be supplied by answering the
+    prompt; with no TTY there is nobody to ask, so the command exits 2
+    rather than deleting on an implied yes.
+    """
+    want_json = _resolve_read_format(args) == "json"
+    hallway_id = getattr(args, "hallway_id", None)
+    if not hallway_id or not str(hallway_id).strip():
+        _read_family_fail("hallway delete requires a hallway id", want_json, 2)
+        return
+    hallway_id = str(hallway_id).strip()
+
+    if not getattr(args, "confirm", False):
+        if want_json or not _stdin_is_tty():
+            _read_family_fail(
+                f"refusing to delete hallway {hallway_id} without --confirm "
+                "(no interactive terminal to ask on)",
+                want_json,
+                2,
+            )
+            return
+        answer = input(f"  Delete hallway {hallway_id}? [y/N] ").strip().lower()
+        if answer not in ("y", "yes"):
+            print("  Aborted — nothing deleted.\n")
+            return
+
+    if _daemon_strict() and not getattr(args, "palace", None):
+        data = _daemon_tool_or_fail(
+            "mempalace_delete_hallway", {"hallway_id": hallway_id}, want_json
+        )
+    else:
+        with _local_mcp_server(getattr(args, "palace", None)) as mcp_server:
+            data = mcp_server.tool_delete_hallway(hallway_id)
+
+    _fail_on_error_envelope(data, want_json)
+
+    if want_json:
+        _emit_json(data)
+    elif (data or {}).get("deleted"):
+        print(f"\n  Deleted hallway {hallway_id}.\n")
+    else:
+        print(f"\n  No hallway with id {hallway_id} — nothing deleted.\n")
+    # A miss is not an error: delete is idempotent and the report above
+    # already distinguishes the two outcomes.
+
+
+def _stdin_is_tty() -> bool:
+    try:
+        return bool(sys.stdin.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
+def cmd_hallway(args):
+    """Dispatch the two-level ``hallway`` verb."""
+    action = getattr(args, "hallway_action", None)
+    if action == "list":
+        cmd_hallway_list(args)
+    elif action == "delete":
+        cmd_hallway_delete(args)
+
+
+# ── mempalace checkpoint (issue #360) ─────────────────────────────────
+#
+# The issue proposed ``--session <id>`` plus a ``checkpoint list``
+# subcommand. Neither exists in the tool: ``mempalace_checkpoint`` takes
+# ``{items:[{wing,room,content}], diary?, dedup_threshold?, added_by?}``
+# with ``items`` required, and it is write-only — there is no session
+# identifier and nothing to list. Per the wave brief the schema wins, so
+# the CLI mirrors the real payload.
+
+
+def _checkpoint_items(args) -> list[dict]:
+    """Build the ``items`` payload from ``--items-file`` or the single-item flags.
+
+    Raises ``ValueError`` with a caller-facing message on any malformed
+    input. Validation is deliberately duplicated here even though
+    ``tool_checkpoint`` guards its own inputs: a typo should cost a
+    non-zero exit, not a partially-filed batch reported as errors.
+    """
+    items_file = getattr(args, "items_file", None)
+    wing = getattr(args, "wing", None)
+    room = getattr(args, "room", None)
+    content_inline = getattr(args, "content", None)
+    content_file = getattr(args, "content_file", None)
+    single = any(v is not None for v in (wing, room, content_inline, content_file))
+
+    if items_file and single:
+        raise ValueError("pass --items-file or the single-item flags (--wing/--room/--content)")
+    if not items_file and not single:
+        raise ValueError(
+            "checkpoint needs items: --items-file PATH (or -) or --wing W --room R --content TEXT"
+        )
+
+    if items_file:
+        # _read_text_arg already maps "-" to a byte-exact stdin read.
+        raw = _read_text_arg(None, items_file)
+        try:
+            parsed = json.loads(raw)
+        except ValueError as e:
+            raise ValueError(f"--items-file is not valid JSON: {e}") from None
+        if isinstance(parsed, dict):
+            parsed = parsed.get("items", parsed)
+        if not isinstance(parsed, list):
+            raise ValueError("--items-file must contain a JSON array of {wing, room, content}")
+        items = parsed
+    else:
+        content = _read_text_arg(content_inline, content_file, default=None)
+        items = [{"wing": wing, "room": room, "content": content}]
+
+    if not items:
+        raise ValueError("no items to file")
+    for index, item in enumerate(items):
+        if not isinstance(item, dict):
+            raise ValueError(f"item {index} is not an object")
+        for field in ("wing", "room", "content"):
+            value = item.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"item {index}: {field} must be a non-empty string")
+    return items
+
+
+def _checkpoint_diary(args) -> dict | None:
+    """Build the optional ``diary`` payload, or ``None`` when unrequested."""
+    entry = _read_text_arg(
+        getattr(args, "diary_entry", None), getattr(args, "diary_entry_file", None), default=None
+    )
+    agent = getattr(args, "diary_agent", None)
+    topic = getattr(args, "diary_topic", None)
+    wing = getattr(args, "diary_wing", None)
+    if entry is None:
+        if any(v for v in (agent, topic, wing)):
+            raise ValueError("--diary-agent/--diary-topic/--diary-wing need --diary-entry too")
+        return None
+    if not entry.strip():
+        raise ValueError("--diary-entry must not be blank")
+    diary: dict = {"entry": entry}
+    if agent:
+        diary["agent_name"] = agent
+    if topic:
+        diary["topic"] = topic
+    if wing:
+        diary["wing"] = wing
+    return diary
+
+
+def _print_checkpoint_report(data) -> None:
+    added = (data or {}).get("added") or []
+    duplicates = (data or {}).get("duplicates") or []
+    errors = (data or {}).get("errors") or []
+    diary = (data or {}).get("diary")
+    print(f"\n  CHECKPOINT — {len(added)} filed, {len(duplicates)} duplicate, {len(errors)} error")
+    for entry in added:
+        print(f"    + {entry.get('wing', '?')}/{entry.get('room', '?')}  {entry.get('id', '')}")
+    for dup in duplicates:
+        print(f"    = {dup.get('room', '?')} (already filed)")
+    for err in errors:
+        print(f"    ! {err.get('error', err)}")
+    if diary:
+        print(f"    diary: {diary.get('id') or diary.get('error') or 'written'}")
+    print()
+
+
+def cmd_checkpoint(args):
+    """Batch-file a session in one call (slice of #191, issue #360).
+
+    Wraps ``mempalace_checkpoint``: semantic-dedups each item, files the
+    non-duplicates as drawers, then writes one optional diary entry.
+
+    This writes to the palace, so ``--dry-run`` prints the exact payload
+    that would be sent and exits without calling the tool — the cheap
+    way to check a generated ``--items-file`` before it lands.
+    """
+    want_json = _resolve_read_format(args) == "json"
+
+    try:
+        items = _checkpoint_items(args)
+        diary = _checkpoint_diary(args)
+    except (ValueError, OSError) as e:
+        _read_family_fail(str(e), want_json, 2)
+        return
+
+    try:
+        threshold = float(getattr(args, "dedup_threshold", _CHECKPOINT_DEFAULT_THRESHOLD))
+    except (TypeError, ValueError):
+        _read_family_fail("--dedup-threshold must be a number", want_json, 2)
+        return
+    if not 0.0 <= threshold <= 1.0:
+        _read_family_fail("--dedup-threshold must be between 0 and 1", want_json, 2)
+        return
+
+    arguments: dict = {"items": items, "dedup_threshold": threshold}
+    if diary is not None:
+        arguments["diary"] = diary
+    added_by = getattr(args, "added_by", None)
+    if added_by:
+        arguments["added_by"] = added_by
+
+    if getattr(args, "dry_run", False):
+        preview = {"dry_run": True, "would_send": arguments}
+        if want_json:
+            _emit_json(preview)
+        else:
+            print(f"\n  DRY RUN — would file {len(items)} item(s), nothing written.")
+            for item in items:
+                print(f"    {item['wing']}/{item['room']}  ({len(item['content']):,} chars)")
+            if diary is not None:
+                print(f"    diary by {diary.get('agent_name', '(default)')}")
+            print()
+        return
+
+    if _daemon_strict() and not getattr(args, "palace", None):
+        data = _daemon_tool_or_fail("mempalace_checkpoint", arguments, want_json)
+    else:
+        with _local_mcp_server(getattr(args, "palace", None)) as mcp_server:
+            data = mcp_server.tool_checkpoint(**arguments)
+
+    _fail_on_error_envelope(data, want_json, populated_key="added")
+
+    if want_json:
+        _emit_json(data)
+        return
+    _print_checkpoint_report(data)
+    # Exit 2 when nothing landed and the batch reported errors — a
+    # scripted caller must not read "no output" as success.
+    if not (data or {}).get("added") and (data or {}).get("errors"):
+        sys.exit(2)
+
+
 def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward dispatch; see #383 sync
     """CLI entry point for the ``mempalace`` console script.
 
@@ -8818,6 +9473,180 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
     _add_drawer_format_flag(p_dup_check)
     _add_drawer_output_flags(p_dup_check)
 
+    # wings — list every wing with drawer counts (slice of #191, issue #356)
+    p_wings = sub.add_parser(
+        "wings",
+        help="List all wings with drawer counts (mempalace_list_wings)",
+    )
+    p_wings.add_argument(
+        "--sort",
+        choices=_WINGS_SORT_CHOICES,
+        default="name",
+        help="Row order: name (default, alphabetical) or count (drawers descending)",
+    )
+    p_wings.add_argument(
+        "--limit",
+        type=_nonneg_int,
+        default=0,
+        help="Show at most N wings (0 = all, the default). Most useful with --sort count.",
+    )
+    p_wings.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help=(
+            "Output format: table (default, wing/drawers/share columns), "
+            'json ({"wings": {...}} tool envelope; same as --json)'
+        ),
+    )
+
+    # hallway — list/delete within-wing entity hallways (slice of #191, issue #358)
+    p_hallway = sub.add_parser(
+        "hallway",
+        help=(
+            "Inspect or delete entity hallways (daemon-routed superset of the "
+            "legacy local-only `hallways` verb)"
+        ),
+    )
+    sub_hallway = p_hallway.add_subparsers(dest="hallway_action")
+    p_hallway_list = sub_hallway.add_parser("list", help="List hallways (mempalace_list_hallways)")
+    p_hallway_list.add_argument("--wing", default=None, help="Filter to hallways in one wing")
+    p_hallway_list.add_argument(
+        "--limit",
+        type=_nonneg_int,
+        default=_HALLWAY_DEFAULT_LIMIT,
+        help=f"Rows to print (0 = all; default {_HALLWAY_DEFAULT_LIMIT})",
+    )
+    p_hallway_delete = sub_hallway.add_parser(
+        "delete", help="Delete one hallway by id (mempalace_delete_hallway)"
+    )
+    p_hallway_delete.add_argument("hallway_id", help="Hallway ID to delete")
+    p_hallway_delete.add_argument(
+        "--confirm",
+        action="store_true",
+        default=False,
+        help="Required to actually delete; without it the command prompts (TTY) or refuses",
+    )
+    # The --json/--quiet propagation loop below skips two-level parents,
+    # so the leaf parsers declare the output flags themselves.
+    for _leaf in (p_hallway_list, p_hallway_delete):
+        _leaf.add_argument(
+            "--format",
+            choices=("table", "json"),
+            default=None,
+            help="Output format: table (default) or json (same as --json)",
+        )
+        _leaf.add_argument("--json", "-j", dest="json", action="store_true", default=False)
+        _leaf.add_argument("--quiet", "-q", dest="quiet", action="store_true", default=False)
+
+    # checkpoint — batch session save (slice of #191, issue #360)
+    p_checkpoint = sub.add_parser(
+        "checkpoint",
+        help="File a batch of drawers plus one diary entry in a single call",
+        description=(
+            "Wraps mempalace_checkpoint. The tool takes "
+            "{items:[{wing,room,content}], diary?, dedup_threshold?, added_by?} — "
+            "there is no session id and nothing to list, so issue #360's proposed "
+            "--session / `checkpoint list` shapes are not implementable."
+        ),
+    )
+    p_checkpoint.add_argument(
+        "--items-file",
+        dest="items_file",
+        default=None,
+        help="JSON array of {wing, room, content} objects; '-' reads stdin",
+    )
+    p_checkpoint.add_argument("--wing", default=None, help="Single-item form: target wing")
+    p_checkpoint.add_argument("--room", default=None, help="Single-item form: target room")
+    p_checkpoint.add_argument(
+        "--content", default=None, help="Single-item form: verbatim content to file"
+    )
+    p_checkpoint.add_argument(
+        "--content-file",
+        dest="content_file",
+        default=None,
+        help="Single-item form: read content from a file ('-' reads stdin)",
+    )
+    p_checkpoint.add_argument(
+        "--diary-agent", dest="diary_agent", default=None, help="Diary entry author"
+    )
+    p_checkpoint.add_argument(
+        "--diary-entry", dest="diary_entry", default=None, help="Diary entry text (AAAK format)"
+    )
+    p_checkpoint.add_argument(
+        "--diary-entry-file",
+        dest="diary_entry_file",
+        default=None,
+        help="Read the diary entry from a file ('-' reads stdin)",
+    )
+    p_checkpoint.add_argument(
+        "--diary-topic", dest="diary_topic", default=None, help="Diary topic tag"
+    )
+    p_checkpoint.add_argument(
+        "--diary-wing", dest="diary_wing", default=None, help="Diary target wing"
+    )
+    p_checkpoint.add_argument(
+        "--dedup-threshold",
+        dest="dedup_threshold",
+        type=float,
+        default=_CHECKPOINT_DEFAULT_THRESHOLD,
+        help=(
+            "Similarity threshold 0-1 for the per-item duplicate check "
+            f"(default {_CHECKPOINT_DEFAULT_THRESHOLD})"
+        ),
+    )
+    p_checkpoint.add_argument(
+        "--added-by",
+        dest="added_by",
+        default=None,
+        help="Attribution for the filed drawers (falls back to the diary agent, then 'checkpoint')",
+    )
+    p_checkpoint.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        default=False,
+        help="Validate and print the payload that would be sent; write nothing",
+    )
+    p_checkpoint.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format: table (default, per-item report) or json (same as --json)",
+    )
+
+    # taxonomy / aaak — reference reads (slice of #191, issue #362)
+    p_taxonomy = sub.add_parser(
+        "taxonomy",
+        help="Print the wing → room → drawer-count tree (mempalace_get_taxonomy)",
+    )
+    p_taxonomy.add_argument(
+        "--wing",
+        default=None,
+        help="Show only this wing (applied client-side; the tool takes no arguments)",
+    )
+    p_taxonomy.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format: table (default, indented tree) or json (same as --json)",
+    )
+
+    p_aaak = sub.add_parser(
+        "aaak",
+        help="AAAK dialect reference (mempalace_get_aaak_spec)",
+    )
+    sub_aaak = p_aaak.add_subparsers(dest="aaak_action")
+    p_aaak_spec = sub_aaak.add_parser("spec", help="Print the AAAK dialect specification")
+    p_aaak_spec.add_argument(
+        "--format",
+        choices=("table", "json"),
+        default=None,
+        help="Output format: table (default, raw spec text) or json (same as --json)",
+    )
+    p_aaak_spec.add_argument("--json", "-j", dest="json", action="store_true", default=False)
+    p_aaak_spec.add_argument("--quiet", "-q", dest="quiet", action="store_true", default=False)
+
     # ── Propagate --json/--quiet to every subparser (issue #44) ─────
     # argparse parses pre-subcommand flags into ``args.json`` /
     # ``args.quiet`` only if they appear BEFORE the subcommand. To let
@@ -8914,6 +9743,20 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         cmd_daemon(args)
         return
 
+    if args.command == "hallway":
+        if not getattr(args, "hallway_action", None):
+            p_hallway.print_help()
+            return
+        cmd_hallway(args)
+        return
+
+    if args.command == "aaak":
+        if getattr(args, "aaak_action", None) != "spec":
+            p_aaak.print_help()
+            return
+        cmd_aaak(args)
+        return
+
     dispatch = {
         "init": cmd_init,
         "mine": cmd_mine,
@@ -8949,6 +9792,10 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         "tunnels": cmd_tunnels,
         "mined": cmd_mined,
         "replay": cmd_replay,
+        # read family — slices of #191 (issues #356, #360, #362)
+        "wings": cmd_wings,
+        "checkpoint": cmd_checkpoint,
+        "taxonomy": cmd_taxonomy,
     }
 
     # Issue #49: announce the routing decision to stderr when daemon_url is
