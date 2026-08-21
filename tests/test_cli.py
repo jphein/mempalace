@@ -1,8 +1,10 @@
 """Tests for mempalace.cli — the main CLI dispatcher."""
 
 import argparse
+import errno
 import os
 import shlex
+import socket
 import sqlite3
 import subprocess
 import sys
@@ -536,7 +538,14 @@ def test_cmd_search_calls_search(mock_config_cls):
     mock_config_cls.return_value.palace_path = "/fake/palace"
     mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
     args = argparse.Namespace(
-        palace=None, query="test query", wing="mywing", room="myroom", results=3, tags=None
+        palace=None,
+        query="test query",
+        wing="mywing",
+        room="myroom",
+        results=3,
+        tags=None,
+        since="2026-04-01",
+        before=None,
     )
     with patch("mempalace.searcher.search") as mock_search:
         cmd_search(args)
@@ -547,6 +556,8 @@ def test_cmd_search_calls_search(mock_config_cls):
             room="myroom",
             tags=None,
             n_results=3,
+            since="2026-04-01",
+            before=None,
         )
 
 
@@ -554,7 +565,16 @@ def test_cmd_search_calls_search(mock_config_cls):
 def test_cmd_search_error_exits(mock_config_cls):
     mock_config_cls.return_value.palace_path = "/fake/palace"
     mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
-    args = argparse.Namespace(palace=None, query="q", wing=None, room=None, results=5)
+    args = argparse.Namespace(
+        palace=None,
+        query="q",
+        wing=None,
+        room=None,
+        results=5,
+        tags=None,
+        since=None,
+        before=None,
+    )
     from mempalace.searcher import SearchError
 
     with patch("mempalace.searcher.search", side_effect=SearchError("fail")):
@@ -1013,6 +1033,7 @@ def test_cmd_mine_convos_mode(mock_config_cls):
         no_gitignore=False,
         include_ignored=[],
         extract="general",
+        include_subagents=False,
     )
     with patch("mempalace.convo_miner.mine_convos") as mock_mine:
         cmd_mine(args)
@@ -1024,7 +1045,31 @@ def test_cmd_mine_convos_mode(mock_config_cls):
             limit=10,
             dry_run=True,
             extract_mode="general",
+            include_subagents=False,
         )
+
+
+@patch("mempalace.cli.MempalaceConfig")
+def test_cmd_mine_convos_mode_threads_include_subagents_flag(mock_config_cls):
+    mock_config_cls.return_value.palace_path = "/fake/palace"
+    mock_config_cls.return_value.daemon_strict = False  # #49: prevent MagicMock-truthy daemon route
+    args = argparse.Namespace(
+        dir="/chats",
+        palace=None,
+        mode="convos",
+        wing="mywing",
+        agent="me",
+        limit=10,
+        dry_run=True,
+        no_gitignore=False,
+        include_ignored=[],
+        extract="exchange",
+        include_subagents=True,
+    )
+    with patch("mempalace.convo_miner.mine_convos") as mock_mine:
+        cmd_mine(args)
+        kwargs = mock_mine.call_args.kwargs
+        assert kwargs["include_subagents"] is True
 
 
 @patch("mempalace.cli.MempalaceConfig")
@@ -1620,6 +1665,79 @@ def test_cmd_repair_success(mock_config_cls, tmp_path, capsys):
     mock_new_col.add.assert_not_called()
 
 
+@pytest.mark.skipif(
+    os.name == "nt" or not hasattr(socket, "AF_UNIX"),
+    reason="Unix domain socket files are POSIX-only",
+)
+@patch("mempalace.cli.MempalaceConfig")
+def test_cmd_repair_survives_a_socket_in_the_palace_directory(
+    mock_config_cls, tmp_path, monkeypatch, capsys
+):
+    """#2207: a leftover daemon socket aborted repair at the backup step.
+
+    ``shutil.copytree`` raises on a Unix domain socket, so the command died
+    with a traceback before ``_rebuild_collection_via_temp`` ever ran, and
+    re-running only repeated it.
+    """
+    palace_dir = tmp_path / "palace"
+    palace_dir.mkdir()
+    sqlite3.connect(str(palace_dir / "chroma.sqlite3")).close()
+    # Bound by relative name: the absolute tmp path can exceed the sun_path
+    # limit, which is tight on macOS.
+    monkeypatch.chdir(palace_dir)
+    leftover = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        leftover.bind("mcp.sock")
+    finally:
+        leftover.close()
+    # A link out of the palace, to pin that this backup still DEREFERENCES
+    # links. Preserving them instead would put a bare symlink in the backup,
+    # and the rebuild that follows can leave it pointing at nothing.
+    outside = tmp_path / "outside.json"
+    outside.write_text("tunnel payload", encoding="utf-8")
+    try:
+        (palace_dir / "tunnels.json").symlink_to(outside)
+    except OSError as exc:
+        # Only a permission refusal is a skip; anything else is a bug here.
+        if os.name != "nt" and exc.errno not in (errno.EPERM, errno.EACCES):
+            raise
+        pytest.skip(f"symlink creation not permitted for this user: {exc}")
+
+    mock_config_cls.return_value.palace_path = str(palace_dir)
+    mock_config_cls.return_value.collection_name = "mempalace_drawers"
+    args = argparse.Namespace(palace=None, yes=True)
+    mock_col = MagicMock()
+    mock_col.count.return_value = 2
+    mock_col.get.return_value = {
+        "ids": ["id1", "id2"],
+        "documents": ["doc1", "doc2"],
+        "metadatas": [{"wing": "a"}, {"wing": "b"}],
+    }
+    mock_temp_col = MagicMock()
+    mock_temp_col.count.return_value = 2
+    mock_new_col = MagicMock()
+    mock_new_col.count.return_value = 2
+    mock_backend = _mock_backend_for(col=mock_col, new_col=mock_new_col)
+    mock_backend.create_collection.side_effect = [mock_temp_col, mock_new_col]
+
+    with patch("mempalace.backends.chroma.ChromaBackend", return_value=mock_backend):
+        cmd_repair(args)
+
+    out = capsys.readouterr().out
+    assert "Repair complete" in out
+    assert "    mcp.sock (socket)" in out.splitlines()
+    backup_dir = tmp_path / "palace.backup"
+    assert (backup_dir / "chroma.sqlite3").is_file()
+    assert not (backup_dir / "mcp.sock").exists()
+    # The socket is skipped, never removed from the live palace.
+    assert (palace_dir / "mcp.sock").exists()
+    # Dereferenced, so the backup survives losing what the link pointed at.
+    backed_up_link = backup_dir / "tunnels.json"
+    assert not backed_up_link.is_symlink()
+    outside.unlink()
+    assert backed_up_link.read_text(encoding="utf-8") == "tunnel payload"
+
+
 @patch("mempalace.cli.MempalaceConfig")
 def test_cmd_repair_uses_configured_collection(mock_config_cls, tmp_path, capsys):
     palace_dir = tmp_path / "palace"
@@ -1698,7 +1816,7 @@ def test_cmd_repair_default_mode_dry_run_writes_nothing(mock_config_cls, tmp_pat
         cmd_repair(args)
 
     out = capsys.readouterr().out
-    assert "DRY RUN — no changes will be made." in out
+    assert "DRY RUN -- no changes will be made." in out
     assert "holds 2 rows" in out
     assert "Repair complete" not in out
     # The count comes from read-only SQLite, never from a chromadb client:

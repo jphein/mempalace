@@ -64,6 +64,10 @@
         "link": "/reference/python-api/daemon"
       },
       {
+        "text": "mempalace.date_window",
+        "link": "/reference/python-api/date_window"
+      },
+      {
         "text": "mempalace.dedup",
         "link": "/reference/python-api/dedup"
       },
@@ -190,6 +194,10 @@
       {
         "text": "mempalace.logsync",
         "link": "/reference/python-api/logsync"
+      },
+      {
+        "text": "mempalace.mcp_proxy",
+        "link": "/reference/python-api/mcp_proxy"
       },
       {
         "text": "mempalace.mcp_server",
@@ -414,6 +422,16 @@
       {
         "text": "mempalace.backends.sqlite_exact",
         "link": "/reference/python-api/backends/sqlite_exact"
+      }
+    ]
+  },
+  {
+    "text": "integrations",
+    "collapsed": true,
+    "items": [
+      {
+        "text": "mempalace.integrations.hermes",
+        "link": "/reference/python-api/integrations/hermes"
       }
     ]
   },

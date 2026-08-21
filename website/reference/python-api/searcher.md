@@ -36,10 +36,13 @@ bare and zero clauses yield an empty filter (#1815).
 ### `search`
 
 ```python
-def search(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, n_results: int = 5)
+def search(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, n_results: int = 5, since: str = None, before: str = None)
 ```
 
 Search the palace. Returns verbatim drawer content.
+Optionally filter by wing (project) or room (aspect), and/or narrow to
+drawers whose ``filed_at`` falls in the ``[since, before)`` window —
+same semantics as ``search_memories``/``list_drawers`` (#1128/#463).
 Optionally filter by wing (project) or room (aspect).
 
 Delegates to ``search_memories`` so CLI and MCP callers share the same
@@ -48,7 +51,7 @@ hybrid ranking, sqlite-BM25 fallback, and scope-aware warnings.
 ### `search_memories`
 
 ```python
-def search_memories(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, source_file: str = None, n_results: int = 5, max_distance: float = 0.0, vector_disabled: bool = False, candidate_strategy: str = 'vector', fusion_mode: str = 'convex', collection_name: str = None, lang: Optional[str] = None) -> dict
+def search_memories(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, source_file: str = None, since: str = None, before: str = None, n_results: int = 5, max_distance: float = 0.0, vector_disabled: bool = False, candidate_strategy: str = 'vector', fusion_mode: str = 'convex', collection_name: str = None, lang: Optional[str] = None) -> dict
 ```
 
 Programmatic search — returns a dict instead of printing.
@@ -66,6 +69,16 @@ Args:
     room: Optional room filter.
     source_file: Optional exact source_file filter. Matches the full
         stored source_file value verbatim (#1815).
+    since: Optional inclusive ISO date/datetime lower bound on a
+        drawer's ``filed_at`` (ingest time, the ``created_at`` shown in
+        results) — ``[since, before)`` window semantics shared with
+        ``list_drawers`` (#1128): wall-clock naive comparison, drawers
+        with missing/unparseable ``filed_at`` excluded while a bound is
+        active. Filtering happens after retrieval (ChromaDB rejects
+        string operands for ``$gte``/``$lt``), so the candidate pool is
+        widened via ``_candidate_pool_size`` — see
+        ``date_filter_pool_truncated`` in the response.
+    before: Optional exclusive ISO upper bound; see ``since``.
     n_results: Max results to return.
     max_distance: Max cosine distance threshold. The palace collection uses
         cosine distance (hnsw:space=cosine) — 0 = identical, 2 = opposite.

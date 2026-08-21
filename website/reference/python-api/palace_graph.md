@@ -19,6 +19,23 @@ No external graph DB needed — built from ChromaDB metadata.
 
 ## Functions
 
+### `sqlite_grouped_counts_reader`
+
+```python
+def sqlite_grouped_counts_reader(config = None)
+```
+
+Return the backend's grouped-counts function, or ``None``.
+
+``None`` means the sqlite path cannot serve this palace and the caller
+should use the collection — which is also how a missing or unreadable
+palace keeps reporting a real diagnostic instead of an empty graph.
+
+The backend is resolved from *configuration*, not by sniffing the palace
+directory for db files: a directory holding artifacts for two backends is
+a ``BackendMismatchError`` on every normal path, and sniffing would quietly
+pick one instead of surfacing that.
+
 ### `invalidate_graph_cache`
 
 ```python

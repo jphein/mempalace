@@ -189,6 +189,43 @@ Cross-platform file lock for mine operations.
 Prevents multiple agents from mining the same file simultaneously,
 which causes duplicate drawers when the delete+insert cycle interleaves.
 
+### `reap_stale_mine_locks`
+
+```python
+def reap_stale_mine_locks(*, min_age_seconds: int = 3600) -> tuple[int, int]
+```
+
+Best-effort garbage collection for orphaned per-source-file mine locks.
+
+``_cleanup_mine_lock_file`` reclaims a lock file correctly on the happy
+path (see its docstring) — but only for the *specific* lock a
+:func:`mine_lock` context manager just released. A process that dies
+before reaching its own ``finally`` block (killed, crashed, force-quit,
+host reboot) never runs that cleanup, and nothing else in this codebase
+later revisits that lock file. Locks in ``~/.mempalace/locks/`` can
+accumulate unboundedly over time as a result — one long-lived
+installation was found with 5,636 stale entries, the oldest several
+months old, none held by any live process (confirmed via ``lsof``).
+
+This reuses :func:`_cleanup_mine_lock_file` itself for the actual
+removal — same nonblocking-flock-reacquire safety mechanism, same
+Windows/POSIX handling, no duplicated locking logic. A lock is only
+ever removed after *this* process re-acquires it, so anything
+genuinely held by a live process is left untouched regardless of
+``min_age_seconds``. ``min_age_seconds`` is a courtesy throttle only —
+it avoids racing a lock that was *just* released and may still be
+mid-rendezvous with a waiter on the same pathname; it is not a
+substitute for the flock check, which is what actually makes removal
+safe.
+
+Skips ``mine_palace_*.lock`` files — those belong to the newer
+palace-level :func:`mine_palace_lock` and have their own
+lifecycle/holder tracking; this targets only the per-source-file locks
+:func:`mine_lock` creates via :func:`_mine_lock_path`.
+
+Returns ``(reaped, skipped)`` counts, for logging/testing — callers
+don't need to act on them.
+
 ### `mine_palace_lock`
 
 ```python
@@ -255,6 +292,15 @@ that extraction mode so exchange-mode and general-mode drawers can coexist
 for the same source transcript. Legacy drawers without extract_mode are
 treated as exchange-mode drawers.
 
+A drawer whose metadata carries ``chunk_total`` (see #21) is only
+counted toward a match once its stored_mtime group has accumulated at
+least that many drawers -- guarding against a mid-file crash between
+upsert batches, where the surviving drawers share the current mtime
+(the file itself was never touched) but are short of the full set. A
+drawer with no ``chunk_total`` (legacy rows, or a single-shot
+``add_drawer()`` call with no partial-batch risk) is trusted on its own,
+exactly as before.
+
 ### `prefetch_mined_set`
 
 ```python
@@ -280,6 +326,13 @@ when the drawer was written -- both should be treated as stale.
 
 When extract_mode is set, mirrors file_already_mined(..., extract_mode=...)
 so conversation mines skip per extraction mode rather than per source file.
+
+Completeness mirrors :func:`file_already_mined`'s ``chunk_total`` rule
+(#2183): a source that only has a mid-file partial (surviving drawers
+share the current mtime but are short of ``chunk_total``) is **omitted**
+from the result so the bulk skip path re-mines instead of permanently
+stranding the missing exchanges. Drawers with no ``chunk_total``
+(legacy rows, registry sentinels) are trusted on their own, as before.
 
 The convo miner walks thousands of transcript files; per-file
 `collection.get(where={"source_file": X})` costs ~2s on a 150k-drawer

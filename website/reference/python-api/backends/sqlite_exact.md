@@ -7,6 +7,9 @@ SQLite exact-vector backend for MemPalace.
 This backend is intentionally simple and local-first. It is a correctness
 backend, not a high-throughput ANN backend: vectors are stored as float32
 blobs and query uses exact cosine distance over the matching collection.
+Unfiltered query() ranks from the embedding column only (vectorized numpy),
+hydrates the top-k documents afterwards, and caches the matrix on the
+long-lived handle so a hub does not re-read every blob on the next search.
 
 ## Classes
 
@@ -15,7 +18,7 @@ blobs and query uses exact cosine distance over the matching collection.
 #### `__init__`
 
 ```python
-def __init__(self, handle: _SQLiteExactHandle, collection_name: str)
+def __init__(self, handle: _SQLiteExactHandle, collection_name: str, backend: Optional[SQLiteExactBackend] = None)
 ```
 
 #### `get_stored_embedder_identity`
@@ -70,6 +73,12 @@ def delete(self, *, ids = None, where = None)
 
 ```python
 def count(self) -> int
+```
+
+#### `facet_counts`
+
+```python
+def facet_counts(self, field: str, where: Optional[dict] = None, limit: int = 1000) -> dict[str, int]
 ```
 
 #### `lexical_search`
@@ -166,3 +175,28 @@ def get_or_create_collection(self, palace_path: str, collection_name: str)
 ```python
 def delete_collection(self, palace_path: str, collection_name: str) -> None
 ```
+
+## Functions
+
+### `sqlite_wing_room_counts`
+
+```python
+def sqlite_wing_room_counts(palace_path: str, collection_name: str) -> Optional[tuple[int, dict[str, dict[str, int]]]]
+```
+
+Tally drawers by wing/room from ``sqlite_exact.sqlite3`` without paging.
+
+Returns ``(total, &#123;wing: &#123;room: count}})`` or ``None`` when the read
+cannot be trusted. ``None``/missing wing-or-room values are stored as
+``"?"`` so ``mcp_server._sqlite_taxonomy`` can map them to ``"unknown"``.
+
+### `sqlite_room_wing_hall_counts`
+
+```python
+def sqlite_room_wing_hall_counts(palace_path: str, collection_name: str) -> Optional[list[tuple]]
+```
+
+Grouped ``(room, wing, hall, n, last_date)`` rows, or ``None``.
+
+``last_date`` is the newest ``date`` metadata value in the group — enough
+for ``find_tunnels``' ``recent`` field without paging every drawer.

@@ -13,7 +13,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.auto_wake`](./auto_wake) — Wake-on-demand for a sleeping palace host.
 - [`mempalace.backends`](./backends) — Storage backend implementations for MemPalace (RFC 001).
 - [`mempalace.backfill_age`](./backfill_age) — Backfill the AGE graph from an existing drawer table.
-- [`mempalace.backups`](./backups) — Retention pruning for timestamped palace backups.
+- [`mempalace.backups`](./backups) — Writing and pruning palace backups.
 - [`mempalace.calibration`](./calibration) — Calibrated confidence for search results.
 - [`mempalace.cli`](./cli) — MemPalace — Give your AI a memory. No API key required.
 - [`mempalace.closet_llm`](./closet_llm) — closet_llm.py — Generate closets via a user-configured LLM for richer indexing.
@@ -24,6 +24,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.corpus_origin`](./corpus_origin) — corpus_origin.py — Detect whether a corpus is an AI-dialogue record and,
 - [`mempalace.cross_encoder_rerank`](./cross_encoder_rerank) — Optional cross-encoder reranking for the retrieval path.
 - [`mempalace.daemon`](./daemon) — Long-lived local daemon for queued MemPalace writes.
+- [`mempalace.date_window`](./date_window) — Shared date-window parsing for read-path filters.
 - [`mempalace.dedup`](./dedup) — dedup.py — Detect and remove near-duplicate drawers
 - [`mempalace.dialect`](./dialect) — AAAK Dialect -- Structured Symbolic Summary Format
 - [`mempalace.diary_ingest`](./diary_ingest) — diary_ingest.py — Ingest daily summary files into the palace.
@@ -56,6 +57,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.llm_refine`](./llm_refine) — llm_refine.py — Optional LLM refinement of regex-detected entities.
 - [`mempalace.logstream`](./logstream) — logstream.py — Agent coordination event log for MemPalace (RFC 003)
 - [`mempalace.logsync`](./logsync) — logsync.py — Anti-entropy sync engine for the logstream (RFC 004 step 0)
+- [`mempalace.mcp_proxy`](./mcp_proxy) — Thin stdio front end for the MemPalace MCP server.
 - [`mempalace.mcp_server`](./mcp_server) — MemPalace MCP Server — read/write palace access for Claude Code
 - [`mempalace.migrate`](./migrate) — mempalace migrate — Recover a palace created with a different ChromaDB version.
 - [`mempalace.migrate_to_postgres`](./migrate_to_postgres) — ChromaDB → Postgres (pgvector + AGE) migration tool.
@@ -115,6 +117,10 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.backends.qdrant`](./backends/qdrant) — Qdrant REST backend for MemPalace.
 - [`mempalace.backends.registry`](./backends/registry) — Backend registry + entry-point discovery (RFC 001 §3).
 - [`mempalace.backends.sqlite_exact`](./backends/sqlite_exact) — SQLite exact-vector backend for MemPalace.
+
+### integrations
+
+- [`mempalace.integrations.hermes`](./integrations/hermes) — MemPalace memory provider for Hermes.
 
 ### sources
 

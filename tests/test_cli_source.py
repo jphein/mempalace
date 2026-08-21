@@ -373,14 +373,20 @@ def test_source_adapter_multiple_drawers(capsys):
 
 
 def test_cmd_mine_dispatches_to_adapter_when_source_set():
-    """cmd_mine delegates to _mine_via_adapter when --source is non-None."""
+    """cmd_mine routes --source through upstream's mine_source_adapter (#2062).
+
+    Post-v3.8 sync, cmd_mine uses the upstream dispatch (typed exits: 2 for
+    unknown adapter, 1 for contention); the fork's _mine_via_adapter remains
+    only for its direct-call tests below.
+    """
     from mempalace.cli import cmd_mine
 
     args = _make_mine_args(source="stub")
 
-    with patch("mempalace.cli._mine_via_adapter") as mock_via:
+    with patch("mempalace.cli.mine_source_adapter", return_value=3) as mock_via:
         cmd_mine(args)
-    mock_via.assert_called_once_with(args)
+    kwargs = mock_via.call_args.kwargs
+    assert kwargs["source_name"] == "stub"
 
 
 def test_cmd_mine_skips_adapter_when_source_is_none():

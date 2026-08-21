@@ -63,6 +63,46 @@ Record this process as the palace's HTTP hub. Returns the file path.
 0600 like the token: the record itself is not secret, but the directory
 convention is "private to the user" and there is no reason to relax it.
 
+### `mesh_state_path`
+
+```python
+def mesh_state_path(palace_path: str) -> Path
+```
+
+### `write_mesh_state`
+
+```python
+def write_mesh_state(palace_path: str, *, peers: dict, profiles: dict) -> Path
+```
+
+Publish the hub's mesh estate so other local processes can read it.
+
+The estate — which peers answered last round, their version vectors and
+advertised profiles — is built by the peer sync loop, and that loop only
+runs in the HTTP transport. Every other process for this palace (the
+stdio MCP servers agents actually connect through, the CLI) has the same
+``mempalace_mesh_peers`` tool and an empty in-memory estate behind it, so
+without this file they answer "two peers, no status at all" while the hub
+next door knows the whole picture.
+
+0600 like the token and the serverinfo. The contents are not secret —
+peers.json tokens never reach the estate — but the directory convention
+is "private to the user".
+
+### `read_mesh_state`
+
+```python
+def read_mesh_state(palace_path: str) -> dict
+```
+
+Return the published estate for this palace.
+
+Always a dict with ``peers``/``profiles`` mappings so callers can merge
+without None-checks; empty when no hub has published yet or the file is
+unreadable. ``writer_alive`` reports whether the publishing process is
+still running — a crashed hub leaves a last-known-good estate that is
+worth showing but must not be read as live.
+
 ### `clear_serverinfo`
 
 ```python

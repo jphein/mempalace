@@ -73,6 +73,24 @@ Pre-v2 the sentinel used ':' as delimiter; this helper migrates to
 
 Hash input is ``f"&#123;source_file}|&#123;extract_mode}"``.
 
+### `make_exchange_drawer_id`
+
+```python
+def make_exchange_drawer_id(wing: str, room: str, source_file: str, filed_at: str, content: str) -> str
+```
+
+Drawer ID for a single verbatim conversation exchange.
+
+Used by live agent integrations (e.g. Hermes) and their backfills via
+``convo_miner.file_conversation_exchange``. Hashes the FULL content,
+not a prefix — prefix hashing collided on common openings ("User: hi
+can you help me with…") and ChromaDB's upsert silently overwrote the
+earlier drawer. ``filed_at`` is included so genuinely repeated
+exchanges stay distinct drawers (verbatim always — repetition is
+signal, not noise).
+
+Hash input is ``f"&#123;source_file}|&#123;filed_at}|&#123;content}"``.
+
 ### `make_triple_id`
 
 ```python

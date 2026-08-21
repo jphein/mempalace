@@ -202,7 +202,15 @@ messages between machines.
   server state, `GET /statusz` returns JSON with version, uptime, request
   counters, SQLite integrity, writer mode, and recent observed MCP clients.
   `/statusz` follows the bearer-token policy because it exposes operational
-  metadata; it is not a public liveness probe.
+  metadata; it is not a public liveness probe. Probe traffic does **not**
+  count as activity for the idle watchdog below; only MCP requests do.
+- **Idle shutdown**: the server exits by itself once `MEMPALACE_MCP_IDLE_HOURS`
+  have passed with no MCP request (default `8`). That default is there to reap
+  the per-session stdio servers that would otherwise pile up holding ChromaDB
+  and HNSW file handles, which is not the case a dedicated always-on server is
+  in. Set `MEMPALACE_MCP_IDLE_HOURS=0` to disable it, and make sure your
+  supervisor restarts on a *clean* exit (`Restart=always` rather than
+  `Restart=on-failure`), because the watchdog exits `0`.
 - **Fronting proxies (Tailscale, nginx)**: the recommended personal-fleet
   setup is a loopback bind behind a tailnet-only proxy — nothing touches the
   physical LAN and the tailnet provides encryption plus device identity:

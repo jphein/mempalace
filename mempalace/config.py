@@ -384,9 +384,9 @@ class MempalaceConfig:
 
         if self._config_file.exists():
             try:
-                with open(self._config_file, "r") as f:
+                with open(self._config_file, "r", encoding="utf-8") as f:
                     self._file_config = json.load(f)
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 self._file_config = {}
 
     @property
@@ -866,9 +866,9 @@ class MempalaceConfig:
         """Mapping of name variants to canonical names."""
         if self._people_map_file.exists():
             try:
-                with open(self._people_map_file, "r") as f:
+                with open(self._people_map_file, "r", encoding="utf-8") as f:
                     return json.load(f)
-            except (json.JSONDecodeError, OSError):
+            except (json.JSONDecodeError, UnicodeDecodeError, OSError):
                 pass
         return self._file_config.get("people_map", {})
 
@@ -1064,9 +1064,12 @@ class MempalaceConfig:
 
         Values: ``"minilm"`` (ChromaDB's all-MiniLM-L6-v2 — English-only),
         ``"embeddinggemma"`` (multilingual, 100+ languages, default for
-        new installs since onboarding writes the choice), or ``"adaptmem_ft"``
+        new installs since onboarding writes the choice), ``"adaptmem_ft"``
         (a local fine-tuned SentenceTransformer checkpoint — see
-        :attr:`adaptmem_path`). Read from env ``MEMPALACE_EMBEDDING_MODEL``
+        :attr:`adaptmem_path`), or ``"openai-compat"`` (embeddings served by
+        an OpenAI-compatible ``/v1/embeddings`` endpoint — see
+        ``embedding_api_url`` / ``embedding_api_model`` /
+        ``embedding_api_key``). Read from env ``MEMPALACE_EMBEDDING_MODEL``
         first, then ``embedding_model`` in ``config.json``, then ``"minilm"``
         as a back-compat fallback for palaces created before onboarding asked
         the question.
@@ -1149,6 +1152,52 @@ class MempalaceConfig:
             self._config_file.chmod(0o600)
         except (OSError, NotImplementedError):
             pass
+
+    def _resolve_str_setting(self, env_var: str, config_key: str):
+        """Resolve a string setting: env var > ``config.json`` > ``None``.
+
+        Whitespace-only values are treated as unset, so a blank env var or a
+        hand-edited empty config key doesn't mask the value below it. Unlike
+        ``embedding_model`` the result is not lower-cased — URLs, model ids,
+        and API keys are case-sensitive.
+        """
+        env_val = os.environ.get(env_var)
+        if env_val and env_val.strip():
+            return env_val.strip()
+        cfg_val = self._file_config.get(config_key)
+        if isinstance(cfg_val, str) and cfg_val.strip():
+            return cfg_val.strip()
+        return None
+
+    @property
+    def embedding_api_url(self):
+        """Base URL of the OpenAI-compatible ``/v1/embeddings`` endpoint.
+
+        Used only when ``embedding_model == "openai-compat"``. Resolved from
+        env ``MEMPALACE_EMBEDDING_API_URL`` first, then ``embedding_api_url``
+        in ``config.json``; ``None`` when unset. Accepts a bare host, a
+        ``…/v1`` base, or a full endpoint URL.
+        """
+        return self._resolve_str_setting("MEMPALACE_EMBEDDING_API_URL", "embedding_api_url")
+
+    @property
+    def embedding_api_model(self):
+        """Server-side model id for the ``openai-compat`` embeddings endpoint.
+
+        Resolved from env ``MEMPALACE_EMBEDDING_API_MODEL`` first, then
+        ``embedding_api_model`` in ``config.json``; ``None`` when unset.
+        """
+        return self._resolve_str_setting("MEMPALACE_EMBEDDING_API_MODEL", "embedding_api_model")
+
+    @property
+    def embedding_api_key(self):
+        """Optional bearer token / API key for the embeddings endpoint.
+
+        Resolved from env ``MEMPALACE_EMBEDDING_API_KEY`` first, then
+        ``embedding_api_key`` in ``config.json``; ``None`` when unset (for
+        local endpoints that need no auth).
+        """
+        return self._resolve_str_setting("MEMPALACE_EMBEDDING_API_KEY", "embedding_api_key")
 
     @property
     def adaptmem_path(self):
@@ -1442,7 +1491,7 @@ class MempalaceConfig:
                 "topic_wings": DEFAULT_TOPIC_WINGS,
                 "hall_keywords": DEFAULT_HALL_KEYWORDS,
             }
-            with open(self._config_file, "w") as f:
+            with open(self._config_file, "w", encoding="utf-8") as f:
                 json.dump(default_config, f, indent=2)
             # Restrict config file to owner read/write only
             try:
@@ -1458,7 +1507,7 @@ class MempalaceConfig:
             people_map: Dict mapping name variants to canonical names.
         """
         self._config_dir.mkdir(parents=True, exist_ok=True)
-        with open(self._people_map_file, "w") as f:
+        with open(self._people_map_file, "w", encoding="utf-8") as f:
             json.dump(people_map, f, indent=2)
         try:
             self._people_map_file.chmod(0o600)

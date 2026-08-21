@@ -203,7 +203,9 @@ def test_get_embedding_function_dispatches_to_adaptmem(monkeypatch):
     """model='adaptmem_ft' must build AdaptMemFTEncoder, not the MiniLM EF."""
     monkeypatch.setenv("MEMPALACE_ADAPTMEM_PATH", "/p")
     monkeypatch.setattr(
-        embedding, "_resolve_providers", lambda device: (["CPUExecutionProvider"], "cpu")
+        embedding,
+        "_resolve_providers",
+        lambda device, model=None: (["CPUExecutionProvider"], "cpu"),
     )
     ef = embedding.get_embedding_function(device="cpu", model="adaptmem_ft")
     assert isinstance(ef, embedding.AdaptMemFTEncoder)
@@ -220,7 +222,9 @@ def test_cache_key_separates_adaptmem(monkeypatch):
 
     monkeypatch.setattr(embedding, "_build_ef_class", lambda: DummyMiniLM)
     monkeypatch.setattr(
-        embedding, "_resolve_providers", lambda device: (["CPUExecutionProvider"], "cpu")
+        embedding,
+        "_resolve_providers",
+        lambda device, model=None: (["CPUExecutionProvider"], "cpu"),
     )
 
     ml = embedding.get_embedding_function(device="cpu", model="minilm")
@@ -236,7 +240,9 @@ def test_adaptmem_caches_within_model(monkeypatch):
     """Two calls with the same model + providers return the same EF instance."""
     monkeypatch.setenv("MEMPALACE_ADAPTMEM_PATH", "/p")
     monkeypatch.setattr(
-        embedding, "_resolve_providers", lambda device: (["CPUExecutionProvider"], "cpu")
+        embedding,
+        "_resolve_providers",
+        lambda device, model=None: (["CPUExecutionProvider"], "cpu"),
     )
     first = embedding.get_embedding_function(device="cpu", model="adaptmem_ft")
     second = embedding.get_embedding_function(device="auto", model="adaptmem_ft")

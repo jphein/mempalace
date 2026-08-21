@@ -108,10 +108,13 @@ backends the same guarantee extends to namespaces:
     access is a spec violation.
 
 Backends that do not advertise ``supports_namespace_isolation`` (e.g.
-``sqlite_exact``, whose isolation is the on-disk path alone) MAY ignore
-``namespace`` entirely; callers MUST NOT rely on it for tenant isolation
-on such backends. Any conforming backend can self-check both guarantees by
-running the shared assertions in ``tests/_backend_conformance.py``.
+path-rooted ``chroma`` / ``sqlite_exact``) MUST NOT silently accept and
+ignore a populated ``namespace`` — they MUST raise
+:class:`UnsupportedCapabilityError` (same spirit as
+:class:`UnsupportedFilterError`). Callers targeting those backends MUST
+leave ``namespace`` as ``None``. Isolation conformance lives in
+``tests/_backend_conformance.py`` (cross-id arm for every backend;
+same-id / different-namespace arm for advertisers only).
 
 ### `class EmbedderIdentity`
 
@@ -419,8 +422,21 @@ Every backend MUST satisfy the per-``PalaceRef.id`` isolation guarantee in
 ``PalaceRef.namespace`` (multi-tenant / hosted deployments) MUST advertise
 the ``supports_namespace_isolation`` capability token; doing so is a
 promise to satisfy the cross-namespace guarantee and to pass the namespace
-arm of the conformance suite. Backends without the token MAY ignore
-``namespace``.
+arm of the conformance suite. Backends without the token MUST raise
+:class:`UnsupportedCapabilityError` when ``PalaceRef.namespace`` is
+non-``None`` rather than silently accept-and-ignore (RFC 001 §4.4).
+
+#### `require_namespace_support`
+
+```python
+def require_namespace_support(self, palace: PalaceRef) -> None
+```
+
+Raise if ``palace.namespace`` is set but this backend does not isolate by it.
+
+Call at the start of ``get_collection`` (and any other entry that
+accepts a :class:`PalaceRef`) so non-advertising backends never
+silently drop a tenant namespace (RFC 001 §4.4).
 
 #### `get_collection`
 

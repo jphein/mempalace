@@ -8,6 +8,7 @@ Three ways to ingest:
   Projects:      mempalace mine ~/projects/my_app                  (code, docs, notes)
   Conversations: mempalace mine &lt;convo-dir> --mode convos          (Claude Code, Claude.ai, ChatGPT, Slack exports)
   Documents:     mempalace mine &lt;docs-dir> --mode extract          (PDF, DOCX, PPTX, XLSX, RTF, EPUB — requires mempalace[extract])
+  Adapters:      mempalace mine &lt;source> --source &lt;adapter-name>  (registered source adapters)
 
 Same palace. Same search. Different ingest strategies.
 
@@ -17,6 +18,7 @@ Commands:
     mempalace mine &lt;dir>                  Mine project files (default)
     mempalace mine &lt;dir> --mode convos    Mine conversation exports
     mempalace mine &lt;dir> --mode extract   Mine binary office documents (PDF/DOCX/etc.)
+    mempalace mine &lt;source> --source NAME Mine through a registered source adapter
     mempalace search "query"              Find anything, exact words
     mempalace mcp                         Show MCP setup command
     mempalace wake-up                     Show L0 + L1 wake-up context
@@ -38,6 +40,14 @@ Examples:
 
 Raised when a daemon HTTP call fails or returns a JSON-RPC error.
 
+### `class UnknownSourceAdapterError(ValueError)`
+
+Raised when an explicit ``--source`` name is absent from the registry.
+
+### `class UnsupportedSourceAdapterProtocolError(ValueError)`
+
+Raised when an adapter requires runner semantics not implemented yet.
+
 ## Functions
 
 ### `cmd_init`
@@ -51,6 +61,18 @@ def cmd_init(args)
 ```python
 def cmd_mine(args)
 ```
+
+### `mine_source_adapter`
+
+```python
+def mine_source_adapter(*, source_name: str, source_path: str, palace_path: str, dry_run: bool = False) -> int
+```
+
+Run an explicitly selected RFC 002 source adapter through ``PalaceContext``.
+
+This deliberately sits alongside, rather than inside, the legacy mode
+miners.  Until those miners are migrated to first-party adapters, no-flag
+and ``--mode`` calls must retain their established dispatch paths.
 
 ### `cmd_sweep`
 

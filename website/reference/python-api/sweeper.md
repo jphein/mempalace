@@ -61,6 +61,13 @@ queue-operation, last-prompt) are filtered out. Malformed lines are
 skipped silently — data quality is the transcript writer's problem,
 not ours.
 
+Raises ``OSError`` when ``path`` is not a regular file. ``rglob`` in
+``sweep_directory`` lists a FIFO named ``session.jsonl`` like any
+other match, and opening one for reading blocks in the kernel until a
+writer appears — an unbounded hang for the whole sweep. ``stat`` never
+blocks on one, and it raises for a missing path exactly as ``open``
+did before, so callers see the same error for the same mistake.
+
 ### `get_palace_cursor`
 
 ```python

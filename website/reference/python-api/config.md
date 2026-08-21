@@ -556,9 +556,12 @@ Embedding model identifier.
 
 Values: ``"minilm"`` (ChromaDB's all-MiniLM-L6-v2 — English-only),
 ``"embeddinggemma"`` (multilingual, 100+ languages, default for
-new installs since onboarding writes the choice), or ``"adaptmem_ft"``
+new installs since onboarding writes the choice), ``"adaptmem_ft"``
 (a local fine-tuned SentenceTransformer checkpoint — see
-:attr:`adaptmem_path`). Read from env ``MEMPALACE_EMBEDDING_MODEL``
+:attr:`adaptmem_path`), or ``"openai-compat"`` (embeddings served by
+an OpenAI-compatible ``/v1/embeddings`` endpoint — see
+``embedding_api_url`` / ``embedding_api_model`` /
+``embedding_api_key``). Read from env ``MEMPALACE_EMBEDDING_MODEL``
 first, then ``embedding_model`` in ``config.json``, then ``"minilm"``
 as a back-compat fallback for palaces created before onboarding asked
 the question.
@@ -612,6 +615,42 @@ def set_backend(self, backend: str) -> None
 ```
 
 Persist the storage backend choice to ``config.json``.
+
+#### `embedding_api_url`
+
+```python
+def embedding_api_url(self)
+```
+
+Base URL of the OpenAI-compatible ``/v1/embeddings`` endpoint.
+
+Used only when ``embedding_model == "openai-compat"``. Resolved from
+env ``MEMPALACE_EMBEDDING_API_URL`` first, then ``embedding_api_url``
+in ``config.json``; ``None`` when unset. Accepts a bare host, a
+``…/v1`` base, or a full endpoint URL.
+
+#### `embedding_api_model`
+
+```python
+def embedding_api_model(self)
+```
+
+Server-side model id for the ``openai-compat`` embeddings endpoint.
+
+Resolved from env ``MEMPALACE_EMBEDDING_API_MODEL`` first, then
+``embedding_api_model`` in ``config.json``; ``None`` when unset.
+
+#### `embedding_api_key`
+
+```python
+def embedding_api_key(self)
+```
+
+Optional bearer token / API key for the embeddings endpoint.
+
+Resolved from env ``MEMPALACE_EMBEDDING_API_KEY`` first, then
+``embedding_api_key`` in ``config.json``; ``None`` when unset (for
+local endpoints that need no auth).
 
 #### `adaptmem_path`
 
