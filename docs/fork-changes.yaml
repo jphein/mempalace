@@ -24,6 +24,66 @@
 
 entries:
 
+  - id: cli-wave-graph-diary
+    date: 2026-08-21
+    bucket: Added
+    commit: ff9ee22
+    area: CLI
+    summary: "CLI wave 3/3: `mempalace diary`, `kg`, `walk` and `rate` first-class verbs (#354, #357, #359, #361)"
+    body: |
+      Third lane of the CLI wave: ``diary write|read --agent``, ``kg
+      add|invalidate|timeline`` (no ``kg stats`` — redundant with
+      ``status``, parser-rejection test pins the decision), ``walk``
+      with ``--follow palace|tunnels``, and ``rate``. Destructive verbs
+      gate on ``--confirm`` and refuse hard when non-interactive.
+      ``kg timeline`` documents the backend's 100-row cap
+      (``_KG_TIMELINE_TOOL_CAP``) instead of silently truncating.
+
+      All three lanes route daemon-first through the shared helpers that
+      landed with the wave: ``_import_mcp_server()`` (stdout-hijack
+      repair around the mcp_server import, with a subprocess test
+      pinning the statement-order property it relies on) and the
+      env-scoped ``--palace`` context manager (``MEMPALACE_PALACE_PATH``
+      snapshot taken above the import, so mcp_server's module-scope argv
+      parse can't leak it — #409 tracks moving that parse into main()).
+    tests: "83 (test_cli_diary, test_cli_kg, test_cli_walk, test_cli_rate)"
+
+  - id: cli-wave-read-family
+    date: 2026-08-21
+    bucket: Added
+    commit: 2848e96
+    area: CLI
+    summary: "CLI wave 2/3: `mempalace wings`, `taxonomy`, `aaak spec`, `hallway`, `checkpoint --dry-run` (#356, #358, #360, #362)"
+    body: |
+      Second lane: ``wings --sort name|count`` (REST-first via the
+      daemon's fast status endpoint — 0.33s live where the MCP tool
+      times out at 620K drawers, palace-daemon#239 tracks
+      fast-intercepts for the rest), ``taxonomy [--wing]``, ``aaak
+      spec`` (raw dialect spec on stdout), ``hallway list|delete``
+      (coexists with legacy ``hallways``; deprecation is #407), and
+      ``checkpoint --dry-run``. #360's ``--session``/``list`` flags were
+      deliberately not built — the underlying tool has no session
+      concept; palace-daemon#240 + #408 track growing one properly.
+    tests: "82 (test_cli_wings, test_cli_taxonomy, test_cli_aaak, test_cli_hallway, test_cli_checkpoint)"
+
+  - id: cli-wave-drawer-family
+    date: 2026-08-21
+    bucket: Added
+    commit: 836d1a1
+    area: CLI
+    summary: "CLI wave 1/3: `mempalace drawer get|add|delete|update` and `duplicate check` (#355, #363)"
+    body: |
+      First lane of the ten-issue CLI wave (#191 umbrella): first-class
+      ``drawer`` verbs and ``duplicate check``. ``drawer update``
+      rewrites metadata only — a guard test pins that content is
+      immutable (verbatim-always). ``drawer delete`` gates on
+      ``--confirm``. Introduced the canonical ``_import_mcp_server()``
+      helper every later lane adopted: repairs the #225 stdout hijack
+      around local-path imports, prefers the caller's live stream over
+      mcp_server's import-time snapshot, and documents the one residual
+      case (stdout already aliased to stderr on entry) as out of scope.
+    tests: "66 (test_cli_drawer, test_cli_duplicate)"
+
   - id: sync-upstream-v380
     date: 2026-08-20
     bucket: Changed
