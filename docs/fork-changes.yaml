@@ -27,7 +27,7 @@ entries:
   - id: sync-upstream-v390
     date: 2026-09-01
     bucket: Changed
-    commit: TBD
+    commit: 09713d9
     area: Reliability
     summary: "Sync upstream/develop through v3.9.0 (e8098348): 101 commits — durable config writes, strategy-aware candidate pools, BM25-under-threshold admission, search hub-forward, embeddinggemma batch override, cli_compatible search"
     body: |
