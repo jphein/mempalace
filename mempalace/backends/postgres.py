@@ -134,6 +134,37 @@ def _coerce_wing(raw: Any) -> str:
     return normalize_wing_name(wing) or FALLBACK_WING
 
 
+def _replace_nul_bytes(
+    documents: list[str],
+    metadatas: Optional[list[dict[str, Any]]],
+) -> None:
+    """Replace NUL bytes in-place before the rows reach postgres.
+
+    Postgres ``text`` and ``jsonb`` both refuse ``\\x00`` outright
+    (``psycopg.DataError``), so a raw device log or binary-tinged capture
+    would abort the whole mine. Verbatim storage of that byte is physically
+    impossible on this backend; the nearest-verbatim answer is U+FFFD (the
+    Unicode replacement character — the standard "this byte cannot be
+    represented" marker) plus an explicit ``nul_bytes_replaced`` count in
+    the drawer's metadata so the substitution is provenanced, never silent.
+    """
+    for i, doc in enumerate(documents):
+        if "\x00" not in doc:
+            continue
+        n = doc.count("\x00")
+        documents[i] = doc.replace("\x00", "�")
+        if metadatas is not None and isinstance(metadatas[i], dict):
+            metadatas[i]["nul_bytes_replaced"] = n
+    if metadatas is None:
+        return
+    for meta in metadatas:
+        if not isinstance(meta, dict):
+            continue
+        for key, value in meta.items():
+            if isinstance(value, str) and "\x00" in value:
+                meta[key] = value.replace("\x00", "�")
+
+
 def _validate_write_lengths(
     *,
     documents: list[str],
@@ -226,6 +257,7 @@ class PostgresCollection(BaseCollection):
             metadatas=metadatas,
             embeddings=embeddings,
         )
+        _replace_nul_bytes(documents, metadatas)
         self._ensure_setup(create=True)
         if embeddings is None:
             embeddings = _embed(documents)
