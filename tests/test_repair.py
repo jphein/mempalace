@@ -3,7 +3,6 @@
 import errno
 import os
 import sqlite3
-import sys
 import urllib.request
 from contextlib import closing
 from unittest.mock import MagicMock, call, patch
