@@ -21,6 +21,8 @@ Commands:
     mempalace mine &lt;source> --source NAME Mine through a registered source adapter
     mempalace search "query"              Find anything, exact words
     mempalace mcp                         Show MCP setup command
+    mempalace task create ...             Create a complete agent handoff
+    mempalace task launch ...             Run a stored task headlessly
     mempalace wake-up                     Show L0 + L1 wake-up context
     mempalace wake-up --wing my_app       Wake-up for a specific project
     mempalace status                      Show what's been filed
@@ -475,6 +477,14 @@ disabled vector index cannot answer at all; the tool says so
 explicitly rather than claiming "not a duplicate", and we always exit
 2 on it so a guard never reads silence as novelty.
 
+### `cmd_update`
+
+```python
+def cmd_update(args)
+```
+
+Configure, check, or prepare updates without installing automatically.
+
 ### `cmd_diary`
 
 ```python
@@ -544,6 +554,14 @@ it never touches verbatim content.
 def cmd_logstream(args)
 ```
 
+### `cmd_task`
+
+```python
+def cmd_task(args)
+```
+
+Create and run complete logstream tasks through a small public interface.
+
 ### `cmd_artifact`
 
 ```python
@@ -610,6 +628,14 @@ def cmd_instructions(args)
 ```
 
 Output skill instructions to stdout.
+
+### `cmd_rules`
+
+```python
+def cmd_rules(args)
+```
+
+Output the shared-brain agent rules block for a given agent identity.
 
 ### `cmd_mcp`
 

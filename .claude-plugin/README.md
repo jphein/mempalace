@@ -1,6 +1,6 @@
 # MemPalace Claude Code Plugin
 
-A Claude Code plugin that gives your AI a persistent memory system. Mine projects and conversations into a searchable palace backed by ChromaDB, with 48 MCP tools, auto-save hooks, and 5 guided skills.
+A Claude Code plugin that gives your AI a persistent memory system. Mine projects and conversations into a searchable palace backed by ChromaDB, with 49 MCP tools, auto-save hooks, and 5 guided commands.
 
 ## Prerequisites
 
@@ -43,7 +43,6 @@ After installing the plugin, run the init command to complete setup (installs th
 
 MemPalace registers three hooks that run automatically:
 
-- **SessionStart** -- Surfaces recent palace context for the current project when a session begins.
 - **Stop** -- Saves conversation context every 15 messages.
 - **SessionEnd** -- Runs one final save in the background on a clean exit, so short sessions that never hit the Stop interval or a compaction are still captured.
 - **PreCompact** -- Preserves important memories before context compaction.
@@ -52,17 +51,7 @@ Set the `MEMPAL_DIR` environment variable to a directory path to automatically r
 
 ## MCP Server
 
-The plugin automatically configures a local MCP server with 48 tools for storing, searching, and managing memories. No manual MCP setup is required -- `/mempalace:init` handles everything.
-
-### CLI-only mode
-
-To run without the MCP tool surface (saves ~9 KB context per session; hooks and skills keep working unchanged), set `mcp_mode` in `~/.mempalace/config.json`:
-
-```json
-{"mcp_mode": "cli-only"}
-```
-
-Or per-process via the `PALACE_MCP_MODE=cli-only` env var. Fails open to `"all"` on any unknown value or missing config. See [MCP Integration guide](https://github.com/MemPalace/mempalace/blob/develop/website/guide/mcp-integration.md#cli-only-mode-mcp_mode) for the full behavior + when the reconnect is needed.
+The plugin automatically configures a local MCP server with 49 tools for storing, searching, managing memories, and coordinating agent tasks. No manual MCP setup is required -- `/mempalace:init` handles everything.
 
 ## Full Documentation
 

@@ -1,6 +1,6 @@
 # MCP Tools Reference
 
-Detailed parameter schemas for all 48 MCP tools.
+Detailed parameter schemas for all 49 MCP tools.
 
 ## Palace — Read Tools
 
@@ -10,9 +10,19 @@ Palace overview: total drawers, wing and room counts, AAAK spec, and memory prot
 
 **Parameters:** None
 
-**Returns:** `{ total_drawers, wings, rooms, protocol, aaak_dialect, sqlite_integrity, library_versions }`
+**Returns:** `{ total_drawers, wings, rooms, protocol, aaak_dialect, sqlite_integrity, library_versions, updates }`
 
 `library_versions` reports the versions this server loaded and whether they still match what is installed on disk. `stale: true` means they no longer match, which happens when the package is upgraded or removed while the server is running; write tools are then refused with error `-32005` until the server is restarted, unless `MEMPALACE_MCP_ALLOW_STALE_LIBRARY=1` is set in its environment, in which case `gate_disabled_by` names that variable. An `unreadable` key lists the distributions the check is not covering — either their installed metadata could not be read, or they could not be resolved at all when the server started — so `stale: false` is never mistaken for "checked and fine" when nothing was checked.
+
+`updates.server` is cached release state for the runtime serving the palace.
+When a local stdio process proxies to a hub, it also adds `updates.client` for
+that proxy's locally installed runtime; a direct HTTP client receives only the
+server scope because it has no local MemPalace process to inspect. Checks are
+disabled by default and refresh in a background thread, so this tool never
+waits on PyPI. An available release is informational only and must be authorized
+by the user before any upgrade commands run. A remote `updates.server` release
+must be planned on the hub host; a client's local plan applies only to
+`updates.client`.
 
 ---
 
@@ -58,9 +68,8 @@ Semantic search. Returns verbatim drawer content with similarity scores.
 | `limit` | integer | No | Max results (default: 5) |
 | `wing` | string | No | Filter by wing |
 | `room` | string | No | Filter by room |
-| `tags` | array of string | No | Only return drawers carrying ALL of these tags (AND logic) |
 
-**Returns:** `{ query, filters, results: [{ drawer_id, text, wing, room, topic, source_file, created_at, similarity, distance, matched_via }] }` — `drawer_id` lets callers feed the hit into `mempalace_get_drawer` (citation popovers, link-out with real target).
+**Returns:** `{ query, filters, results: [{ text, wing, room, source_file, similarity }] }`
 
 ---
 
@@ -102,9 +111,8 @@ File verbatim content into the palace. Identical content (same deterministic dra
 | `content` | string | **Yes** | Verbatim content to store |
 | `source_file` | string | No | Where this came from |
 | `added_by` | string | No | Who is filing (default: "mcp") |
-| `tags` | array of string | No | Cross-cutting labels (lower-cased, spaces → hyphens) |
 
-**Returns:** `{ success, drawer_id, wing, room, tags }`
+**Returns:** `{ success, drawer_id, wing, room }`
 
 ---
 
@@ -137,11 +145,11 @@ Delete a drawer by ID. Irreversible.
 
 ### `mempalace_mine`
 
-Mine a directory into the palace — the MCP equivalent of `mempalace mine`. Wraps the same in-process miners the CLI uses; runs synchronously and returns the miner's summary as `output`. The palace write lock is automatic — a concurrent mine returns a structured already-running error. Orphan cleanup is separate (see `mempalace_sync`).
+Mine a directory into the palace — the MCP equivalent of `mempalace mine`. `mode='convos'` also accepts a single conversation file. Wraps the same in-process miners the CLI uses; runs synchronously and returns the miner's summary as `output`. The palace write lock is automatic — a concurrent mine returns a structured already-running error. Orphan cleanup is separate (see `mempalace_sync`).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `source` | string | **Yes** | Directory to mine |
+| `source` | string | **Yes** | Directory to mine, or one conversation file with `mode='convos'` |
 | `mode` | string | No | `projects` (code/docs, default), `convos` (chat transcripts), or `extract` (office docs; needs the `mempalace[extract]` extra) |
 | `wing` | string | No | Target wing (default: source directory name) |
 | `agent` | string | No | Recorded on every drawer (default: `mempalace`) |
@@ -177,7 +185,9 @@ Prune drawers whose source files are gitignored, deleted, or moved. Returns a dr
 | `wing` | string | No | Limit to one wing |
 | `apply` | boolean | No | Actually delete drawers; default is dry-run preview |
 
-**Returns:** `{ scanned, kept, gitignored, missing, no_source, out_of_scope, removed_drawers, removed_closets, dry_run, by_source }`
+**Returns:** `{ scanned, kept, gitignored, missing, unresolved, no_source, out_of_scope, removed_drawers, removed_closets, dry_run, by_source, unresolved_by_source }`
+
+Only `gitignored` and `missing` are removed. A source file that is not at its path counts as `missing` only while the palace can still see a source file of its own in the same directory: a deletion leaves its neighbours behind, an unmounted volume takes all of them at once. Everything else counts as `unresolved`, which is kept and named in `unresolved_by_source` the way removals are named in `by_source`.
 
 ---
 
@@ -195,13 +205,12 @@ Fetch a single drawer by ID — returns full content and metadata.
 
 ### `mempalace_list_drawers`
 
-List drawers with pagination. Optional wing/room/tag filter. Returns IDs, wings, rooms, tags, and content previews.
+List drawers with pagination. Optional wing/room filter. Returns IDs, wings, rooms, and content previews.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `wing` | string | No | Filter by wing |
 | `room` | string | No | Filter by room |
-| `tags` | array of string | No | Only list drawers carrying ALL of these tags |
 | `limit` | integer | No | Max results per page (default 20, max 100) |
 | `offset` | integer | No | Offset for pagination (default 0) |
 
@@ -211,7 +220,7 @@ List drawers with pagination. Optional wing/room/tag filter. Returns IDs, wings,
 
 ### `mempalace_update_drawer`
 
-Update an existing drawer's content and/or metadata (wing, room, tags). Fetches the existing drawer first; returns an error if not found.
+Update an existing drawer's content and/or metadata (wing, room). Fetches the existing drawer first; returns an error if not found.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -219,7 +228,6 @@ Update an existing drawer's content and/or metadata (wing, room, tags). Fetches 
 | `content` | string | No | New content (omit to keep existing) |
 | `wing` | string | No | New wing (omit to keep existing) |
 | `room` | string | No | New room (omit to keep existing) |
-| `tags` | array of string | No | Replace the drawer's tag list (pass `[]` to clear; omit to leave untouched) |
 
 **Returns:** `{ success, drawer_id, updated_fields }`
 
@@ -389,32 +397,6 @@ Palace graph overview: nodes, tunnels, edges, connectivity.
 
 ---
 
-### `mempalace_walk_palace`
-
-Agent walks the palace via AGE Cypher — the "wing → room → drawer → entity"
-metaphor exposed as a single MCP call over the unified palace+entity graph.
-Requires the AGE-integration fork features (`MEMPALACE_BACKEND=postgres` and
-`MEMPALACE_KG_BACKEND=age`).
-
-Provide **exactly one** of `start_wing`, `start_room`, or `start_entity` to
-anchor the walk. The traversal expands outward in BFS-style hops:
-
-* From a **wing**: wing → rooms → drawers → entities mentioned in those drawers.
-* From a **room**: room → drawers → entities.
-* From an **entity**: entity → drawers that mention it → rooms/wings.
-
-| Parameter | Type | Required | Description |
-|-----------|------|----------|-------------|
-| `start_wing` | string | one of three | Wing name to start from |
-| `start_room` | string | one of three | Room name to start from |
-| `start_entity` | string | one of three | Entity name to start from |
-| `depth` | integer | No | Hops to traverse (1–5, default: 2) |
-| `limit` | integer | No | Max rows per hop (1–500, default: 50) |
-
-**Returns:** `{ rows: [...], stats: { wings_touched, rooms_touched, drawers_touched, entities_touched } }`
-
----
-
 ### `mempalace_create_tunnel`
 
 Create a cross-wing tunnel linking two palace locations. Use when content in one project relates to another — e.g., an API design in `project_api` connects to a database schema in `project_database`.
@@ -494,6 +476,32 @@ Follow tunnels from a room to see what it connects to in other wings. Returns co
 
 ---
 
+### `mempalace_walk_palace`
+
+Agent walks the palace via AGE Cypher — the "wing → room → drawer → entity"
+metaphor exposed as a single MCP call over the unified palace+entity graph.
+Requires the AGE-integration fork features (`MEMPALACE_BACKEND=postgres` and
+`MEMPALACE_KG_BACKEND=age`).
+
+Provide **exactly one** of `start_wing`, `start_room`, or `start_entity` to
+anchor the walk. The traversal expands outward in BFS-style hops:
+
+* From a **wing**: wing → rooms → drawers → entities mentioned in those drawers.
+* From a **room**: room → drawers → entities.
+* From an **entity**: entity → drawers that mention it → rooms/wings.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `start_wing` | string | one of three | Wing name to start from |
+| `start_room` | string | one of three | Room name to start from |
+| `start_entity` | string | one of three | Entity name to start from |
+| `depth` | integer | No | Hops to traverse (1–5, default: 2) |
+| `limit` | integer | No | Max rows per hop (1–500, default: 50) |
+
+**Returns:** `{ rows: [...], stats: { wings_touched, rooms_touched, drawers_touched, entities_touched } }`
+
+---
+
 ## Agent Diary Tools
 
 ### `mempalace_diary_write`
@@ -519,7 +527,7 @@ Read recent diary entries.
 | `agent_name` | string | **Yes** | Your name |
 | `last_n` | integer | No | Number of recent entries (default: 10) |
 
-**Returns:** `{ agent, entries: [{ drawer_id, date, timestamp, topic, content }], total, showing }`
+**Returns:** `{ agent, entries: [{ date, timestamp, topic, content }], total, showing }`
 
 ---
 
@@ -560,17 +568,40 @@ Force a reconnect to the palace database. Use this after external scripts or CLI
 
 ## Agent Coordination Tools (Logstream)
 
-Append-only coordination events and exact artifacts for multi-agent work — see the [Agent Logstream](/concepts/agent-logstream) concept page. Backed by `logstream.sqlite3` in the palace directory, independent of the vector index. In `--read-only` mode the mutating tools (`event_append`, `event_ack`, `artifact_put`, `patch_submit`) are hidden and refused.
+Append-only coordination events and exact artifacts for multi-agent work — see the [Agent Logstream](/concepts/agent-logstream) concept page. Backed by `logstream.sqlite3` in the palace directory, independent of the vector index. In `--read-only` mode the mutating tools (`task_create`, `event_append`, `event_ack`, `artifact_put`, `patch_submit`) are hidden and refused.
+
+### `mempalace_task_create`
+
+Create a complete canonical `task.request` and return the stored event plus a
+short handoff line. This is the preferred task-creation interface for agents
+connected to a remote shared-brain hub; it keeps correlation-id generation,
+body structure, and routing identical to `mempalace task create`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `project` | string | **Yes** | Project routing name |
+| `from_agent` | string | **Yes** | Requesting agent identity |
+| `to_agent` | string | **Yes** | Worker agent identity |
+| `goal` | string | **Yes** | Exact verbatim task goal |
+| `branch` | string | **Yes** | Git branch for the work |
+| `base_commit` | string | **Yes** | Immutable hexadecimal commit id the worker must start from; branches and tags are rejected |
+| `done` | string | **Yes** | Exact verbatim definition of done |
+
+**Returns:** `{ success, task, handoff }`. The caller must preview the exact
+task with the user before invoking this immutable append.
+
+---
 
 ### `mempalace_event_append`
 
-Append an immutable coordination event.
+Append an immutable agent-coordination event to the logstream (RFC 003).
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `type` | string | **Yes** | Event type, e.g. `task.request`, `task.reply`, `patch.ready` |
 | `stream` | string | **Yes** | Logical stream, e.g. `project/myapp` or `shared_agent_brain` |
 | `room` | string | **Yes** | Sub-channel: `delegation`, `patches`, `reviews`, `status` |
+| `topic` | string | No | Topic to group related work/sub-team, e.g. `auth-v2` |
 | `from_agent` | string | **Yes** | Writer agent identity |
 | `to_agent` | string | No | Target agent, or `*` for broadcast |
 | `correlation_id` | string | No | Task id tying request and reply events together |
@@ -587,19 +618,22 @@ Append an immutable coordination event.
 
 ### `mempalace_event_list`
 
-List events with structured filters, oldest first.
+List events with structured filters.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `stream` | string | No | Filter by stream |
 | `room` | string | No | Filter by room |
+| `topic` | string | No | Filter by topic |
 | `type` | string | No | Filter by event type |
 | `to_agent` | string | No | Filter by target; also matches `*` broadcasts |
 | `from_agent` | string | No | Filter by writer |
 | `correlation_id` | string | No | Filter by correlation id |
 | `status` | string | No | Filter by status |
-| `since_event_id` | string | No | Only events strictly after this id (precise cursor) |
+| `since_event_id` | string | No | Only events strictly after this id in append order (precise forward cursor) |
+| `before_event_id` | string | No | Only events strictly before this id in append order (reverse/historical paging) |
 | `since_created_at` | string | No | Only events at/after this time (inclusive) |
+| `order` | string | No | `asc` (oldest first, default) or `desc` (newest first) |
 | `limit` | integer | No | Max events (default 50, cap 500) |
 
 **Returns:** `{ events: [...], count }`
@@ -608,7 +642,7 @@ List events with structured filters, oldest first.
 
 ### `mempalace_event_wait`
 
-Block until a matching event exists or the timeout expires (long-poll; max 5 minutes). Accepts the same filters as `event_list` plus:
+Block until a matching event exists or the timeout expires (long-poll; max 5 minutes). Accepts the forward filters `stream`, `room`, `topic`, `type`, `to_agent`, `from_agent`, `correlation_id`, `status`, `since_event_id`, and `since_created_at`, plus:
 
 For live-tail clients that can keep an HTTP connection open, use
 `GET /logstream/stream` SSE instead; `event_wait` is the polling MCP surface.
@@ -624,7 +658,7 @@ For live-tail clients that can keep an HTTP connection open, use
 
 ### `mempalace_event_ack`
 
-Acknowledge an event: appends a new `event.ack` routed back to the original writer, with `correlation_id` copied from the target (falling back to the target's id). Never mutates the target event.
+Acknowledge an event: appends a new `event.ack` routed back to the original writer. It copies `topic` from the target unless overridden, and copies `correlation_id` with the target id as its fallback. It never mutates the target event.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
@@ -632,6 +666,7 @@ Acknowledge an event: appends a new `event.ack` routed back to the original writ
 | `from_agent` | string | **Yes** | Acknowledging agent identity |
 | `status` | string | No | e.g. `applied`, `failed` |
 | `body` | string | No | Verbatim ack notes |
+| `topic` | string | No | Topic override (defaults to target event's topic) |
 
 **Returns:** `{ success, event }` — the new ack event.
 
@@ -674,6 +709,7 @@ Convenience: store a patch artifact and append its `patch.ready` event in one ca
 | `from_agent` | string | **Yes** | Submitting agent identity |
 | `stream` | string | **Yes** | Logical stream |
 | `room` | string | No | Sub-channel (default `patches`) |
+| `topic` | string | No | Topic name, e.g. `auth-v2` |
 | `to_agent` | string | No | Target agent or `*` |
 | `correlation_id` | string | No | Task id tying the patch to its request |
 | `branch` | string | No | Git branch |

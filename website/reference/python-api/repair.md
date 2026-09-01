@@ -57,6 +57,20 @@ the wording.
 def __init__(self, message: str, sqlite_count: 'int | None', extracted: int)
 ```
 
+### `class SqliteIntegrityStatus`
+
+Whether a quick_check verdict exists for a palace, and what it says.
+
+``checked`` False means no probe ran, so an empty ``errors`` says nothing
+about the database. That is the distinction :func:`sqlite_integrity_errors`
+cannot express: it answers ``[]`` both for a database quick_check found
+intact and for a palace that has none to open.
+
+``errors`` is a tuple rather than a list so ``frozen=True`` means what it
+says: a list field would leave the generated ``__hash__`` raising
+``TypeError`` on every call, and would let a caller append to a verdict it
+was handed.
+
 ### `class RebuildPartialError(Exception)`
 
 Raised when ``rebuild_from_sqlite`` fails partway through upserts.
@@ -154,6 +168,18 @@ Returns ``None`` when the schema isn't readable (chromadb version
 drift, missing tables, locked file). Callers treat ``None`` as
 "unknown" and fall back to the cap-detection check.
 
+### `sqlite_integrity_status`
+
+```python
+def sqlite_integrity_status(palace_path: str) -> SqliteIntegrityStatus
+```
+
+Run the quick_check probe and report whether it produced a verdict.
+
+Callers that state an integrity result to an operator want this rather
+than :func:`sqlite_integrity_errors`, whose empty list cannot separate a
+clean database from one that was never opened.
+
 ### `sqlite_integrity_errors`
 
 ```python
@@ -170,6 +196,14 @@ repair reaches the HNSW rebuild.
 Run a direct SQLite quick_check first so repair can fail with a clear,
 actionable message before invoking Chroma's destructive collection-delete
 path.
+
+An empty list means one of two things and cannot tell them apart: the
+check ran and found nothing, or the palace provably has no database to
+check. Callers stating a result to an operator want
+:func:`sqlite_integrity_status` instead. A path that resolves to a
+directory entry but cannot be opened — a dangling symlink, a database
+under a directory this process may not enter — is reported here as an
+error, since the probe did fail.
 
 ### `print_sqlite_integrity_abort`
 

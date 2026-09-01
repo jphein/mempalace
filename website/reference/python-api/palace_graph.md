@@ -98,6 +98,12 @@ def graph_stats(col = None, config = None)
 
 Summary statistics about the palace graph.
 
+``total_rooms`` keeps its historical meaning: unique room-name nodes in
+the passive graph. ``total_room_instances`` counts distinct (wing, room)
+placements, which is the number users naturally compare with ``status``.
+Explicit tunnel records are reported separately so the overview does not
+silently omit agent-created graph connections.
+
 ### `create_tunnel`
 
 ```python

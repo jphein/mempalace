@@ -57,7 +57,7 @@ def close(self)
 #### `append_event`
 
 ```python
-def append_event(self, type: str, stream: str, room: str, from_agent: str, to_agent: str = None, correlation_id: str = None, branch: str = None, base_commit: str = None, status: str = None, body: str = '', metadata: dict = None, artifact_ids: list = None) -> dict
+def append_event(self, type: str, stream: str, room: str, from_agent: str, to_agent: str = None, correlation_id: str = None, branch: str = None, base_commit: str = None, status: str = None, body: str = '', metadata: dict = None, artifact_ids: list = None, topic: str = None) -> dict
 ```
 
 Append one immutable event. Returns the stored event dict.
@@ -82,20 +82,20 @@ content itself is still stored verbatim.
 #### `ack_event`
 
 ```python
-def ack_event(self, event_id: str, from_agent: str, status: str = None, body: str = '') -> dict
+def ack_event(self, event_id: str, from_agent: str, status: str = None, body: str = '', topic: str = None) -> dict
 ```
 
 Append an ``event.ack`` referencing a prior event.
 
 The target event is never mutated. The ack copies the target's
-stream/room, copies its ``correlation_id`` (falling back to the
+stream/room/topic, copies its ``correlation_id`` (falling back to the
 target's id so request/ack stay tied together), and routes back
 to the target's ``from_agent``.
 
 #### `submit_patch`
 
 ```python
-def submit_patch(self, content: str, from_agent: str, stream: str, room: str = 'patches', to_agent: str = None, correlation_id: str = None, branch: str = None, base_commit: str = None, body: str = '', metadata: dict = None) -> dict
+def submit_patch(self, content: str, from_agent: str, stream: str, room: str = 'patches', to_agent: str = None, correlation_id: str = None, branch: str = None, base_commit: str = None, body: str = '', metadata: dict = None, topic: str = None) -> dict
 ```
 
 Convenience wrapper: store a patch artifact + ``patch.ready`` event.
@@ -115,15 +115,19 @@ Fetch one artifact by id, exact content included. None if missing.
 #### `list_events`
 
 ```python
-def list_events(self, stream: str = None, room: str = None, type: str = None, to_agent: str = None, from_agent: str = None, correlation_id: str = None, status: str = None, since_event_id: str = None, since_created_at: str = None, limit: int = DEFAULT_LIST_LIMIT) -> list[dict]
+def list_events(self, stream: str = None, room: str = None, topic: str = None, type: str = None, to_agent: str = None, from_agent: str = None, correlation_id: str = None, status: str = None, since_event_id: str = None, before_event_id: str = None, since_created_at: str = None, limit: int = DEFAULT_LIST_LIMIT, order: str = 'asc') -> list[dict]
 ```
 
-List events matching structured filters, oldest first.
+List events matching structured filters.
 
-Cursor semantics:
+Cursor and ordering semantics:
 
-- ``since_event_id`` is the precise cursor: strictly after that
-  event in append order (rowid), regardless of timestamp ties.
+- ``since_event_id`` is the precise cursor: strictly AFTER that
+  event in append order (``rowid > anchor``), regardless of timestamp ties
+  or output ordering.
+- ``before_event_id`` filters strictly BEFORE that event in append
+  order (``rowid < anchor``) for reverse / historical paging.
+- ``order`` is ``'asc'`` (oldest first, default) or ``'desc'`` (newest first).
 - ``since_created_at`` is inclusive (``>=``) so second-granularity
   timestamps never skip events; callers dedup by ``id``.
 - ``to_agent`` also matches broadcast events (``to_agent='*'``).
@@ -254,7 +258,7 @@ stray ``--type ""`` cannot silently match nothing forever.
 ### `event_matches_watch`
 
 ```python
-def event_matches_watch(event: dict, *, streams = None, rooms = None, types = None, statuses = None, to_agents = None, from_agents = None, exclude_from_agents = None, correlation_ids = None) -> bool
+def event_matches_watch(event: dict, *, streams = None, rooms = None, topics = None, types = None, statuses = None, to_agents = None, from_agents = None, exclude_from_agents = None, correlation_ids = None) -> bool
 ```
 
 Client-side half of a watch filter. Every argument is a set or ``None``.

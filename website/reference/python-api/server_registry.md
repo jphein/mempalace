@@ -15,8 +15,8 @@ capture on the hub machine.
 
 This module gives those local processes a way to find the hub instead of
 fighting it: the HTTP transport records ``&#123;pid, host, port, scheme,
-read_only}`` next to the per-palace bearer token
-(``~/.mempalace/server/&lt;key>/``), and callers use
+read_only, capabilities, search_config_fingerprint}`` next to the per-palace
+bearer token (``~/.mempalace/server/&lt;key>/``), and callers use
 :func:`read_live_serverinfo` to decide "forward this write over HTTP" vs
 "no hub — do the write directly".
 
@@ -55,7 +55,7 @@ def serverinfo_path(palace_path: str) -> Path
 ### `write_serverinfo`
 
 ```python
-def write_serverinfo(palace_path: str, *, host: str, port: int, scheme: str, read_only: bool)
+def write_serverinfo(palace_path: str, *, host: str, port: int, scheme: str, read_only: bool, capabilities = None, search_config_fingerprint = None)
 ```
 
 Record this process as the palace's HTTP hub. Returns the file path.
@@ -136,10 +136,36 @@ Dial address for a local client, from a serverinfo record.
 A wildcard bind ("all interfaces") is dialed via loopback — the record
 is only ever read on the hub's own machine.
 
+### `load_server_tokens`
+
+```python
+def load_server_tokens(palace_path: str) -> tuple[str, ...]
+```
+
+Return distinct local token candidates in safe retry order.
+
+The target palace's credential always goes first so a process token for a
+different palace is never sent unnecessarily.  A distinct process token
+is retained as a second candidate for a Hub restarted with ``--token``
+while an older generated palace credential remains on disk.
+
 ### `load_server_token`
 
 ```python
 def load_server_token(palace_path: str) -> str
 ```
 
-The palace's hub bearer token, or "" when none was ever generated.
+Return the preferred Hub bearer token, or "" when none is configured.
+
+### `urlopen_with_server_tokens`
+
+```python
+def urlopen_with_server_tokens(palace_path: str, url: str, *, data = None, headers = None, timeout = None)
+```
+
+Open one Hub request, retrying only a pre-acceptance HTTP 401.
+
+At most two distinct local credentials exist.  A 401 means the Hub's
+authentication gate rejected the request before dispatch, so trying the
+second credential is safe even for mutating JSON-RPC calls.  Every other
+HTTP or transport failure is surfaced immediately and is never replayed.

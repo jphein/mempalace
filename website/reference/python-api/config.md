@@ -29,6 +29,24 @@ Args:
                  used by CLI operations that received ``--palace``;
                  it takes precedence over environment and file config.
 
+#### `search_config_fingerprint`
+
+```python
+def search_config_fingerprint(self) -> str
+```
+
+Stable digest of the effective search configuration for this process.
+
+A long-running Hub keeps this configuration snapshot and may also keep
+a collection opened from it.  CLI search forwarding compares this
+digest with a freshly loaded config so a changed ``config.json`` falls
+back to the direct path instead of querying stale Hub state.
+
+Hash only resolved settings that affect the currently selected search
+backend.  This detects relevant file edits and Hub-start environment
+overrides without treating hook/UI settings or inactive-backend values
+as stale search state.  The digest keeps secrets out of the registry.
+
 #### `daemon_url`
 
 ```python
@@ -594,6 +612,24 @@ Read from env ``MEMPALACE_EMBEDDING_THREADS`` first, then
 - a positive integer → exactly that many intra-op threads.
 - ``0`` or negative → uncapped: ORT's default (physical core count),
   for users who want maximum indexing throughput.
+
+#### `embeddinggemma_batch_size`
+
+```python
+def embeddinggemma_batch_size(self) -> int
+```
+
+Documents per ``session.run()`` for the EmbeddingGemma ONNX model (#2330).
+
+The sub-batching added for #1770 bounds a run by document COUNT, not
+allocation: attention buffers scale with ``batch * padded_len ** 2``, so
+a batch of long documents can still exceed available memory at the
+module default (``mempalace.embedding._EMBEDDINGGEMMA_BATCH_SIZE``, 32).
+Read from env ``MEMPALACE_EMBEDDINGGEMMA_BATCH_SIZE`` first, then
+``embeddinggemma_batch_size`` in ``config.json``, then the module
+default. Unset, non-numeric, or non-positive values fall back to the
+default rather than raising; ``EmbeddinggemmaONNX.__init__`` still
+raises on an explicitly-passed non-positive ``batch_size``.
 
 #### `set_embedding_model`
 
