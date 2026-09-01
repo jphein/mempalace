@@ -24,7 +24,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 
-- **Sync upstream/develop through v3.9.0 (e8098348): 101 commits — durable config writes, strategy-aware candidate pools, BM25-under-threshold admission, search hub-forward, embeddinggemma batch override, cli_compatible search** ([`TBD`](https://github.com/techempower-org/mempalace/commit/TBD))
+- **Sync upstream/develop through v3.9.0 (e8098348): 101 commits — durable config writes, strategy-aware candidate pools, BM25-under-threshold admission, search hub-forward, embeddinggemma batch override, cli_compatible search** ([`09713d9`](https://github.com/techempower-org/mempalace/commit/09713d9))
   Fourth large sync (merge commit, per the post-#394 rule). Upstream
   brought: atomic + fsync'd config persistence with symlink-following
   and unreadable-file quarantine (``_persist_file_config``), a

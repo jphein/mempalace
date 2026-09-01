@@ -277,7 +277,7 @@ The full enumeration of fork-ahead changes. The canonical source is [`docs/fork-
 
 | # | Description | Upstream PR | Fork commit |
 |---|---|---|---|
-| 1 | Sync upstream/develop through v3.9.0 (e8098348): 101 commits — durable config writes, strategy-aware candidate pools, BM25-under-threshold admission, search hub-forward, embeddinggemma batch override, cli_compatible search | — | [`TBD`](https://github.com/techempower-org/mempalace/commit/TBD) |
+| 1 | Sync upstream/develop through v3.9.0 (e8098348): 101 commits — durable config writes, strategy-aware candidate pools, BM25-under-threshold admission, search hub-forward, embeddinggemma batch override, cli_compatible search | — | [`09713d9`](https://github.com/techempower-org/mempalace/commit/09713d9) |
 | 2 | CLI wave 3/3: `mempalace diary`, `kg`, `walk` and `rate` first-class verbs (#354, #357, #359, #361) | — | [`ff9ee22`](https://github.com/techempower-org/mempalace/commit/ff9ee22) |
 | 3 | CLI wave 2/3: `mempalace wings`, `taxonomy`, `aaak spec`, `hallway`, `checkpoint --dry-run` (#356, #358, #360, #362) | — | [`2848e96`](https://github.com/techempower-org/mempalace/commit/2848e96) |
 | 4 | CLI wave 1/3: `mempalace drawer get\|add\|delete\|update` and `duplicate check` (#355, #363) | — | [`836d1a1`](https://github.com/techempower-org/mempalace/commit/836d1a1) |
