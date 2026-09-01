@@ -20,7 +20,11 @@ Four embedding-model options are available, selected via
   non-English use; onboarding offers it as the default. The ~300 MB ONNX
   model is lazy-downloaded from HuggingFace on first use. Switching models
   on an existing palace requires ``mempalace repair rebuild-index``
-  (different vector space).
+  (different vector space). Its ``session.run()`` sub-batch size (32 docs by
+  default, #1770) is overridable via ``MEMPALACE_EMBEDDINGGEMMA_BATCH_SIZE``
+  or ``embeddinggemma_batch_size`` in ``config.json`` for palaces whose
+  drawers are long enough that the default sub-batch exceeds available
+  memory (#2330).
 * ``adaptmem_ft`` — a SentenceTransformer-shaped fine-tuned checkpoint from
   techempower-org/adaptmem, loaded from a local path (``MEMPALACE_ADAPTMEM_PATH``
   or ``adaptmem_path`` in config). Nothing is downloaded. Same 384-dim shape as

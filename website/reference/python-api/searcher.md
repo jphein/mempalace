@@ -36,7 +36,7 @@ bare and zero clauses yield an empty filter (#1815).
 ### `search`
 
 ```python
-def search(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, n_results: int = 5, since: str = None, before: str = None)
+def search(query: str, palace_path: str, wing: str = None, room: str = None, tags: list = None, n_results: int = 5, since: str = None, before: str = None, collection = None)
 ```
 
 Search the palace. Returns verbatim drawer content.
@@ -91,7 +91,7 @@ Args:
     candidate_strategy: How candidates for the hybrid re-rank are gathered.
 
         * ``"vector"`` (default) — preserves historical behavior: top
-          ``n_results * 3`` rows from the vector index are the rerank pool.
+          ``n_results * 4`` rows from the vector index are the rerank pool.
           Cheap; works well when query and target docs agree in the
           embedding space.
         * ``"union"`` — also pull top ``n_results * 3`` lexical candidates
@@ -102,8 +102,8 @@ Args:
           characterized.
 
           When ``max_distance > 0.0`` is also set, BM25-only candidates
-          are skipped — they have no vector distance and would silently
-          violate the requested distance threshold.
+          are admitted only if their stored embeddings can be loaded and
+          their computed vector distance satisfies that threshold.
     lang: Locale code for BM25 stop-word filtering (opt-in). When
         omitted, reads ``MempalaceConfig().lang_explicit`` — returns an
         empty set unless the user has set ``MEMPALACE_LANG`` /

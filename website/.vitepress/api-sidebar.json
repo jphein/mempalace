@@ -136,6 +136,10 @@
         "link": "/reference/python-api/hooks_cli"
       },
       {
+        "text": "mempalace.hub_client",
+        "link": "/reference/python-api/hub_client"
+      },
+      {
         "text": "mempalace.ids",
         "link": "/reference/python-api/ids"
       },
@@ -328,8 +332,16 @@
         "link": "/reference/python-api/tags"
       },
       {
+        "text": "mempalace.tasks",
+        "link": "/reference/python-api/tasks"
+      },
+      {
         "text": "mempalace.transport",
         "link": "/reference/python-api/transport"
+      },
+      {
+        "text": "mempalace.update_awareness",
+        "link": "/reference/python-api/update_awareness"
       },
       {
         "text": "mempalace.version",

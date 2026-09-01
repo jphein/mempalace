@@ -362,7 +362,9 @@ Return a structured snapshot of this collection's maintenance state.
 Free-form per backend (e.g. row count, whether a vector index exists,
 last-analyze age). Used by benchmark harnesses to record state
 alongside each latency/recall measurement so an un-analyzed store is
-not compared against a settled one (RFC 001). Defaults to empty.
+not compared against a settled one (RFC 001). Backends should include
+a JSON-compatible ``consistency_token`` when they can cheaply detect
+writes that preserve the row count. Defaults to empty.
 
 #### `run_maintenance`
 

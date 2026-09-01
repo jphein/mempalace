@@ -42,6 +42,7 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.hlc`](./hlc) — hlc.py — Hybrid Logical Clock for RFC 004 op ordering
 - [`mempalace.hook_shell`](./hook_shell) — Compatibility helpers for legacy shell hooks.
 - [`mempalace.hooks_cli`](./hooks_cli) — Hook logic for MemPalace — Python implementation of session-start, stop, session-end, and precompact hooks.
+- [`mempalace.hub_client`](./hub_client) — Small authenticated client for forwarding JSON-RPC to a live Palace hub.
 - [`mempalace.ids`](./ids) — Centralized drawer/triple ID construction with collision-safe delimiter.
 - [`mempalace.instructions_cli`](./instructions_cli) — Instruction text output for MemPalace CLI commands.
 - [`mempalace.kg_canonical_vocab`](./kg_canonical_vocab) — Closed-vocabulary predicate mapping spike (issue #72).
@@ -90,7 +91,9 @@ For task-oriented overviews of the main interfaces (search, memory stack, knowle
 - [`mempalace.sync`](./sync) — sync.py — Gitignore-aware drawer prune (#1252).
 - [`mempalace.tag_extraction`](./tag_extraction) — TF-IDF auto-tag extraction for drawer write time (#201).
 - [`mempalace.tags`](./tags) — Multi-label tags for drawers (techempower-org/mempalace#39).
+- [`mempalace.tasks`](./tasks) — High-level task envelopes shared by CLI and remote MCP clients.
 - [`mempalace.transport`](./transport) — transport.py — The RFC 004 transport seam (Layer 1).
+- [`mempalace.update_awareness`](./update_awareness) — Opt-in, cached release awareness without automatic installation.
 - [`mempalace.version`](./version) — Single source of truth for the MemPalace package version.
 - [`mempalace.wal`](./wal) — Side-effect-free write-ahead log for MemPalace write operations.
 - [`mempalace.write_routing`](./write_routing) — Shared daemon-routing policy for MemPalace write callers.
