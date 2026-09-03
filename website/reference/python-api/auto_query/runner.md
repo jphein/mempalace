@@ -26,7 +26,7 @@ Result of a single auto-query pipeline run.
 #### `__init__`
 
 ```python
-def __init__(self, injection = None, decision = None, tool_call = None, mcp_result = None)
+def __init__(self, injection = None, decision = None, tool_call = None, mcp_result = None, receipt = None)
 ```
 
 ## Functions
@@ -34,7 +34,7 @@ def __init__(self, injection = None, decision = None, tool_call = None, mcp_resu
 ### `run_auto_query`
 
 ```python
-def run_auto_query(prompt, session_id, turn, project_wing = '', known_wings = None, known_entities = None, has_recent_drawers = False, config = None, queried_entities = None, log_dir = None)
+def run_auto_query(prompt, session_id, turn, project_wing = '', known_wings = None, known_entities = None, has_recent_drawers = False, config = None, queried_entities = None, log_dir = None, wing_counts = None)
 ```
 
 Run the auto-query pipeline for a single user turn.

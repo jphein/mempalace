@@ -47,6 +47,327 @@ _EXPLICIT_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Blocks that arrive inside the user-prompt payload but are NOT the user's
+# words: cross-session / teammate messages, harness reminders, local-command
+# echoes. Extracting entities from these fired the auto-query on a *peer's*
+# prose ("Decline", "Write", "Reply" → 5 unrelated drawers) — fleet check-in,
+# 2026-09-03. Strip them before any signal extraction.
+_FOREIGN_BLOCK_RE = re.compile(
+    r"<(cross-session-message|teammate-message|system-reminder|local-command-caveat"
+    r"|command-name|command-message|command-args|local-command-stdout|task-notification"
+    r"|bash-input|bash-stdout|bash-stderr)\b[^>]*>.*?</\1>",
+    re.IGNORECASE | re.DOTALL,
+)
+
+
+def strip_foreign_blocks(text):
+    # type: (str) -> str
+    """Remove peer-message / harness blocks so only the user's words remain."""
+    if not text or "<" not in text:
+        return text or ""
+    return _FOREIGN_BLOCK_RE.sub(" ", text)
+
+
+# Identifier shapes — the retrievable knowledge in a debugging corpus is
+# mostly identifiers (``EF_FPLMN``, ``NSAPI``, ``rejectCause``, ``CPE710``,
+# ``com.apple.commcenter``, ``0x807``), which the capitalized-noun-phrase regex
+# never matched (fleet check-in, 2026-09-03: "matching prose, and the
+# retrievable knowledge in this project is all identifiers").
+_IDENT_RES = (
+    re.compile(r"\b[A-Z][A-Z0-9]*_[A-Z0-9_]+\b"),  # EF_FPLMN, IP_VERSION_MISMATCH
+    re.compile(r"\b[A-Z]{3,}[0-9]*\b"),  # NSAPI, CGDCONT, IMSI
+    re.compile(r"\b[a-z]+(?:[A-Z][a-z0-9]+)+\b"),  # rejectCause, sysvinit? (camelCase)
+    re.compile(r"\b[A-Z][a-z]+(?:[A-Z][a-zA-Z0-9]+)+\b"),  # IuUP, PalaceDaemon (PascalCase)
+    re.compile(r"\b0x[0-9a-fA-F]{2,}\b"),  # hex codes
+    re.compile(r"\b[A-Za-z]+[0-9]+[A-Za-z0-9]*(?:[,.][0-9]+)?\b"),  # CPE710, iPhone2,1, ESP32
+    re.compile(r"\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b"),  # snake_case: hook_silent_save
+    re.compile(r"\b[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*){2,}\b"),  # com.apple.commcenter
+)
+
+# ALLCAPS / code-shaped tokens that are harness or format vocabulary, not
+# domain identifiers.
+_IDENT_BLOCKLIST = frozenset(
+    {
+        "OK",
+        "TODO",
+        "FIXME",
+        "NOTE",
+        "IMPORTANT",
+        "WARNING",
+        "ERROR",
+        "README",
+        "JSON",
+        "YAML",
+        "HTML",
+        "HTTP",
+        "HTTPS",
+        "URL",
+        "URI",
+        "API",
+        "CLI",
+        "MCP",
+        "PATH",
+        "HEAD",
+        "TBD",
+        "TLDR",
+        "UTC",
+        "PDT",
+        "PST",
+        "EST",
+        "GMT",
+        "NULL",
+        "TRUE",
+        "FALSE",
+        "NONE",
+        "AND",
+        "THE",
+        "FOR",
+        "NOT",
+        "YES",
+        "ALL",
+        "ANY",
+        "NEW",
+        "OLD",
+        "PDF",
+        "PNG",
+        "JPG",
+        "SVG",
+        "CSS",
+        "SQL",
+        "SSH",
+        "USB",
+        "RAM",
+        "CPU",
+        "GPU",
+        "LAN",
+        "WAN",
+        "DNS",
+        "IP",
+        "EOF",
+        "ASCII",
+        "UTF8",
+        "ISO",
+        "GNOME",
+        "LTS",
+        "CI",
+        "PR",
+        "ID",
+        "AM",
+        "PM",
+        "MD",
+        "TXT",
+        "LOG",
+        "ENV",
+        "STDOUT",
+        "STDERR",
+        "ASAP",
+        "FYI",
+        "ETA",
+        "AKA",
+        "IMO",
+        "LOL",
+        "CLAUDE",
+        "MEMORY",
+        "SUDO",
+        "UNIX",
+        "LINUX",
+        "MAC",
+        "WIN",
+        "GIT",
+        "PIP",
+        "NPM",
+    }
+)
+_MAX_IDENTIFIER_SIGNALS = 3
+_MIN_IDENT_LEN = 3
+
+# Generic-English / harness words that the capitalized-noun regex catches at
+# sentence starts and in pasted tool output. Fleet-observed misfires:
+# Goal, You, ONE, Hold, Decline, Write, Reply, Context, Full, Lint, Commit.
+_GENERIC_CAPS = {
+    "Goal",
+    "You",
+    "Your",
+    "One",
+    "Hold",
+    "Decline",
+    "Write",
+    "Reply",
+    "Context",
+    "Full",
+    "Lint",
+    "Commit",
+    "Fault",
+    "Note",
+    "Still",
+    "Since",
+    "After",
+    "Before",
+    "While",
+    "Because",
+    "Both",
+    "Each",
+    "Every",
+    "Some",
+    "Many",
+    "Most",
+    "Other",
+    "Same",
+    "Such",
+    "Very",
+    "Well",
+    "Even",
+    "Ever",
+    "Never",
+    "Always",
+    "Maybe",
+    "Perhaps",
+    "Sure",
+    "Okay",
+    "Thanks",
+    "Thank",
+    "Hi",
+    "Hey",
+    "Hello",
+    "Good",
+    "Great",
+    "Nice",
+    "Right",
+    "Left",
+    "First",
+    "Second",
+    "Next",
+    "Last",
+    "Final",
+    "New",
+    "Old",
+    "Read",
+    "Edit",
+    "Bash",
+    "Update",
+    "Check",
+    "Fix",
+    "Run",
+    "Add",
+    "Remove",
+    "Make",
+    "Use",
+    "Try",
+    "See",
+    "Look",
+    "Find",
+    "Get",
+    "Set",
+    "Put",
+    "Keep",
+    "Stop",
+    "Start",
+    "Done",
+    "Todo",
+    "Summary",
+    "Result",
+    "Results",
+    "Error",
+    "Warning",
+    "Output",
+    "Input",
+    "File",
+    "Files",
+    "Line",
+    "Lines",
+    "Code",
+    "Test",
+    "Tests",
+    "Hook",
+    "Hooks",
+    "Skill",
+    "Skills",
+    "Plugin",
+    "Session",
+    "Sessions",
+    "Claude",
+    "Assistant",
+    "User",
+    "System",
+    "Tool",
+    "Tools",
+    "Message",
+    "Messages",
+    "Ask",
+    "Answer",
+    "Question",
+    "Status",
+    "Report",
+    "Plan",
+    "Step",
+    "Steps",
+    "Part",
+    "Item",
+    "Items",
+    "List",
+    "Name",
+    "Type",
+    "Value",
+    "Data",
+    "Info",
+    "Detail",
+    "Details",
+    "Example",
+    "Issue",
+    "Issues",
+    "Problem",
+    "Problems",
+    "Fixed",
+    "Merged",
+    "Open",
+    "Closed",
+    "Ready",
+    "Yes",
+    "Nope",
+    "Yep",
+    "Cool",
+    "Love",
+    "Please",
+    "Sorry",
+    "Hmm",
+    "Wow",
+    "Honest",
+    "Honestly",
+    "Quick",
+    "Fast",
+    "Slow",
+    "Big",
+    "Small",
+    "Long",
+    "Short",
+    "High",
+    "Low",
+    "More",
+    "Less",
+    "Much",
+    "Little",
+    "Few",
+    "Several",
+    "Something",
+    "Anything",
+    "Nothing",
+    "Everything",
+    "Someone",
+    "Anyone",
+    "Today",
+    "Tomorrow",
+    "Tonight",
+    "Morning",
+    "Evening",
+    "Night",
+    "Week",
+    "Month",
+    "Year",
+    "Day",
+    "Time",
+    "Times",
+}
+
 # Stopwords — common capitalized words that are NOT entities
 _STOPWORDS = {
     "The",
@@ -152,12 +473,20 @@ def extract_signals(
     Pure function — no I/O, no MCP calls. All external state
     (wings, entities, drawer existence) is passed in by the caller.
     """
+    # Only the user's own words count as signal — never a peer agent's.
+    text = strip_foreign_blocks(text)
+
     entity_signals = _extract_entity_signals(text, session_state, known_wings, known_entities)
+    identifier_signals = _extract_identifier_signals(text, session_state)
     temporal_signals = _extract_temporal_signals(text)
     resumption = _check_resumption(session_state, project_wing, known_wings, has_recent_drawers)
     explicit = _check_explicit(text)
 
-    total = sum(s.score for s in entity_signals) + sum(s.score for s in temporal_signals)
+    total = (
+        sum(s.score for s in entity_signals)
+        + sum(s.score for s in identifier_signals)
+        + sum(s.score for s in temporal_signals)
+    )
     if resumption:
         total += 4
     if explicit:
@@ -188,6 +517,7 @@ def extract_signals(
         project_wing=project_wing,
         query_text=text,
         depth_fire=depth_fire,
+        identifier=identifier_signals,
     )
 
 
@@ -216,13 +546,24 @@ def _extract_entity_signals(
             continue
         # Stopword check — compare first word for multi-word phrases too
         first_word = token.split()[0]
-        if first_word in _STOPWORDS:
+        if first_word in _STOPWORDS or first_word in _GENERIC_CAPS:
             continue
         if token in session_state.queried_entities:
             continue
         seen.add(token)
 
         signal = _score_entity(token, known_wings, known_entities)
+        if signal.score < 2:
+            # Unknown token. Identifier-shaped ones belong to the identifier
+            # pass (exact-match retrieval). A lone capitalized word at the
+            # START of a sentence is how English sentences start, not a
+            # remembered thing ("Goal set…", "Decline…", "Reply…" all fired
+            # the palace fleet-wide, 2026-09-03). Mid-sentence single names
+            # ("tell me about Alice") keep the weak-but-real score of 1.
+            if _looks_like_identifier(token):
+                continue
+            if " " not in token and _sentence_initial(text, m.start()):
+                continue
         if signal.wing:
             seen.add(signal.wing)
         signals.append(signal)
@@ -278,10 +619,58 @@ def _score_entity(
     if known_entities and name in known_entities:
         return Signal(kind="entity", name=name, score=2)
 
-    # Unknown entity — score 1. A bare capitalized name is a weak-but-real
-    # recall signal: two unknown entities reach the aggressive threshold (2),
-    # four reach balanced (4). (Was 0, which made unknown names invisible.)
+    # Unknown entity — weak-but-real score 1. The caller decides whether a
+    # lone sentence-initial word or an identifier-shaped token should be
+    # dropped from the entity list (see _extract_entity_signals).
     return Signal(kind="entity", name=name, score=1)
+
+
+_SENTENCE_BOUNDARY = ".!?:;\n\r\"'([{\u2014-"
+
+
+def _sentence_initial(text, pos):
+    # type: (str, int) -> bool
+    """True when the token at ``pos`` opens the text or follows a sentence break."""
+    i = pos - 1
+    while i >= 0 and text[i] in " \t":
+        i -= 1
+    if i < 0:
+        return True
+    return text[i] in _SENTENCE_BOUNDARY
+
+
+def _looks_like_identifier(token):
+    # type: (str) -> bool
+    """True when a token has identifier shape (digits, underscores, humps, hex)."""
+    if not token or len(token) < _MIN_IDENT_LEN:
+        return False
+    if token.upper() in _IDENT_BLOCKLIST:
+        return False
+    return any(r.fullmatch(token) for r in _IDENT_RES)
+
+
+def _extract_identifier_signals(text, session_state):
+    # type: (str, SessionState) -> List[Signal]
+    """Extract identifier-shaped tokens — exact-match retrieval targets."""
+    signals = []  # type: List[Signal]
+    seen = set()  # type: Set[str]
+    for rx in _IDENT_RES:
+        for m in rx.finditer(text):
+            tok = m.group(0)
+            if len(tok) < _MIN_IDENT_LEN or tok in seen:
+                continue
+            if tok.upper() in _IDENT_BLOCKLIST:
+                continue
+            if tok in session_state.queried_entities:
+                continue
+            # A bare ALLCAPS English word ("FIXED", "MERGED") is not an id.
+            if tok.isalpha() and tok.isupper() and tok.capitalize() in _GENERIC_CAPS:
+                continue
+            seen.add(tok)
+            signals.append(Signal(kind="identifier", name=tok, score=2))
+            if len(signals) >= _MAX_IDENTIFIER_SIGNALS:
+                return signals
+    return signals
 
 
 def _entity_to_wing_slugs(name):

@@ -6,7 +6,7 @@ cases.
 """
 
 from mempalace.auto_query import SessionState, Signal, SignalSet
-from mempalace.auto_query.router import THRESHOLDS, pick_tool
+from mempalace.auto_query.router import DEPTH_FETCH, THRESHOLDS, pick_tool
 
 
 # ---------------------------------------------------------------------------
@@ -283,15 +283,32 @@ class TestDepthRoute:
     """Priority 1.5: periodic depth refresh -> project-scoped search."""
 
     def test_depth_routes_to_search(self):
-        signals = _empty_signals(score=4, project_wing="wing_test")
+        """Depth refresh queries with the USER'S OWN WORDS, wing-scoped, over-fetched.
+
+        The old fixed "session context <wing>" string matched session manifests
+        forever and returned the same three drawers every turn (fleet check-in,
+        2026-09-03) — it must never come back.
+        """
+        signals = _empty_signals(
+            score=4, project_wing="wing_test", query_text="why does the bridge radio drop"
+        )
         signals.depth_fire = True
         result = pick_tool(signals, "balanced", _session())
 
         assert result is not None
         assert result.tool == "mempalace_search"
         assert result.args["wing"] == "wing_test"
-        assert result.args["limit"] == 3
-        assert "session context" in result.args["query"]
+        assert result.args["limit"] == DEPTH_FETCH
+        assert result.args["query"] == "why does the bridge radio drop"
+        assert "session context" not in result.args["query"]
+
+    def test_depth_short_turn_falls_back_to_decision_shaped_query(self):
+        """A turn too short to carry meaning asks for decisions/problems, not manifests."""
+        signals = _empty_signals(score=4, project_wing="wing_test", query_text="ok go")
+        signals.depth_fire = True
+        result = pick_tool(signals, "balanced", _session())
+
+        assert result.args["query"] == "decisions problems findings wing_test"
 
     def test_resumption_overrides_depth(self):
         """Task resumption (Priority 1) still wins over depth (1.5)."""
@@ -311,16 +328,17 @@ class TestDepthRoute:
         result = pick_tool(signals, "balanced", _session())
 
         assert result.tool == "mempalace_search"
-        assert "session context" in result.args["query"]
+        assert result.args["query"] == "remind me about X?"
+        assert result.args["limit"] == DEPTH_FETCH
 
     def test_depth_no_wing_omits_wing_arg(self):
-        """Empty project wing -> trimmed query, no wing arg."""
+        """Empty project wing -> trimmed fallback query, no wing arg."""
         signals = _empty_signals(score=4, project_wing="")
         signals.depth_fire = True
         result = pick_tool(signals, "balanced", _session())
 
         assert result.tool == "mempalace_search"
-        assert result.args["query"] == "session context"
+        assert result.args["query"] == "decisions problems findings"
         assert "wing" not in result.args
 
     def test_depth_below_threshold_skips(self):

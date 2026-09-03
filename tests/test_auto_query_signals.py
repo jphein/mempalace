@@ -97,7 +97,8 @@ class TestEntitySignals:
         assert len(matched) == 1
         assert matched[0].score == 2
 
-    def test_unknown_entity_scores_1(self):
+    def test_unknown_mid_sentence_name_scores_1(self):
+        """A mid-sentence unknown name is a weak-but-real recall signal."""
         signals = _extract_entity_signals(
             "Tell me about Xylophone",
             _session(),
@@ -106,8 +107,22 @@ class TestEntitySignals:
         )
         matched = [s for s in signals if s.name == "Xylophone"]
         assert len(matched) == 1
-        # Bumped 0 -> 1: a bare capitalized name is a weak recall signal.
         assert matched[0].score == 1
+
+    def test_unknown_sentence_initial_word_is_not_a_signal(self):
+        """A lone capitalized word opening a sentence is how English starts.
+
+        "Goal set…", "Decline…", "Reply…" fired the palace fleet-wide on
+        nothing (2026-09-03). Sentence-initial unknown single words are dropped;
+        the same word mid-sentence still counts.
+        """
+        signals = _extract_entity_signals(
+            "Xylophone is what I want. Decline the rest.",
+            _session(),
+            set(),
+            None,
+        )
+        assert [s.name for s in signals] == []
 
     def test_dedup_queried_entities(self):
         """Entities already in session_state.queried_entities are skipped."""
@@ -436,10 +451,10 @@ class TestCompounding:
             set(),
             {"Alice"},
         )
-        # "Alice": score 2 (known entity); "Tell": score 1 (unknown
-        # capitalized word, post score-0->1 bump). No temporal/resumption/
-        # explicit, no compound bonus. 2 + 1 = 3.
-        assert result.total_score == 3
+        # "Alice": score 2 (known entity). "Tell" is a sentence-initial
+        # unknown word and no longer counts (it was noise). No temporal/
+        # resumption/explicit, no compound bonus. 2.
+        assert result.total_score == 2
 
     def test_total_score_temporal_only(self):
         """Temporal only — no compound bonus."""

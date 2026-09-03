@@ -19,7 +19,7 @@ The formatter handles four MCP result shapes:
 ### `format_injection`
 
 ```python
-def format_injection(tool_call: MCPCall, mcp_result: dict, signals: SignalSet, latency_ms: int) -> Optional[str]
+def format_injection(tool_call: MCPCall, mcp_result: dict, signals: SignalSet, latency_ms: int, header_lines: Optional[List[str]] = None) -> Optional[str]
 ```
 
 Format MCP results as an injection block with sentinel tokens.

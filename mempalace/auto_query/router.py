@@ -29,6 +29,12 @@ THRESHOLDS = {
 # Maximum length for search query strings passed to MCP tools.
 _MAX_QUERY_LEN = 200
 
+# Over-fetch sizes: the runner filters manifests / diary / below-floor /
+# already-injected drawers after the call, then keeps DEPTH_KEEP.
+DEPTH_FETCH = 8
+DEPTH_KEEP = 3
+IDENT_FETCH = 6
+
 
 def pick_tool(
     signals: SignalSet,
@@ -68,12 +74,25 @@ def _select_tool(signals: SignalSet) -> Optional[MCPCall]:
             },
         )
 
-    # Priority 1.5: Periodic depth refresh — a broad project-scoped pull to
+    # Priority 1.5: Periodic depth refresh — a project-scoped pull to
     # re-anchor context mid-session. Sits just below task resumption and above
     # every content-derived signal (explicit/entity/temporal).
+    #
+    # The query is the USER'S OWN WORDS, not a fixed string. The old
+    # "session context <wing>" query matched session manifests forever and
+    # returned the same three drawers every turn — the single largest reason
+    # agents learned to ignore the palace (fleet check-in, 2026-09-03). When
+    # the turn is too short to carry meaning, fall back to the wing's
+    # decision-shaped content instead of its manifests. The runner
+    # over-fetches so post-filtering (manifests, diary, floor, already-seen)
+    # still leaves DEPTH_KEEP results.
     if signals.depth_fire:
-        query = "session context {}".format(signals.project_wing).strip()
-        args = {"query": query, "limit": 3}
+        words = _sanitize_for_search(signals.query_text).split()
+        if len(words) >= 3:
+            query = " ".join(words)
+        else:
+            query = "decisions problems findings {}".format(signals.project_wing).strip()
+        args = {"query": query, "limit": DEPTH_FETCH}
         if signals.project_wing:
             args["wing"] = signals.project_wing
         return MCPCall(tool="mempalace_search", args=args)
@@ -85,6 +104,16 @@ def _select_tool(signals: SignalSet) -> Optional[MCPCall]:
             tool="mempalace_search",
             args={"query": query, "limit": 10},
         )
+
+    # Priority 2.5: Identifier-shaped tokens — exact-match retrieval. Union
+    # candidate strategy adds the BM25 lexical arm, which is what pays for
+    # ``NSAPI`` / ``EF_FPLMN`` / ``0x807`` shaped queries.
+    if signals.identifier and not any(sig.score >= 2 for sig in signals.entity):
+        names = [sig.name for sig in signals.identifier[:3]]
+        args = {"query": " ".join(names), "limit": IDENT_FETCH, "candidate_strategy": "union"}
+        if signals.project_wing:
+            args["wing"] = signals.project_wing
+        return MCPCall(tool="mempalace_search", args=args)
 
     # Priority 3: Entity + temporal compound
     if signals.entity and signals.temporal:

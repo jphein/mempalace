@@ -27,7 +27,7 @@ __all__ = [
 class Signal:
     """A single signal extracted from the user's turn."""
 
-    kind: str  # "entity", "temporal", "resumption", "explicit"
+    kind: str  # "entity", "identifier", "temporal", "resumption", "explicit"
     name: str
     score: int
     wing: str = ""
@@ -46,6 +46,10 @@ class SignalSet:
     project_wing: str = ""
     query_text: str = ""
     depth_fire: bool = False  # periodic depth refresh fired this turn
+    # Identifier-shaped tokens (ALLCAPS, snake_case, camelCase, hex, dotted,
+    # alnum codes) — the strings that appear in logs and findings and nowhere
+    # else. Queried with lexical (BM25 union) retrieval, where exact match pays.
+    identifier: list = dataclasses.field(default_factory=list)  # list[Signal]
 
 
 @dataclasses.dataclass
