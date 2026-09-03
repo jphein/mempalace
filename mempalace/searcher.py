@@ -2213,6 +2213,39 @@ def _merge_bm25_union_candidates(
         seen.add(key)
 
 
+def _vector_underdelivered_warning(available_in_scope, vector_hit_count):
+    # type: (int, int) -> str
+    """Explain a thin vector result without misdiagnosing the backend.
+
+    The "rebuild the HNSW index" hint is a ChromaDB diagnosis (a diverged
+    HNSW segment really does make drawers unreachable). On postgres/pgvector
+    the same shape almost always means the query has no semantic neighbour
+    inside the distance threshold — e.g. an identifier-soup query scoring
+    0.36 on a healthy 86K-drawer wing (2026-09-03) — and telling the reader
+    to run ``mempalace repair`` sends them into a long, pointless rebuild
+    under the write lock.
+    """
+    try:
+        from .config import MempalaceConfig
+
+        backend = getattr(MempalaceConfig(), "backend", None) or "chroma"
+    except Exception:
+        backend = "chroma"
+    if backend == "chroma":
+        return (
+            f"{available_in_scope} drawers match this scope in sqlite; "
+            f"vector ranked {vector_hit_count} — the rest are only reachable "
+            f"by keyword match. Run `mempalace repair` to rebuild the HNSW "
+            f"index for full semantic recall."
+        )
+    return (
+        f"{available_in_scope} drawers in scope; vector ranked only {vector_hit_count} "
+        f"within the distance threshold — the query has few semantic neighbours "
+        f"here. Try exact identifiers (BM25 matches them), broader phrasing, or a "
+        f"wider --max-distance. (Not an index fault on the {backend} backend.)"
+    )
+
+
 def _candidate_pool_size(n_results: int, date_window_active: bool) -> int:
     """Rerank-pool size for the drawer vector query.
 
@@ -3597,12 +3630,7 @@ def search_memories(  # noqa: C901 — fork-only fallback orchestration; complex
         and available_in_scope is not None
         and available_in_scope > vector_hit_count
     ):
-        warnings.append(
-            f"{available_in_scope} drawers match this scope in sqlite; "
-            f"vector ranked {vector_hit_count} — the rest are only reachable "
-            f"by keyword match. Run `mempalace repair` to rebuild the HNSW "
-            f"index for full semantic recall."
-        )
+        warnings.append(_vector_underdelivered_warning(available_in_scope, vector_hit_count))
 
     result = _search_result_envelope(
         query=query,
