@@ -18,6 +18,68 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ---
 
 
+## [2026-09-03]
+
+
+### Fixed
+
+
+- **Hooks ask the daemon to run checkpoint mines in the background (202 + serial drain) — no more 30s timeouts, journaled replays, and double mines** ([`79b192b`](https://github.com/techempower-org/mempalace/commit/79b192b))
+  ``_post_daemon_mine`` sends ``background: true``. The daemon (palace-daemon
+  #242–#244) queues the mine, answers 202 in ~2ms, drains serially, requeues
+  on palace-lock contention instead of quarantining, and recovers an
+  interrupted batch at startup. Before: ``/mine`` blocked until the subprocess
+  finished, the hook's 30s timeout fired on every real mine, a replay was
+  journaled, and the daemon finished the original anyway — every long mine
+  ran twice and the write lock stayed hot (#426; design palace-daemon#233).
+
+  *Tests:* 1 updated (test_hooks_cli payload contract)
+
+
+- **Thin-vector warning no longer tells pgvector users to rebuild an HNSW index** ([`43d3a28`](https://github.com/techempower-org/mempalace/commit/43d3a28))
+  The ``vector ranked N — run mempalace repair to rebuild the HNSW index``
+  warning is a ChromaDB diagnosis. On postgres the same shape means the query
+  has no semantic neighbour inside the distance threshold (an identifier-soup
+  query on a healthy 86K-drawer wing scored 0.359 and an agent nearly ran a
+  long, pointless rebuild under the write lock). Backend-aware wording now
+  explains the threshold and suggests identifiers / broader phrasing /
+  ``--max-distance``, stating explicitly that it is not an index fault.
+
+  *Tests:* 2 (test_vector_underdelivered_warning)
+
+
+- **Checkpoint ingest mines THIS transcript, not the whole project dir (#414/#426 mechanism)** ([`16a5236`](https://github.com/techempower-org/mempalace/commit/16a5236))
+  In daemon-strict mode ``_ingest_transcript`` posted ``path.parent`` — the
+  whole project transcript directory — so every Stop/PreCompact checkpoint
+  re-mined every session in the project. Measured: one such mine ran 6h06m
+  (2h CPU) holding the palace write lock while three sessions were live.
+  Post the single ``.jsonl`` (convo_miner already supported it; the daemon
+  side accepts it via palace-daemon#241 ``_is_mineable_path``).
+
+  *Tests:* 1 updated (test_ingest_transcript_routes_through_daemon)
+
+
+- **Auto-query signal quality: user's-words depth query + wing inventory, peer-block stripping, identifier signals via BM25 fast route, exhaust filter, 0.50 floor, per-session dedupe, curated-first, visible receipts (#419 #420 #422 #424)** ([`0d92cef`](https://github.com/techempower-org/mempalace/commit/0d92cef))
+  Fleet check-in of all 8 live sessions (2026-09-03): 7 had never deliberately
+  queried the palace, because the auto-query returned the same session-manifest
+  / diary AUTO-SAVE drawers every turn, fired on generic English scraped from
+  peer-agent messages, and never on domain identifiers. Fixes: the depth
+  refresh searches with the user's own words (wing-scoped, over-fetched) and
+  carries a wing inventory line; ``<cross-session-message>`` /
+  ``<teammate-message>`` / ``<system-reminder>`` blocks are stripped and
+  sentence-initial generic capitals no longer score; identifier-shaped tokens
+  are first-class signals retrieved per-term through the daemon's BM25 fast
+  route (20–300ms vs 3–5s hybrid on an 86K-drawer wing) with hybrid fallback;
+  sessions/diary/checkpoint exhaust and below-floor hits (similarity < 0.50,
+  BM25-only < 1.5) never inject; a drawer is never injected twice per
+  session; curated ``…/memory/*.md`` drawers rank first; every fired query
+  emits a ``RECEIPT`` the hook renders as a visible terminal line
+  (``✦ palace ← "…" [wing] → 3 hits via bm25-fast (34ms)``), including
+  timeouts and cached fires. Umbrella: #428.
+
+  *Tests:* 17 (test_auto_query_quality) + 5 updated
+
+
 ## [2026-09-01]
 
 

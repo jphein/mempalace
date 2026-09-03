@@ -92,7 +92,8 @@ if [ -n "$RECEIPT_JSON_RAW" ]; then
   RECEIPT=$(printf '%s' "$RECEIPT_JSON_RAW" | jq -r '
     def q: (.query // "?") | if length > 60 then .[0:57] + "…" else . end;
     def w: if (.wing // "") != "" then " [" + .wing + "]" else "" end;
-    def ms: if (.cached // false) then " (cached)" elif .latency_ms != null then " (" + (.latency_ms|tostring) + "ms)" else "" end;
+    def ms: (if (.route // "") != "" then " via " + .route else "" end)
+            + (if (.cached // false) then " (cached)" elif .latency_ms != null then " (" + (.latency_ms|tostring) + "ms)" else "" end);
     def best: if .best != null then (.best*100|round/100|tostring) else "n/a" end;
     def floor: if .floor != null then (.floor*100|round/100|tostring) else "" end;
     if (.error // "") != "" then
