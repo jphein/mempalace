@@ -1252,7 +1252,12 @@ def test_mine_sync_routes_through_daemon(tmp_path):
 
 
 def test_ingest_transcript_routes_through_daemon(tmp_path):
-    """When PALACE_DAEMON_URL is set, _ingest_transcript POSTs the parent dir + project wing."""
+    """When PALACE_DAEMON_URL is set, _ingest_transcript POSTs THIS transcript + project wing.
+
+    Not the parent directory: that re-mined every session in the project on
+    every checkpoint (a single such mine measured 6h holding the palace write
+    lock — mempalace#414/#426).
+    """
     convo_dir = tmp_path / ".claude" / "projects" / "-home-u-Projects-myapp"
     convo_dir.mkdir(parents=True)
     transcript = convo_dir / "session.jsonl"
@@ -1266,7 +1271,8 @@ def test_ingest_transcript_routes_through_daemon(tmp_path):
     mock_popen.assert_not_called()
     mock_post.assert_called_once()
     args, kwargs = mock_post.call_args
-    assert args[0] == str(convo_dir)
+    assert args[0] == str(transcript)
+    assert args[0] != str(convo_dir)
     # Upstream #1410 API: ``wing_<project>`` shape.
     assert kwargs["wing"] == "wing_myapp"
     assert kwargs["mode"] == "convos"
