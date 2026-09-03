@@ -1225,7 +1225,12 @@ def _ingest_transcript(transcript_path: str):
     project_wing = _wing_from_transcript_path(transcript_path)
 
     if _daemon_strict():
-        _post_daemon_mine(str(path.parent), wing=project_wing, mode="convos")
+        # Post THIS transcript, not its parent directory. Posting the parent
+        # re-mined every session in the project on every checkpoint — one
+        # such mine measured 6h holding the palace write lock while three
+        # sessions were live (mempalace#414/#426). The daemon accepts a
+        # single .jsonl path (palace-daemon: _is_mineable_path).
+        _post_daemon_mine(str(path), wing=project_wing, mode="convos")
         return
 
     try:
