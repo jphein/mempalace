@@ -30,6 +30,7 @@ def format_injection(
     mcp_result: dict,
     signals: SignalSet,
     latency_ms: int,
+    header_lines: Optional[List[str]] = None,
 ) -> Optional[str]:
     """Format MCP results as an injection block with sentinel tokens.
 
@@ -75,8 +76,13 @@ def format_injection(
     lines = [
         SENTINEL_OPEN,
         trigger,
-        "results (%d):" % count,
     ]
+    # Optional context header (e.g. the wing inventory line on depth fires) —
+    # tells the reader what the palace *holds* for this project, which the
+    # fleet said was worth more than another result block.
+    if header_lines:
+        lines.extend(header_lines)
+    lines.append("results (%d):" % count)
     lines.extend(body_lines)
     lines.append(provenance)
     lines.append(
@@ -107,6 +113,8 @@ def _signal_summary(signals: SignalSet) -> str:
     parts = []  # type: List[str]
     for sig in signals.entity:
         parts.append("entity=%s" % sig.name)
+    for sig in getattr(signals, "identifier", []) or []:
+        parts.append("id=%s" % sig.name)
     for sig in signals.temporal:
         phrase = sig.phrase or sig.name
         parts.append("temporal='%s'" % phrase)
@@ -114,6 +122,8 @@ def _signal_summary(signals: SignalSet) -> str:
         parts.append("resumption")
     if signals.explicit:
         parts.append("explicit")
+    if getattr(signals, "depth_fire", False):
+        parts.append("depth-refresh")
     return ", ".join(parts) if parts else "unknown"
 
 
@@ -130,7 +140,9 @@ def _format_search_results(results: list, budget: int) -> Tuple[List[str], int]:
 def _render_search_item(idx: int, item: dict, preview_cap: int) -> str:
     wing = item.get("wing", "?")
     room = item.get("room", "?")
-    drawer_id = item.get("drawer_id", "?")
+    # The postgres BM25 arm emits ``id`` where the hybrid path emits
+    # ``drawer_id``; accept either so no result renders as "?".
+    drawer_id = item.get("drawer_id") or item.get("id") or "?"
     created_at = item.get("created_at", "")
     date_part = "(%s)" % created_at if created_at else ""
     text = item.get("text", "")

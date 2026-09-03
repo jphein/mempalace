@@ -9,6 +9,14 @@ Pure functions — no I/O, no MCP calls. All external state
 
 ## Functions
 
+### `strip_foreign_blocks`
+
+```python
+def strip_foreign_blocks(text)
+```
+
+Remove peer-message / harness blocks so only the user's words remain.
+
 ### `extract_signals`
 
 ```python

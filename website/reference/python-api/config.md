@@ -283,6 +283,30 @@ Env ``AUTO_QUERY_DEPTH_CACHE_TTL`` > config ``auto_query.depth_cache_ttl``
 fires from cache trades sub-second staleness bounds for skipping a
 ~1s daemon round-trip on every 10th turn.
 
+#### `auto_query_min_similarity`
+
+```python
+def auto_query_min_similarity(self) -> float
+```
+
+Confidence floor for auto-query injection (hybrid similarity).
+
+Env ``AUTO_QUERY_MIN_SIMILARITY`` > config ``auto_query.min_similarity``
+> 0.50. Fleet measurement (2026-09-03): relevant hits scored ~0.50–0.55,
+uniformly irrelevant hits 0.44–0.47 with a 0.026 spread. Below the
+floor the hook injects nothing — an honest "no hits" beats five bad
+ones. Set to 0 to disable.
+
+#### `auto_query_min_bm25`
+
+```python
+def auto_query_min_bm25(self) -> float
+```
+
+Floor for BM25-only candidates (no vector similarity) in auto-query.
+
+Env ``AUTO_QUERY_MIN_BM25`` > config ``auto_query.min_bm25`` > 1.5.
+
 #### `auto_query_max_per_turn`
 
 ```python

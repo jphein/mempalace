@@ -22,8 +22,14 @@ import sys
 import urllib.error
 import urllib.request
 
-from mempalace.auto_query.runner import run_auto_query
+from mempalace.auto_query.runner import _api_key, run_auto_query
 from mempalace.config import MempalaceConfig
+
+
+# Wing → drawer-count map from the last successful /status/fast fetch, used
+# for the depth-refresh inventory line. Module-level so the existing wing
+# fetch/cache contract stays untouched.
+_LAST_WING_COUNTS = {}  # type: dict
 
 
 def _default_wings_cache_path():
@@ -68,7 +74,7 @@ def _fetch_wings_from_daemon(config):
         return set()
     url = "{}/status/fast".format(daemon_url.rstrip("/"))
     headers = {}
-    api_key = os.environ.get("PALACE_API_KEY", "").strip()
+    api_key = _api_key()  # env, else ~/.config/palace-daemon/env — hooks lack shell rc
     if api_key:
         headers["X-API-Key"] = api_key
     req = urllib.request.Request(url, headers=headers, method="GET")
@@ -79,6 +85,8 @@ def _fetch_wings_from_daemon(config):
         return set()
     wings = data.get("wings", {})
     if isinstance(wings, dict):
+        _LAST_WING_COUNTS.clear()
+        _LAST_WING_COUNTS.update({str(k): v for k, v in wings.items()})
         return {str(name) for name in wings.keys()}
     if isinstance(wings, list):
         return {w.get("name", w) if isinstance(w, dict) else str(w) for w in wings}
@@ -157,11 +165,18 @@ def main(argv=None):
         known_entities=known_entities,
         has_recent_drawers=args.recent_drawers,
         config=config,
+        wing_counts=dict(_LAST_WING_COUNTS) or None,
     )
 
     if result.injection:
         sys.stdout.write(result.injection)
         sys.stdout.write("\n")
+
+    # Receipt on stderr (stdout is the injection channel): the hook turns
+    # this into the visible `✦ palace ← …` terminal line — including for
+    # queries that found nothing, so a silent miss can't hide.
+    if result.receipt:
+        sys.stderr.write("RECEIPT: " + json.dumps(result.receipt) + "\n")
 
     return 0
 

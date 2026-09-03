@@ -1090,6 +1090,40 @@ class MempalaceConfig:
         return coerced if coerced is not None else 900
 
     @property
+    def auto_query_min_similarity(self) -> float:
+        """Confidence floor for auto-query injection (hybrid similarity).
+
+        Env ``AUTO_QUERY_MIN_SIMILARITY`` > config ``auto_query.min_similarity``
+        > 0.50. Fleet measurement (2026-09-03): relevant hits scored ~0.50–0.55,
+        uniformly irrelevant hits 0.44–0.47 with a 0.026 spread. Below the
+        floor the hook injects nothing — an honest "no hits" beats five bad
+        ones. Set to 0 to disable.
+        """
+        raw = os.environ.get("AUTO_QUERY_MIN_SIMILARITY")
+        if raw is None:
+            aq = self._file_config.get("auto_query", {})
+            raw = aq.get("min_similarity", 0.50) if isinstance(aq, dict) else 0.50
+        try:
+            return max(0.0, float(raw))
+        except (TypeError, ValueError):
+            return 0.50
+
+    @property
+    def auto_query_min_bm25(self) -> float:
+        """Floor for BM25-only candidates (no vector similarity) in auto-query.
+
+        Env ``AUTO_QUERY_MIN_BM25`` > config ``auto_query.min_bm25`` > 1.5.
+        """
+        raw = os.environ.get("AUTO_QUERY_MIN_BM25")
+        if raw is None:
+            aq = self._file_config.get("auto_query", {})
+            raw = aq.get("min_bm25", 1.5) if isinstance(aq, dict) else 1.5
+        try:
+            return max(0.0, float(raw))
+        except (TypeError, ValueError):
+            return 1.5
+
+    @property
     def auto_query_max_per_turn(self) -> int:
         """Max auto-query invocations per turn.
 
