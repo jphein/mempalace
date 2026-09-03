@@ -1175,7 +1175,12 @@ def test_post_daemon_mine_posts_correct_body(tmp_path):
     assert ok is True
     assert captured["url"] == "http://daemon.example:8085/mine"
     body = json.loads(captured["body"].decode())
-    assert body == {"dir": "/home/u/.claude/projects/-x", "wing": "wing_x", "mode": "convos"}
+    assert body == {
+        "dir": "/home/u/.claude/projects/-x",
+        "wing": "wing_x",
+        "mode": "convos",
+        "background": True,  # daemon queues + 202s instead of blocking (#426)
+    }
     assert captured["api_key"] == "k123"
 
 

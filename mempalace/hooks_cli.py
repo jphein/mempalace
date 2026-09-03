@@ -539,11 +539,14 @@ def _post_daemon_mine(
     The hook sends client-side absolute paths (e.g. ``/home/<user>/.claude/projects/...``);
     the daemon translates them to its own filesystem layout via its
     ``PALACE_DAEMON_PATH_MAP`` env var. Failures are logged and swallowed —
-    a missed mine is not worth crashing a hook over. Note: the daemon's
-    /mine endpoint currently blocks until the mine subprocess finishes,
-    so the timeout is sized for typical workloads rather than network
-    round-trip; on a real mine that exceeds it, the hook gets a stale
-    timeout log but the daemon-side work still completes.
+    a missed mine is not worth crashing a hook over. The request asks for
+    ``background`` execution: a daemon that supports it (palace-daemon
+    ≥ the #233 change) queues the mine and answers 202 immediately, so the
+    30s timeout below is a network ceiling, not a mine-duration bet. An
+    older daemon ignores the field and blocks until the mine finishes; on a
+    mine that exceeds the timeout the hook logs a stale timeout and journals
+    a replay while the daemon-side work still completes (the duplicate-mine
+    behaviour #426 describes).
 
     On any transport failure (connection refused, timeout, non-2xx, daemon-side
     backend-unreachable), the request is appended to the pending queue
@@ -562,9 +565,17 @@ def _post_daemon_mine(
     try:
         import urllib.request
 
+        # ``background``: ask the daemon to queue the mine and answer 202 at
+        # once instead of blocking until the subprocess finishes. Without it
+        # the 30s client timeout below fired on every real mine, the hook
+        # journaled a replay, and the daemon finished the original anyway —
+        # every long mine ran twice and the palace write lock stayed hot
+        # (mempalace#426, palace-daemon#233). Older daemons ignore the field.
         req = urllib.request.Request(
             f"{daemon_url}/mine",
-            data=json.dumps({"dir": directory, "wing": wing, "mode": mode}).encode("utf-8"),
+            data=json.dumps(
+                {"dir": directory, "wing": wing, "mode": mode, "background": True}
+            ).encode("utf-8"),
             headers={"content-type": "application/json"},
             method="POST",
         )
