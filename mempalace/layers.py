@@ -38,6 +38,28 @@ from .searcher import (
 # ---------------------------------------------------------------------------
 
 
+_EXHAUST_ROOMS = frozenset({"diary", "sessions", "checkpoint"})
+_EXHAUST_PREFIXES = ("AUTO-SAVE:", "Session manifest", "> This session is being continued")
+
+
+def _is_exhaust_drawer(doc, meta):
+    # type: (str, dict) -> bool
+    """True for the palace's own bookkeeping: diary checkpoints, session manifests."""
+    if str(meta.get("room", "") or "") in _EXHAUST_ROOMS:
+        return True
+    drawer_id = str(meta.get("drawer_id", "") or meta.get("id", "") or "")
+    if drawer_id.startswith("diary_"):
+        return True
+    return (doc or "").lstrip().startswith(_EXHAUST_PREFIXES)
+
+
+def _is_curated_source(meta):
+    # type: (dict) -> bool
+    """A drawer mined from a per-project auto-memory file (…/memory/*.md)."""
+    src = str(meta.get("source_file", "") or "")
+    return "/memory/" in src and src.endswith(".md")
+
+
 class Layer0:
     """
     ~100 tokens. Always loaded.
@@ -186,7 +208,18 @@ class Layer1:
         for doc, meta in zip(docs, metas):
             meta = meta or {}
             doc = doc or ""
+            # Bookkeeping drawers are not the story (fleet check-in
+            # 2026-09-03: L1 led with "AUTO-SAVE:<session>|54.msgs|..." lines
+            # and agents read the palace as "my own exhaust"). Skip diary
+            # checkpoints, session manifests and compaction summaries.
+            if _is_exhaust_drawer(doc, meta):
+                continue
             importance = 3.0
+            # Curated per-project memory files (one fact per file) are the
+            # notes agents actually reach for — rank them above transcript
+            # chunks when nothing else distinguishes them.
+            if _is_curated_source(meta):
+                importance = 4.0
             # Try multiple metadata keys that might carry weight info
             for key in ("importance", "emotional_weight", "weight"):
                 val = meta.get(key)
