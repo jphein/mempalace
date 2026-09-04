@@ -39,10 +39,11 @@ class ReplayReport:
     succeeded: int
     failed: int
     files_drained: int
+    dropped: int = 0  # legacy whole-directory requests discarded (see _is_legacy_dir_request)
 
     @property
     def is_empty(self) -> bool:
-        return self.attempted == 0
+        return self.attempted == 0 and self.dropped == 0
 
 
 def enqueue(request: dict, *, now: datetime | None = None) -> Path:
@@ -120,6 +121,29 @@ def _dedupe(lines: Iterable[str]) -> list[str]:
     ]
 
 
+def _is_legacy_dir_request(request: dict) -> bool:
+    """A pre-2026-09-03 journal entry: a convos mine of a whole project directory.
+
+    Hooks used to journal ``{"dir": ~/.claude/projects/<proj>, "mode": "convos"}``
+    when the daemon call timed out. Replaying one re-mines every session in
+    the project (measured: 6h holding the palace write lock) and, because it
+    times out again, it stayed queued forever — 559 such entries were found
+    and archived. Since #431/#433 hooks post a single ``.jsonl`` transcript, so
+    anything convos-shaped that is NOT a ``.jsonl`` file is legacy and is
+    dropped. ``projects``/``session`` mode requests are untouched.
+    """
+    if not isinstance(request, dict):
+        return False
+    if str(request.get("mode", "convos")) != "convos":
+        return False
+    target = str(request.get("dir", "") or "").replace("\\", "/")
+    if target.lower().endswith(".jsonl"):
+        return False
+    # Only the Claude Code transcript-dir shape is known-legacy; other convos
+    # directories (exports, other harnesses) keep their existing behaviour.
+    return "/.claude/projects/" in target
+
+
 def replay(
     post_fn: Callable[[dict], bool],
     *,
@@ -156,7 +180,7 @@ def replay(
     if not base.is_dir():
         return ReplayReport(0, 0, 0, 0)
 
-    attempted = succeeded = failed = files_drained = 0
+    attempted = succeeded = failed = files_drained = dropped = 0
     pid = os.getpid()
 
     for path in sorted(base.glob("*.jsonl")):
@@ -197,12 +221,19 @@ def replay(
                 # Time's up — preserve unprocessed lines so they replay next.
                 remaining.append(line)
                 continue
-            attempted += 1
             try:
                 request = json.loads(line)
             except json.JSONDecodeError:
+                attempted += 1
                 failed += 1
                 continue
+            if _is_legacy_dir_request(request):
+                # Consume, don't replay: a whole-project convos mine is the
+                # multi-hour lock-holder that #414/#426 describe, and every
+                # transcript it would cover is re-mined per checkpoint anyway.
+                dropped += 1
+                continue
+            attempted += 1
             try:
                 ok = bool(post_fn(request))
             except Exception:
@@ -237,4 +268,4 @@ def replay(
                 # replay can pick it up.
                 pass
 
-    return ReplayReport(attempted, succeeded, failed, files_drained)
+    return ReplayReport(attempted, succeeded, failed, files_drained, dropped)
