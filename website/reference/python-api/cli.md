@@ -327,6 +327,20 @@ def cmd_migrate_wings(args)
 
 Normalize legacy wing names (strip leading/trailing separators).
 
+### `cmd_doctor`
+
+```python
+def cmd_doctor(args)
+```
+
+One-screen health check of the memory workflow (#425).
+
+Answers, in order: is the MCP bridge on PATH? is the daemon reachable and
+how big is the palace? is this project's wing present? are the save hooks
+firing (fresh hook_state)? is anything queued for replay? Every line is a
+✓ / ✗ / ! so a broken memory workflow is loud instead of silently wrong —
+the failure mode that let the MCP bridge stay dead fleet-wide for days.
+
 ### `cmd_status`
 
 ```python
