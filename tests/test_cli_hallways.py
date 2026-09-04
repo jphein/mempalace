@@ -72,3 +72,40 @@ def test_explicit_palace_scopes_hallway_listing(monkeypatch, tmp_path):
     cmd_hallways(Namespace(wing="wing_aya", limit=50, palace=str(selected)))
 
     assert calls == [("wing_aya", str(selected))]
+
+
+def test_legacy_hallways_prints_deprecation_and_honours_json(monkeypatch, capsys):
+    """#407: the legacy verb warns on stderr, and --json emits JSON (it was
+    silently ignored — a jq pipeline got human text and exit 0)."""
+    import json as _json
+
+    from mempalace import cli
+
+    rows = [
+        {"label": "a <-> b", "entity_a": "a", "entity_b": "b", "co_occurrence_count": 3},
+        {"label": "c <-> d", "entity_a": "c", "entity_b": "d", "co_occurrence_count": 1},
+    ]
+    monkeypatch.setattr("mempalace.hallways.list_hallways", lambda wing, config=None: list(rows))
+    monkeypatch.setattr(
+        cli, "MempalaceConfig", lambda *a, **k: type("C", (), {"palace_path": "/p"})()
+    )
+
+    class Args:
+        palace = None
+        wing = None
+        limit = 1
+        json = False
+        format = None
+
+    cli.cmd_hallways(Args())
+    out = capsys.readouterr()
+    assert "deprecated" in out.err and "hallway list" in out.err
+    assert "1 hallway" not in out.out or "2 hallway(s)" in out.out
+
+    Args.json = True
+    cli.cmd_hallways(Args())
+    out = capsys.readouterr()
+    payload = _json.loads(out.out)
+    assert payload["total"] == 2 and len(payload["hallways"]) == 1
+    assert payload["hallways"][0]["label"] == "a <-> b"
+    assert out.err == "", "no chrome on the JSON surface"

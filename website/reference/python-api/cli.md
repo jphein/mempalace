@@ -398,6 +398,12 @@ def cmd_hallways(args)
 
 List within-wing entity hallways (the auto-built associative graph).
 
+DEPRECATED (#407): ``mempalace hallway list`` is the first-class verb —
+daemon-routed, paginated, with ``--json``. This legacy verb stays for
+scripts that call it, prints a one-line notice on stderr, and now honours
+``--json`` instead of silently ignoring it (a ``jq`` pipeline used to get
+human text and exit 0).
+
 ### `cmd_overlap`
 
 ```python

@@ -5230,8 +5230,23 @@ def _build_overlap_cypher(wing_a: str, wing_b: str, limit: int) -> str:
 
 
 def cmd_hallways(args):
-    """List within-wing entity hallways (the auto-built associative graph)."""
+    """List within-wing entity hallways (the auto-built associative graph).
+
+    DEPRECATED (#407): ``mempalace hallway list`` is the first-class verb —
+    daemon-routed, paginated, with ``--json``. This legacy verb stays for
+    scripts that call it, prints a one-line notice on stderr, and now honours
+    ``--json`` instead of silently ignoring it (a ``jq`` pipeline used to get
+    human text and exit 0).
+    """
     from .hallways import list_hallways
+
+    want_json = _resolve_read_format(args) == "json"
+    if not want_json:
+        print(
+            "mempalace: `hallways` is deprecated — use `mempalace hallway list` "
+            "(daemon-routed, --json, pagination). See techempower-org/mempalace#407.",
+            file=sys.stderr,
+        )
 
     palace_path = (
         os.path.expanduser(args.palace)
@@ -5242,12 +5257,23 @@ def cmd_hallways(args):
         getattr(args, "wing", None),
         config=MempalaceConfig(palace_path=palace_path),
     )
+    rows.sort(key=lambda h: h.get("co_occurrence_count", 0), reverse=True)
+    limit = max(0, getattr(args, "limit", 50))
+    if want_json:
+        _emit_json(
+            {
+                "hallways": rows[:limit],
+                "wing_filter": getattr(args, "wing", None),
+                "total": len(rows),
+                "deprecated": "use `mempalace hallway list`",
+            }
+        )
+        return
     if not rows:
         print("No hallways yet -- they are built from drawer entities when you mine.")
         return
-    rows.sort(key=lambda h: h.get("co_occurrence_count", 0), reverse=True)
     print(f"  {len(rows)} hallway(s):")
-    for h in rows[: max(0, args.limit)]:
+    for h in rows[:limit]:
         label = h.get("label") or f"{h.get('entity_a', '?')} <-> {h.get('entity_b', '?')}"
         print(f"    {label}")
 
