@@ -12,7 +12,6 @@ new connection.
 import logging
 from unittest.mock import patch
 
-import pytest
 
 from mempalace.backends import postgres as pg
 
