@@ -5844,6 +5844,7 @@ def tool_checkpoint(items, diary=None, dedup_threshold=0.9, added_by=None):
                     entry=entry,
                     topic=diary.get("topic", "session-checkpoint"),
                     wing=diary.get("wing", ""),
+                    session_id=str(diary.get("session_id", "") or ""),
                 )
     return out
 
@@ -6618,6 +6619,10 @@ TOOLS = {
                         "entry": {"type": "string", "description": "Diary entry in AAAK format"},
                         "topic": {"type": "string", "description": "Topic tag (optional)"},
                         "wing": {"type": "string", "description": "Target wing (optional)"},
+                        "session_id": {
+                            "type": "string",
+                            "description": "Harness session id (optional) — stored in the diary drawer's metadata so a session's checkpoints can be queried as a set.",
+                        },
                     },
                 },
                 "dedup_threshold": {
@@ -6873,6 +6878,10 @@ TOOLS = {
                 "content": {
                     "type": "string",
                     "description": "Alias for 'entry' — accepted because add_drawer uses 'content'. Provide either 'entry' or 'content'; 'entry' wins if both are given.",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Harness session id (optional) — stored in the diary drawer's metadata so a session's entries can be queried as a set.",
                 },
             },
             # 'entry' (or its alias 'content') is enforced at dispatch, not via a
