@@ -39,7 +39,15 @@ from .searcher import (
 
 
 _EXHAUST_ROOMS = frozenset({"diary", "sessions", "checkpoint"})
-_EXHAUST_PREFIXES = ("AUTO-SAVE:", "Session manifest", "> This session is being continued")
+_EXHAUST_PREFIXES = (
+    "AUTO-SAVE:",
+    "Session manifest",
+    "> This session is being continued",
+    "Investigate per the method",
+    "Get started. Read",
+    "You are working ",
+    "You are triaging ",
+)
 
 
 def _is_exhaust_drawer(doc, meta):

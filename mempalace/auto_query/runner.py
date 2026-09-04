@@ -338,7 +338,18 @@ def run_auto_query(
 # Rooms and shapes that are the palace's own bookkeeping, not knowledge.
 # They dominated auto-query results fleet-wide ("my own exhaust").
 _EXHAUST_ROOMS = frozenset({"sessions", "diary", "checkpoint"})
-_EXHAUST_PREFIXES = ("AUTO-SAVE:", "Session manifest", "> This session is being continued")
+_EXHAUST_PREFIXES = (
+    "AUTO-SAVE:",
+    "Session manifest",
+    "> This session is being continued",
+    # Prompt-echo drawers — the harness's own instruction text mirrored back
+    # ("Investigate per the method in your instructions", "Read the RFC …"),
+    # not knowledge (fleet finding, gnome-speaks-46, 2026-09-03).
+    "Investigate per the method",
+    "Get started. Read",
+    "You are working ",
+    "You are triaging ",
+)
 
 
 def _is_exhaust(item):
@@ -359,14 +370,25 @@ def _item_id(item):
     return str(item.get("drawer_id") or item.get("id") or "")
 
 
+# Curated one-fact-per-file memory drawers are worth more than a transcript
+# chunk at the same score (fleet finding, openwrt-a0, 2026-09-03: a correct
+# 0.486 memory-file hit sat just under the flat 0.50 floor and would have been
+# suppressed — "flat thresholds punish exactly the corpus you just added").
+# A curated hit clears a floor lowered by this margin.
+_CURATED_FLOOR_MARGIN = 0.10
+
+
 def _above_floor(item, min_sim, min_bm25):
     # type: (dict, float, float) -> bool
+    curated = _is_curated(item)
     sim = item.get("similarity")
     if isinstance(sim, (int, float)):
-        return sim >= min_sim
+        floor = (min_sim - _CURATED_FLOOR_MARGIN) if curated else min_sim
+        return sim >= floor
     bm25 = item.get("bm25_score")
     if isinstance(bm25, (int, float)):
-        return bm25 >= min_bm25
+        floor = (min_bm25 - _CURATED_FLOOR_MARGIN) if curated else min_bm25
+        return bm25 >= floor
     # No score at all (KG / diary shapes) — let the caller's shape decide.
     return True
 

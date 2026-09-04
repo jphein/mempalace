@@ -323,3 +323,34 @@ def test_curated_memory_file_drawers_rank_first(tmp_path, monkeypatch):
     assert _is_curated(curated) and not _is_curated(transcript)
     out = _apply_filtered({"results": []}, {"results": [transcript, curated]}, 5)
     assert [r["drawer_id"] for r in out["results"]] == ["m1", "t1"]
+
+
+def test_curated_hit_clears_a_lower_floor_than_transcript(tmp_path, monkeypatch):
+    """openwrt-a0 fleet finding: a correct 0.486 memory-file hit sat under the
+    flat 0.50 floor. A curated .md hit clears floor - _CURATED_FLOOR_MARGIN;
+    a transcript hit at the same score does not."""
+    monkeypatch.setenv("HOME", str(tmp_path))
+    from mempalace.auto_query.runner import _CURATED_FLOOR_MARGIN, _filter_search_results
+
+    curated = _item(
+        drawer_id="m",
+        similarity=0.486,
+        source_file="/h/.claude/projects/-h-Projects-openwrt/memory/cpe710-ptp.md",
+    )
+    transcript = _item(drawer_id="t", similarity=0.486, source_file="/x/abc.jsonl")
+    out = _filter_search_results({"results": [curated, transcript]}, "s", _Cfg())
+    kept = [r["drawer_id"] for r in out["results"]]
+    assert "m" in kept, "curated 0.486 hit must clear the lowered floor (0.50 - margin)"
+    assert "t" not in kept, "transcript 0.486 hit stays below the flat floor"
+    assert _CURATED_FLOOR_MARGIN >= 0.05
+
+
+def test_prompt_echo_drawers_are_exhaust():
+    """gnome-speaks fleet finding: harness prompt-echo ('Investigate per the
+    method…', 'Get started. Read…') is not knowledge — filter it like manifests."""
+    from mempalace.auto_query.runner import _is_exhaust
+
+    assert _is_exhaust(_item(text="Investigate per the method in your instructions [Read x]"))
+    assert _is_exhaust(_item(text="Get started. Read the RFC 002 spec first."))
+    assert _is_exhaust(_item(text="You are working in the memorypalace project at /home/jp/..."))
+    assert not _is_exhaust(_item(text="A11 accepts u:r:su:s0; A7 refuses the transition"))
