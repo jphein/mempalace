@@ -2479,6 +2479,50 @@ def cmd_daemon(args):
         sys.exit(1)
 
 
+def _daemon_search_auto(args, n_results: int, tags):
+    """``--mode auto``: BM25-fast first, hybrid fallback when fast under-shoots.
+
+    BM25-fast is a pure keyword search, so paraphrased or synonym-only
+    queries get 0 hits even when the palace has the content. When fast
+    succeeded but under-shot the requested limit, retry through hybrid
+    (vector + BM25 + AGE graph) and prefer those results when they cover
+    more ground; the user sees a "hybrid (auto-fallback from bm25-fast)"
+    banner so the rescue is visible. The fallback only fires when fast
+    returned a real response — ``None`` (daemon /search/fast 404 or
+    unreachable) is returned as-is so the caller routes to the MCP
+    envelope, which already runs hybrid-shaped. See #283.
+
+    When BOTH arms come back empty, say so in the source banner and carry
+    hybrid's ``warnings``: a bare "0 results" under a bm25-fast banner read
+    as "fast route, no fallback" and sent a fleet session chasing a misroute
+    that wasn't one — the real cause was a filtered-kNN under-return the
+    daemon HAD warned about (2026-09-03).
+
+    Extracted from cmd_search (ruff C901).
+    """
+    if args.room or tags:
+        return None
+    data = _daemon_search_fast(args.query, n_results, wing=args.wing)
+    if data is None:
+        return None
+    bm25_hits = data.get("results") or []
+    if len(bm25_hits) >= n_results:
+        return data
+    try:
+        fb = _daemon_search_hybrid(args.query, n_results, wing=args.wing, room=args.room)
+    except DaemonError:
+        fb = None
+    fb_hits = (fb.get("results") or []) if fb else []
+    if fb_hits and len(fb_hits) > len(bm25_hits):
+        fb["source"] = "hybrid (auto-fallback from bm25-fast)"
+        return fb
+    if fb is not None and not bm25_hits:
+        data["source"] = "bm25-fast; hybrid fallback also 0"
+        if fb.get("warnings"):
+            data["warnings"] = list(fb.get("warnings") or [])
+    return data
+
+
 def cmd_search(args):
     fmt = _resolve_search_format(args)
     want_json = fmt == "json"
@@ -2502,45 +2546,7 @@ def cmd_search(args):
             elif search_mode == "fast":
                 data = _daemon_search_fast(args.query, n_results, wing=args.wing)
             elif search_mode == "auto":
-                if not args.room and not tags:
-                    data = _daemon_search_fast(args.query, n_results, wing=args.wing)
-                    # auto-with-fallback: BM25-fast is a pure keyword search,
-                    # so paraphrased or synonym-only queries get 0 hits even
-                    # when the palace has the content. When fast succeeded
-                    # but under-shot the requested limit, retry through
-                    # hybrid (vector + BM25 + AGE graph) and prefer those
-                    # results when they cover more ground. The user sees a
-                    # "hybrid (auto-fallback from bm25-fast)" source banner
-                    # so the rescue is visible. We only fire the fallback
-                    # when fast returned a real response — if it returned
-                    # ``None`` (daemon /search/fast 404 or unreachable),
-                    # the existing ``data is None`` branch below routes to
-                    # the MCP envelope, which already runs hybrid-shaped.
-                    # See techempower-org/mempalace#283.
-                    if data is not None:
-                        bm25_hits = data.get("results") or []
-                        if len(bm25_hits) < n_results:
-                            try:
-                                fb = _daemon_search_hybrid(
-                                    args.query, n_results, wing=args.wing, room=args.room
-                                )
-                            except DaemonError:
-                                fb = None
-                            fb_hits = (fb.get("results") or []) if fb else []
-                            if fb_hits and len(fb_hits) > len(bm25_hits):
-                                fb["source"] = "hybrid (auto-fallback from bm25-fast)"
-                                data = fb
-                            elif fb is not None and not bm25_hits:
-                                # Both arms empty. Say so, and carry the
-                                # hybrid arm's diagnostics: a bare "0 results"
-                                # under a bm25-fast banner reads as "fast
-                                # route, no fallback" and sent a fleet
-                                # session chasing a misroute that wasn't one
-                                # (the real cause was a filtered-kNN under-
-                                # return the daemon HAD warned about).
-                                data["source"] = "bm25-fast; hybrid fallback also 0"
-                                if fb.get("warnings"):
-                                    data["warnings"] = list(fb.get("warnings") or [])
+                data = _daemon_search_auto(args, n_results, tags)
 
             if data is None:
                 data = _call_daemon_tool("mempalace_search", arguments)
