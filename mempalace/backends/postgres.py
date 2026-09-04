@@ -776,7 +776,49 @@ class PostgresCollection(BaseCollection):
         if self._conn is None or self._conn.closed:
             self._conn = psycopg2.connect(self.dsn)
             self._conn.autocommit = True
+            self._apply_session_settings(self._conn)
         return self._conn
+
+    def _apply_session_settings(self, conn) -> None:
+        """Per-connection GUCs the kNN path depends on.
+
+        ``hnsw.iterative_scan`` (pgvector >= 0.8): a filtered kNN
+        (``WHERE wing = %s ORDER BY embedding <=> q LIMIT k``) is planned as
+        an HNSW index scan *then* a filter. The index hands back its
+        ``ef_search`` nearest rows palace-wide and the filter discards the
+        ones outside the wing — so a wing that isn't in the global top-N
+        gets ZERO rows, no matter how good its best match is. Measured
+        2026-09-03 on a 757K-drawer palace: a 13K-drawer wing returned 0 for a
+        well-formed prose query (``Rows Removed by Filter: 47``) while the
+        same query unscoped returned 20 and an exact scan returned 5.
+        ``relaxed_order`` makes the index keep scanning until LIMIT rows
+        survive the filter. Session-scoped, so it must be set on every new
+        connection (autocommit means no ``SET LOCAL``). Tolerated on older
+        pgvector (unknown GUC) — logged once, never fatal.
+        MEMPALACE_PG_HNSW_ITERATIVE_SCAN=off disables; any other value is
+        passed through (``relaxed_order`` | ``strict_order``).
+        """
+        mode = os.environ.get("MEMPALACE_PG_HNSW_ITERATIVE_SCAN", "relaxed_order").strip()
+        if not mode or mode.lower() == "off":
+            return
+        if mode not in ("relaxed_order", "strict_order"):
+            logger.warning(
+                "MEMPALACE_PG_HNSW_ITERATIVE_SCAN=%r not in (relaxed_order, strict_order); "
+                "using relaxed_order",
+                mode,
+            )
+            mode = "relaxed_order"
+        try:
+            cur = conn.cursor()
+            cur.execute("SET hnsw.iterative_scan = " + mode)
+        except Exception as exc:  # noqa: BLE001 — pgvector < 0.8 has no such GUC
+            if not getattr(self, "_iterative_scan_warned", False):
+                logger.info(
+                    "postgres: hnsw.iterative_scan unavailable (%s); filtered kNN may "
+                    "under-return on wing-scoped queries — upgrade pgvector to >= 0.8",
+                    str(exc).splitlines()[0][:120],
+                )
+                self._iterative_scan_warned = True
 
     def _detect_extensions(self, *, create: bool = False) -> None:
         if self._vec_type:

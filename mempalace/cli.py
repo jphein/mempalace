@@ -2530,6 +2530,17 @@ def cmd_search(args):
                             if fb_hits and len(fb_hits) > len(bm25_hits):
                                 fb["source"] = "hybrid (auto-fallback from bm25-fast)"
                                 data = fb
+                            elif fb is not None and not bm25_hits:
+                                # Both arms empty. Say so, and carry the
+                                # hybrid arm's diagnostics: a bare "0 results"
+                                # under a bm25-fast banner reads as "fast
+                                # route, no fallback" and sent a fleet
+                                # session chasing a misroute that wasn't one
+                                # (the real cause was a filtered-kNN under-
+                                # return the daemon HAD warned about).
+                                data["source"] = "bm25-fast; hybrid fallback also 0"
+                                if fb.get("warnings"):
+                                    data["warnings"] = list(fb.get("warnings") or [])
 
             if data is None:
                 data = _call_daemon_tool("mempalace_search", arguments)
