@@ -357,3 +357,46 @@ def test_replay_respects_deadline(queue_dir):
     live = queue_dir / "2026-05-21.jsonl"
     remaining = _read_lines(live)
     assert len(remaining) >= 15, f"too many drained ({len(remaining)}/20 left)"
+
+
+def test_replay_drops_legacy_whole_directory_convos_requests(tmp_path):
+    """Pre-#431 journal entries mined whole project dirs and replayed forever.
+
+    They are consumed without being posted; a single-transcript request in the
+    same file is still replayed; a projects-mode directory request survives.
+    """
+    from mempalace import pending_queue
+
+    qdir = tmp_path / "pending"
+    qdir.mkdir()
+    (qdir / "2026-06-27.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "dir": "/home/u/.claude/projects/-home-u-Projects-app",
+                        "mode": "convos",
+                        "wing": "app",
+                    }
+                ),
+                json.dumps(
+                    {
+                        "dir": "/home/u/.claude/projects/-home-u-Projects-app/s.jsonl",
+                        "mode": "convos",
+                        "wing": "app",
+                    }
+                ),
+                json.dumps({"dir": "/home/u/Projects/app/docs", "mode": "projects", "wing": "app"}),
+            ]
+        )
+        + "\n"
+    )
+    posted = []
+    report = pending_queue.replay(lambda req: posted.append(req["dir"]) or True, directory=qdir)
+    assert posted == [
+        "/home/u/.claude/projects/-home-u-Projects-app/s.jsonl",
+        "/home/u/Projects/app/docs",
+    ]
+    assert report.dropped == 1
+    assert report.attempted == 2 and report.succeeded == 2
+    assert not list(qdir.glob("*.jsonl")), "file fully consumed"

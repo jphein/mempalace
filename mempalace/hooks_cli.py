@@ -646,7 +646,7 @@ def _replay_pending_quietly(budget_sec: float = SESSION_START_REPLAY_BUDGET_SEC)
             _log(
                 f"Replay swept: attempted={report.attempted} "
                 f"succeeded={report.succeeded} failed={report.failed} "
-                f"files_drained={report.files_drained}"
+                f"files_drained={report.files_drained} dropped_legacy={report.dropped}"
             )
         return report
     except Exception as e:
