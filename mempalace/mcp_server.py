@@ -307,7 +307,53 @@ def _parse_args():
     return args
 
 
-_args = _parse_args()
+# Only the MCP-server entrypoints own the process's argv. Every other importer
+# — the CLI's local-path tool handlers, the daemon, tests, a hook — has its own
+# flags, and parsing THEIR argv here used to (a) set MEMPALACE_PALACE_PATH
+# process-wide from a stray ``--palace`` and silently redirect the caller's
+# later commands, and (b) raise KeyError out of an ``import`` line on a bad
+# ``--backend`` (techempower-org/mempalace#409).
+_SERVER_ARGV0_BASENAMES = frozenset(
+    {"mempalace-mcp", "mempalace-mcp.py", "mcp_server.py", "mempalace-mcp.exe"}
+)
+
+
+def _is_server_entrypoint(argv0=None, main_spec_name=None) -> bool:
+    """True when this module (or its proxy) is the program being run.
+
+    ``python -m mempalace.mcp_server`` / ``python -m mempalace.mcp_proxy``
+    make ``__main__.__spec__.name`` the module name; the ``mempalace-mcp``
+    console script shows up as ``argv[0]``'s basename. Anything else is an
+    importer whose argv is not ours. ``MEMPALACE_MCP_PARSE_ARGV=1`` forces
+    parsing for unusual launchers.
+    """
+    if os.environ.get("MEMPALACE_MCP_PARSE_ARGV", "").strip() in {"1", "true", "yes"}:
+        return True
+    if argv0 is None:
+        argv0 = sys.argv[0] if sys.argv else ""
+    if main_spec_name is None:
+        spec = getattr(sys.modules.get("__main__"), "__spec__", None)
+        main_spec_name = getattr(spec, "name", None) or ""
+    if main_spec_name in {"mempalace.mcp_server", "mempalace.mcp_proxy"}:
+        return True
+    return os.path.basename(str(argv0)) in _SERVER_ARGV0_BASENAMES
+
+
+def _default_args():
+    """The Namespace a non-entrypoint importer gets: every flag at its default."""
+    return argparse.Namespace(
+        palace=None,
+        backend=None,
+        transport="stdio",
+        host="127.0.0.1",
+        port=8765,
+        tls_cert=None,
+        tls_key=None,
+        read_only=False,
+    )
+
+
+_args = _parse_args() if _is_server_entrypoint() else _default_args()
 
 if _args.palace:
     os.environ["MEMPALACE_PALACE_PATH"] = os.path.abspath(_args.palace)
