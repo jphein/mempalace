@@ -804,3 +804,34 @@ def test_layer2_handles_none_metadata():
         result = layer.retrieve()
 
     assert "L2 — ON-DEMAND" in result
+
+
+class TestL1ExhaustFilterAndCuratedBoost:
+    """Fleet check-in 2026-09-03: wake-up L1 led with diary AUTO-SAVE lines.
+
+    Bookkeeping drawers (diary checkpoints, session manifests, compaction
+    summaries) are skipped; drawers mined from per-project memory files rank
+    above transcript chunks.
+    """
+
+    def test_exhaust_detection(self):
+        from mempalace.layers import _is_exhaust_drawer
+
+        assert _is_exhaust_drawer("AUTO-SAVE:abc|54.msgs|2026-09-01|hook.time", {"room": "general"})
+        assert _is_exhaust_drawer("Session manifest ───── session_id: x", {})
+        assert _is_exhaust_drawer("anything", {"room": "diary"})
+        assert _is_exhaust_drawer("anything", {"drawer_id": "diary_2g_2026"})
+        assert not _is_exhaust_drawer(
+            "A11 accepts u:r:su:s0, A7 refuses the transition", {"room": "problems"}
+        )
+
+    def test_curated_detection(self):
+        from mempalace.layers import _is_curated_source
+
+        assert _is_curated_source(
+            {"source_file": "/h/.claude/projects/-h-Projects-x/memory/crystal-ssid.md"}
+        )
+        assert not _is_curated_source(
+            {"source_file": "/h/.claude/projects/-h-Projects-x/abc.jsonl"}
+        )
+        assert not _is_curated_source({})
