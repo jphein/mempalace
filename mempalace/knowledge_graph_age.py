@@ -169,14 +169,9 @@ class KnowledgeGraphAGE:
                 homelab already has the .so files baked in; bare-metal
                 Postgres requires source-build of AGE first.
         """
-        psycopg2 = _load_psycopg2()
-        self._conn = psycopg2.connect(dsn)
-        # KG writes need explicit commit semantics, not autocommit — keep
-        # the same shape as the SQLite KG so the eventual unified write
-        # API can be swapped underneath. The bootstrap below commits its
-        # own changes; subsequent write operations control their own
-        # transactions.
-        self._conn.autocommit = False
+        self._dsn = dsn
+        self._conn = None
+        self._connect()
         # Serialize transaction spans across threads. The single ``self._conn``
         # is shared whenever one KnowledgeGraphAGE instance is reached from
         # multiple threads — e.g. the inline KG write-through hook
@@ -195,6 +190,105 @@ class KnowledgeGraphAGE:
         self._lock = threading.RLock()
         self._age_loaded = False
         self._ensure_graph()
+
+    # ------------------------------------------------------------------
+    # Connection lifecycle (#405)
+    # ------------------------------------------------------------------
+    #
+    # This instance is cached process-wide by the MCP server (``_call_kg``)
+    # and by the daemon, so ``self._conn`` outlives any single request. Two
+    # things used to poison it permanently until a daemon restart:
+    #
+    # * a statement error (``QueryCanceled`` from a ``statement_timeout``,
+    #   ``DiskFull`` …) left the transaction aborted with no ``rollback()``,
+    #   so every later statement failed; and
+    # * a dead socket (host suspend/resume, server restart) left ``closed``
+    #   set, so every later ``cursor()`` raised ``the connection is closed``.
+    #
+    # Live measurement 2026-09-03: one slow walk took KG reads down for
+    # every client on the host, three times in one day. The guards below
+    # roll back after statement errors and reconnect once after
+    # connection errors, so a bad query costs one query, not the service.
+
+    def _connect(self) -> None:
+        psycopg2 = _load_psycopg2()
+        self._conn = psycopg2.connect(self._dsn)
+        # KG writes need explicit commit semantics, not autocommit — keep
+        # the same shape as the SQLite KG so the eventual unified write
+        # API can be swapped underneath. The bootstrap commits its own
+        # changes; subsequent write operations control their own
+        # transactions.
+        self._conn.autocommit = False
+        self._age_loaded = False
+
+    def _drop_conn(self) -> None:
+        conn, self._conn = self._conn, None
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    def _ensure_conn(self) -> None:
+        """Reconnect if the cached connection is gone (host slept, server bounced)."""
+        conn = self._conn
+        if conn is None or getattr(conn, "closed", 0):
+            self._connect()
+
+    @staticmethod
+    def _is_connection_error(exc: BaseException) -> bool:
+        psycopg2 = _load_psycopg2()
+        conn_errors = tuple(
+            getattr(psycopg2, name)
+            for name in ("OperationalError", "InterfaceError")
+            if hasattr(psycopg2, name)
+        )
+        if conn_errors and isinstance(exc, conn_errors):
+            return True
+        msg = str(exc)
+        return "connection is closed" in msg or "server closed the connection" in msg
+
+    def _rollback_quietly(self) -> None:
+        """Leave the connection usable after a statement-level error.
+
+        psycopg2 marks the transaction aborted after any error; without a
+        rollback every subsequent statement fails with
+        ``InFailedSqlTransaction`` — which is how one cancelled query used to
+        take down every later KG read.
+        """
+        conn = self._conn
+        if conn is None:
+            return
+        try:
+            conn.rollback()
+        except Exception:
+            self._drop_conn()
+
+    def _with_conn_retry(self, fn):
+        """Run ``fn()`` against a live connection; reconnect once on a dead one.
+
+        Statement-level DB errors are rolled back and re-raised unchanged
+        (the caller's query was wrong or too slow — the connection is fine).
+        Connection-level errors drop the socket, reconnect, and retry once.
+        """
+        psycopg2 = _load_psycopg2()
+        db_error = getattr(psycopg2, "Error", Exception)
+        last_exc = None
+        for attempt in (1, 2):
+            self._ensure_conn()
+            try:
+                return fn()
+            except Exception as exc:  # noqa: BLE001 — classified below
+                last_exc = exc
+                if self._is_connection_error(exc):
+                    self._drop_conn()
+                    if attempt == 2:
+                        raise
+                    continue
+                if isinstance(exc, db_error):
+                    self._rollback_quietly()
+                raise
+        raise last_exc  # pragma: no cover — loop always returns or raises
 
     def _ensure_graph(self) -> None:
         """Idempotent: load AGE, set search_path, create the graph if absent.
@@ -319,7 +413,7 @@ class KnowledgeGraphAGE:
 
     def close(self) -> None:
         """Close the underlying Postgres connection."""
-        if self._conn and not self._conn.closed:
+        if self._conn is not None and not getattr(self._conn, "closed", 0):
             self._conn.close()
 
     def __enter__(self) -> "KnowledgeGraphAGE":
@@ -1180,12 +1274,12 @@ class KnowledgeGraphAGE:
 
         cypher_inlined = _inline_cypher_params(cypher, params)
 
-        rows: list = []
         # Hold the lock across the whole cursor → execute → commit span so a
         # concurrent thread sharing this connection cannot interleave its own
         # statements into our transaction (see __init__). Reentrant: public
         # callers already holding the lock pass straight through.
-        with self._lock:
+        def _execute() -> list:
+            rows: list = []
             with self._conn.cursor() as cur:
                 if not self._age_loaded:
                     cur.execute("LOAD 'age'")
@@ -1196,7 +1290,10 @@ class KnowledgeGraphAGE:
                     rows = cur.fetchall()
             if commit:
                 self._conn.commit()
-        return rows
+            return rows
+
+        with self._lock:
+            return self._with_conn_retry(_execute)
 
     def _cypher_scalar(self, cypher: str, params: dict, commit: bool = True) -> Any:
         """Run a Cypher query returning at most one scalar (single column).
@@ -1214,15 +1311,20 @@ class KnowledgeGraphAGE:
         cypher_inlined = _inline_cypher_params(cypher, params)
         if " AS " not in cypher_inlined.upper():
             cypher_inlined = cypher_inlined.rstrip() + " AS v"
+
         # Lock the cursor→execute→commit span (see _run_cypher / __init__).
-        with self._lock:
+        def _execute():
             with self._conn.cursor() as cur:
                 cur.execute("LOAD 'age'")
                 cur.execute('SET search_path = ag_catalog, "$user", public')
                 cur.execute(_compose_cypher_sql(self.GRAPH_NAME, cypher_inlined, "v agtype"))
-                row = cur.fetchone()
+                fetched = cur.fetchone()
             if commit:
                 self._conn.commit()
+            return fetched
+
+        with self._lock:
+            row = self._with_conn_retry(_execute)
         if row is None:
             return None
         return self._unwrap_agtype(row[0])
