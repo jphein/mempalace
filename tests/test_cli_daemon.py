@@ -412,6 +412,36 @@ class TestCmdSearchAutoFallback:
         m_hyb.assert_not_called()
         assert fast_result["source"] == "bm25-fast"
 
+    def test_both_empty_reports_fallback_and_carries_hybrid_warnings(self):
+        """Both arms empty: ``source`` stays the stable "bm25-fast", the fact
+        that hybrid was tried goes in ``fallback``, and hybrid's warnings are
+        carried — a bare "0 results" under a bm25-fast banner read as "no
+        fallback happened" and hid the daemon's filtered-kNN diagnostic
+        (fleet incident 2026-09-03)."""
+        from mempalace import cli
+
+        fast_result = {"results": [], "query": "q", "source": "bm25-fast"}
+        hybrid_result = {
+            "results": [],
+            "source": "hybrid",
+            "warnings": [
+                "13014 drawers in scope; vector ranked only 0 within the distance threshold"
+            ],
+        }
+
+        env = {"PALACE_DAEMON_URL": "http://daemon.example:8085"}
+        with (
+            patch.dict("os.environ", env, clear=True),
+            patch("mempalace.cli._daemon_search_fast", return_value=fast_result),
+            patch("mempalace.cli._daemon_search_hybrid", return_value=hybrid_result) as m_hyb,
+        ):
+            cli.cmd_search(self._args())
+
+        m_hyb.assert_called_once()
+        assert fast_result["source"] == "bm25-fast"
+        assert "hybrid" in fast_result["fallback"] and "0" in fast_result["fallback"]
+        assert fast_result["warnings"] == hybrid_result["warnings"]
+
     def test_keeps_bm25_when_hybrid_also_empty(self):
         """When the fallback retry also returns nothing, keep BM25's empty
         result rather than discarding it — the user gets the original

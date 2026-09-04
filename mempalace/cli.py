@@ -577,6 +577,8 @@ def _print_search_header(
         print(f"  Scope has: {data['available_in_scope']} drawers matching filter")
     for w in warnings:
         print(f"  ! {w}")
+    if data.get("fallback"):
+        print(f"  ! fallback: {data['fallback']}")
     print(f"  via palace-daemon @ {_daemon_url()}")
     print(f"{'=' * 60}\n")
 
@@ -2517,7 +2519,11 @@ def _daemon_search_auto(args, n_results: int, tags):
         fb["source"] = "hybrid (auto-fallback from bm25-fast)"
         return fb
     if fb is not None and not bm25_hits:
-        data["source"] = "bm25-fast; hybrid fallback also 0"
+        # ``source`` stays "bm25-fast" — it is a stable machine-read field
+        # (hooks and tests key on it). The fact that hybrid was tried and
+        # also came back empty goes in its own field, and hybrid's warnings
+        # are carried so the header shows the daemon's diagnostic.
+        data["fallback"] = "hybrid also returned 0 hits"
         if fb.get("warnings"):
             data["warnings"] = list(fb.get("warnings") or [])
     return data
