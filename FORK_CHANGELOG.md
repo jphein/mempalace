@@ -21,7 +21,125 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [2026-09-03]
 
 
+### Added
+
+
+- **mempalace doctor — one-screen health check of the memory workflow (bridge, daemon, wing, hooks, replay)** ([`04dde83`](https://github.com/techempower-org/mempalace/commit/04dde83))
+  Five check lines: MCP bridge resolvable on PATH, daemon reachable + palace
+  size, this project's wing present (drawers + rank), save hooks firing
+  (hook.log freshness), replay backlog. Exits non-zero if a layer is broken;
+  ``--json`` for scripts. Guards the failure mode where the MCP bridge was
+  unresolvable fleet-wide for days and nothing surfaced it (#425). Validated
+  all-green by a fresh session on turn 1.
+
+  *Tests:* 4 (test_cli_doctor)
+
+
+### Changed
+
+
+- **Legacy hallways verb deprecated in favour of hallway list; now honours --json (#407)** ([`1509c32`](https://github.com/techempower-org/mempalace/commit/1509c32))
+  Prints a one-line stderr notice pointing at the first-class daemon-routed
+  verb and emits JSON when asked instead of silently ignoring ``--json`` (a
+  ``jq`` pipeline used to receive human text and exit 0). Kept for scripts;
+  removal is a later release.
+
+  *Tests:* 1 (test_cli_hallways)
+
+
 ### Fixed
+
+
+- **Wing-scoped vector search no longer returns 0 rows: enable pgvector hnsw.iterative_scan per connection** ([`2ea774d`](https://github.com/techempower-org/mempalace/commit/2ea774d))
+  A filtered kNN (``WHERE wing = %s ORDER BY embedding <=> q LIMIT k``) is
+  planned as an HNSW index scan *then* a filter: the index hands back its
+  ``ef_search`` nearest rows palace-wide and the filter discards the ones
+  outside the wing, so a wing outside the global top-N got zero rows however
+  good its best match was (``EXPLAIN: Rows Removed by Filter: 47`` on the
+  757K-drawer production palace; same query unscoped returned 20, exact scan
+  returned 5). Two fleet sessions reported this as a "bm25-fast misroute with
+  no fallback" — every arm was genuinely empty. ``SET hnsw.iterative_scan =
+  relaxed_order`` is now issued on every new backend connection (pgvector
+  >= 0.8; session-scoped, connection is autocommit; tolerated on older
+  pgvector; ``MEMPALACE_PG_HNSW_ITERATIVE_SCAN`` knob). The CLI's
+  both-arms-empty case now sets a ``fallback`` field and carries hybrid's
+  warnings instead of a bare "0 results" under a bm25-fast banner.
+  Acceptance: the exact fleet repro went from 0 results to the curated fact
+  file at 0.575, top hit.
+
+  *Tests:* 6 (test_postgres_iterative_scan x5, test_cli_daemon both-empty)
+  *Files:* `mempalace/backends/postgres.py`, `mempalace/cli.py`
+
+
+- **Curated memory-file hits clear a lower confidence floor; harness prompt-echo drawers filtered as exhaust** ([`31b74d9`](https://github.com/techempower-org/mempalace/commit/31b74d9))
+  The flat 0.50 floor (#422) suppressed a correct 0.486 curated-memory-file
+  hit — "flat thresholds punish exactly the corpus you just added" (fleet
+  finding, openwrt-a0). One-fact-per-file ``memory/*.md`` drawers now clear
+  ``floor - 0.10``. Harness prompt-echo drawers ("Investigate per the
+  method…", "Get started. Read…") are instruction text mirrored back, not
+  knowledge — filtered like session manifests in auto-query and wake-up L1
+  (gnome-speaks-46).
+
+  *Tests:* 3 (test_auto_query_quality)
+
+
+- **Only the MCP-server entrypoints parse argv at import; other importers get defaults (#409)** ([`e3e0579`](https://github.com/techempower-org/mempalace/commit/e3e0579))
+  Importing ``mempalace.mcp_server`` parsed the *importing* process's argv
+  at module scope: a live ``mempalace --palace X wings --json`` left
+  ``MEMPALACE_PALACE_PATH`` set process-wide, and ``--backend
+  not-a-real-backend`` anywhere in argv made the import raise ``KeyError``.
+  ``_is_server_entrypoint()`` gates the parse (mempalace-mcp / mcp_server.py
+  argv0, or ``__main__`` = mempalace.mcp_server/mcp_proxy;
+  ``MEMPALACE_MCP_PARSE_ARGV=1`` forces it). Fallout: the palace-daemon had
+  relied on this scrape by accident and fell back to ``~/.mempalace/palace``
+  — fixed in palace-daemon#250 (resolve ``--palace`` before the import) plus
+  an explicit env var on the host.
+
+  *Tests:* 5 (test_mcp_server_argv_guard, incl. subprocess imports both ways)
+
+
+- **AGE knowledge-graph connection survives a bad query (rollback) and a dead socket (reconnect once) (#405)** ([`2135df7`](https://github.com/techempower-org/mempalace/commit/2135df7))
+  ``KnowledgeGraphAGE`` is cached process-wide (``mcp_server._call_kg``, the
+  daemon), so one ``QueryCanceled`` (statement_timeout) left the transaction
+  aborted with no rollback and every later statement failed; a dead socket
+  (host suspend/resume) left the connection closed. Measured: one slow walk
+  took KG reads down for every client on the host, three times in a day.
+  ``_with_conn_retry`` wraps ``_run_cypher``/``_cypher_scalar``:
+  statement-level errors roll back and re-raise unchanged; connection-level
+  errors drop the socket, reconnect once, retry.
+
+  *Tests:* 5 (test_kg_age_reconnect, scripted fake psycopg2)
+
+
+- **Replay drops legacy whole-project convos requests instead of re-mining them forever (#426)** ([`b5b774f`](https://github.com/techempower-org/mempalace/commit/b5b774f))
+  ``~/.mempalace/pending/*.jsonl`` held dir-shaped ``mode: convos`` entries
+  from before single-transcript ingest; every replay re-posted a whole
+  project directory mine (hours on the write lock) and the entry survived to
+  be replayed again. ``_is_legacy_dir_request()`` (convos mode, non-.jsonl
+  path under ``/.claude/projects/``) consumes them and reports
+  ``dropped_legacy``; the daemon now refuses them at ``/mine`` too.
+
+  *Tests:* 3 (test_pending_queue)
+
+
+- **wake-up L1 skips bookkeeping drawers (AUTO-SAVE, manifests) and ranks curated memory files first (#421 #423)** ([`a4012dd`](https://github.com/techempower-org/mempalace/commit/a4012dd))
+  L1 was ~80% ``AUTO-SAVE`` lines and session manifests on busy wings.
+  ``_is_exhaust_drawer`` skips them; ``_is_curated_source`` boosts
+  ``memory/*.md`` drawers to importance 4.0 so a fresh session opens on the
+  distilled facts. Fleet validation (labels-de): "not one AUTO-SAVE line" —
+  the whole scry chain, token scheme, and three registration failures with
+  their causes, in ~778 tokens.
+
+  *Tests:* 6 (test_layers)
+
+
+- **tool_checkpoint forwards session_id to the diary write; declared in both tool schemas (#408)** ([`e5e31f0`](https://github.com/techempower-org/mempalace/commit/e5e31f0))
+  ``mempalace_checkpoint`` dropped the caller's ``session_id`` on the way to
+  ``tool_diary_write``, so checkpoint diaries could not be tied back to the
+  session that wrote them. Threaded through and declared in
+  ``mempalace_checkpoint.diary`` and ``mempalace_diary_write``.
+
+  *Tests:* 2 (test_checkpoint_session_id)
 
 
 - **Hooks ask the daemon to run checkpoint mines in the background (202 + serial drain) — no more 30s timeouts, journaled replays, and double mines** ([`79b192b`](https://github.com/techempower-org/mempalace/commit/79b192b))
@@ -78,6 +196,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   timeouts and cached fires. Umbrella: #428.
 
   *Tests:* 17 (test_auto_query_quality) + 5 updated
+
+
+### Performance
+
+
+- **Re-mine a transcript incrementally — embed only new or changed chunks; stored drawers are the watermark (#414)** ([`cf1e997`](https://github.com/techempower-org/mempalace/commit/cf1e997))
+  Per pass: prefetch id→document for the source file, plan deterministic
+  ids, delete only orphans, metadata-only ``update()`` of
+  ``source_mtime``/``chunk_total`` on byte-identical chunks (before the new
+  upserts, so a mid-pass crash leaves count < chunk_total and the
+  completeness rule re-mines), then embed + upsert only new/changed chunks.
+  No new watermark storage; cross-host safe. Measured on a 16 MB live
+  transcript: first mine 1446 texts / 52.5 s; re-mine after 10% append 77 /
+  3.9 s; touch-only 0 / 1.3 s. Fallbacks: prefetch failure → full rebuild;
+  update failure → re-file in full.
+
+  *Tests:* 15 (13 unit + 2 end-to-end counting texts that reach the embedder)
 
 
 ## [2026-09-01]
