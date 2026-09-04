@@ -4506,6 +4506,129 @@ def cmd_migrate_wings(args):
     )
 
 
+def cmd_doctor(args):
+    """One-screen health check of the memory workflow (#425).
+
+    Answers, in order: is the MCP bridge on PATH? is the daemon reachable and
+    how big is the palace? is this project's wing present? are the save hooks
+    firing (fresh hook_state)? is anything queued for replay? Every line is a
+    ✓ / ✗ / ! so a broken memory workflow is loud instead of silently wrong —
+    the failure mode that let the MCP bridge stay dead fleet-wide for days.
+    """
+    import shutil
+    import time as _time
+
+    want_json = getattr(args, "json", False)
+    checks: list[dict] = []
+
+    def add(name, ok, detail, level="ok"):
+        checks.append({"check": name, "ok": bool(ok), "detail": detail, "level": level})
+
+    # 1. MCP bridge resolvable on PATH.
+    bridge = shutil.which("mempalace-mcp")
+    add(
+        "mcp_bridge",
+        bool(bridge),
+        bridge or "mempalace-mcp NOT on PATH",
+        "ok" if bridge else "error",
+    )
+
+    # 2. Daemon reachability + palace size (fast, no locks).
+    total_drawers = None
+    n_wings = None
+    wing_counts = {}
+    if _daemon_url():
+        t0 = _time.monotonic()
+        try:
+            data = _call_daemon_rest("/status/fast")
+            ms = int((_time.monotonic() - t0) * 1000)
+            total_drawers = data.get("total_drawers")
+            wing_counts = data.get("wings", {}) or {}
+            n_wings = len(wing_counts)
+            add(
+                "daemon",
+                True,
+                "reachable @ {} — {} drawers, {} wings ({}ms)".format(
+                    _daemon_url(), total_drawers, n_wings, ms
+                ),
+            )
+        except Exception as e:  # noqa: BLE001 — a doctor never raises
+            add("daemon", False, "unreachable @ {}: {}".format(_daemon_url(), e), "error")
+    else:
+        add("daemon", None, "no daemon configured (local-palace mode)", "warn")
+
+    # 3. This project's wing.
+    wing = getattr(args, "wing", None)
+    if not wing:
+        from .config import normalize_wing_name
+
+        wing = normalize_wing_name(Path(os.getcwd()).name)
+    if wing_counts:
+        n = wing_counts.get(wing, 0)
+        if n:
+            ranked = sorted(wing_counts.values(), reverse=True)
+            rank = ranked.index(n) + 1 if n in ranked else 0
+            add("wing", True, "'{}': {:,} drawers (rank {} of {})".format(wing, n, rank, n_wings))
+        else:
+            add("wing", None, "'{}': no drawers yet".format(wing), "warn")
+    else:
+        add("wing", None, "'{}': cannot check (daemon unreachable)".format(wing), "warn")
+
+    # 4. Save hooks firing — freshness of the hook-state marker.
+    hook_log = os.path.expanduser("~/.mempalace/hook_state/hook.log")
+    if os.path.isfile(hook_log):
+        age = _time.time() - os.path.getmtime(hook_log)
+        if age < 1800:
+            add("save_hooks", True, "hook.log updated {}s ago".format(int(age)))
+        else:
+            add(
+                "save_hooks",
+                None,
+                "hook.log stale ({}m ago) — no recent saves".format(int(age // 60)),
+                "warn",
+            )
+    else:
+        add("save_hooks", None, "no hook_state/hook.log — hooks may not be installed", "warn")
+
+    # 5. Replay backlog.
+    pending_dir = os.path.expanduser("~/.mempalace/pending")
+    pending = 0
+    if os.path.isdir(pending_dir):
+        for fn in os.listdir(pending_dir):
+            if fn.endswith(".jsonl"):
+                try:
+                    with open(os.path.join(pending_dir, fn), encoding="utf-8") as f:
+                        pending += sum(1 for ln in f if ln.strip())
+                except OSError:
+                    pass
+    if pending == 0:
+        add("replay_queue", True, "empty")
+    else:
+        add(
+            "replay_queue",
+            None,
+            "{} request(s) queued — run `mempalace replay`".format(pending),
+            "warn",
+        )
+
+    ok_all = all(c["ok"] is not False for c in checks)
+    if want_json:
+        _emit_json({"ok": ok_all, "checks": checks})
+        sys.exit(0 if ok_all else 1)
+
+    glyph = {"ok": "\u2713", "warn": "!", "error": "\u2717"}
+    print("\n  MemPalace doctor\n  " + "-" * 40)
+    for c in checks:
+        lvl = c["level"] if c["ok"] is not False else "error"
+        print("  {} {:<12} {}".format(glyph.get(lvl, "?"), c["check"], c["detail"]))
+    print()
+    if not ok_all:
+        print(
+            "  \u2717 something is wrong with the memory workflow — see the \u2717 lines above.\n"
+        )
+    sys.exit(0 if ok_all else 1)
+
+
 def cmd_status(args):
     want_json = getattr(args, "json", False)
     if _daemon_strict() and not args.palace:
@@ -10069,6 +10192,10 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         default=None,
         help="Storage backend to use for status (default: config/env/detected/chroma)",
     )
+    p_doctor = sub.add_parser(
+        "doctor", help="Health-check the memory workflow (bridge, daemon, wing, hooks, replay)"
+    )
+    p_doctor.add_argument("--wing", default=None, help="Wing to check (default: cwd basename)")
     p_update = sub.add_parser("update", help="Opt-in release checks and upgrade planning")
     update_sub = p_update.add_subparsers(dest="update_action")
     p_update_configure = update_sub.add_parser("configure", help="Configure periodic checks")
@@ -11285,6 +11412,7 @@ def main():  # noqa: C901 — merged fork daemon-routing + upstream hub-forward 
         "migrate-wings": cmd_migrate_wings,
         "hallways": cmd_hallways,
         "status": cmd_status,
+        "doctor": cmd_doctor,
         "update": cmd_update,
         "stats": cmd_stats,
         "tags": cmd_tags,
