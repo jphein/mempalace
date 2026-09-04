@@ -946,3 +946,301 @@ def test_scan_convos_accepts_one_file_without_scanning_siblings(
     )
 
     assert scan_convos(str(selected)) == [selected.resolve()]
+
+
+class _IncrementalFakeCol:
+    """Stateful in-memory collection for the incremental re-mine tests (#414).
+
+    Tracks every document handed to ``upsert`` (the embed proxy — the
+    embedding wrapper only computes vectors for upserted documents), every
+    metadata-only ``update`` and every ``delete``.
+    """
+
+    def __init__(self, records=None):
+        # id -> {"document": str, "metadata": dict}
+        self.records = dict(records or {})
+        self.upserted_docs: list = []
+        self.upserted_ids: list = []
+        self.update_calls: list = []
+        self.deleted_ids: list = []
+        self.fail_get_with_documents = False
+        self.fail_update = False
+        self.fail_upsert_on_call = None
+        self._upsert_calls = 0
+
+    def get(self, ids=None, where=None, limit=None, offset=0, include=None, **kwargs):
+        include = include or []
+        if self.fail_get_with_documents and "documents" in include:
+            raise RuntimeError("simulated backend error on document fetch")
+        if ids is not None:
+            rows = [(i, self.records[i]) for i in ids if i in self.records]
+        else:
+            rows = list(self.records.items())
+            if where and "source_file" in where:
+                rows = [
+                    (i, r)
+                    for i, r in rows
+                    if r["metadata"].get("source_file") == where["source_file"]
+                ]
+        page = rows[offset : offset + (limit or len(rows))]
+        out = {"ids": [i for i, _ in page], "metadatas": [r["metadata"] for _, r in page]}
+        if "documents" in include:
+            out["documents"] = [r["document"] for _, r in page]
+        return out
+
+    def delete(self, ids=None, where=None, **kwargs):
+        for i in ids or []:
+            self.deleted_ids.append(i)
+            self.records.pop(i, None)
+
+    def upsert(self, documents, ids, metadatas):
+        self._upsert_calls += 1
+        if self.fail_upsert_on_call == self._upsert_calls:
+            raise RuntimeError("simulated upsert failure")
+        for doc, drawer_id, meta in zip(documents, ids, metadatas):
+            self.upserted_docs.append(doc)
+            self.upserted_ids.append(drawer_id)
+            self.records[drawer_id] = {"document": doc, "metadata": dict(meta)}
+
+    def update(self, ids, metadatas=None, documents=None, embeddings=None):
+        if self.fail_update:
+            raise RuntimeError("simulated update failure")
+        self.update_calls.append(list(ids))
+        for drawer_id, meta in zip(ids, metadatas or []):
+            if drawer_id in self.records:
+                self.records[drawer_id]["metadata"].update(meta)
+
+
+def _chunks(n, prefix="chunk"):
+    return [{"content": f"{prefix} {i} " * 20, "chunk_index": i} for i in range(n)]
+
+
+class TestIncrementalReMine:
+    """#414: a re-mine of an appended transcript embeds only the new chunks."""
+
+    @pytest.fixture(autouse=True)
+    def _patch(self, monkeypatch, tmp_path):
+        import mempalace.convo_miner as convo_miner
+
+        monkeypatch.setattr(
+            convo_miner, "file_already_mined", lambda collection, source_file, **kwargs: False
+        )
+        monkeypatch.setattr(convo_miner, "mine_lock", lambda source_file: contextlib.nullcontext())
+        monkeypatch.setattr(convo_miner, "_detect_hall_cached", lambda content: "conversations")
+        monkeypatch.setattr(convo_miner, "DRAWER_UPSERT_BATCH_SIZE", 2)
+        self.source = tmp_path / "session.jsonl"
+        self.source.write_text("x\n", encoding="utf-8")
+        self.src = str(self.source)
+
+    def _mine(self, col, chunks, **kwargs):
+        return _file_chunks_locked(
+            col, self.src, chunks, "wing", "general", "agent", "exchange", **kwargs
+        )
+
+    def test_remine_embeds_only_new_chunks(self):
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(5))
+        assert len(col.upserted_docs) == 5
+        col.upserted_docs.clear()
+        col.upserted_ids.clear()
+
+        drawers, _rooms, skipped = self._mine(col, _chunks(8))
+
+        assert skipped is False
+        assert drawers == 3, "only the 3 appended chunks should be written"
+        assert [d.split()[1] for d in col.upserted_docs] == ["5", "6", "7"]
+        assert col.deleted_ids == [], "no stored drawer is an orphan when a file only grows"
+        assert len(col.records) == 8
+
+    def test_remine_refreshes_bookkeeping_on_unchanged_drawers(self):
+        import os
+
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(3), authored_at="2026-01-01T00:00:00", content_hash="h1")
+        old = {i: dict(r["metadata"]) for i, r in col.records.items()}
+
+        future = 4_000_000_000.0
+        os.utime(self.source, (future, future))
+        self._mine(col, _chunks(4), authored_at="2026-02-02T00:00:00", content_hash="h2")
+
+        metas = [r["metadata"] for r in col.records.values()]
+        assert len(metas) == 4
+        assert {m["chunk_total"] for m in metas} == {4}, "one coherent chunk_total group"
+        assert {m["source_mtime"] for m in metas} == {future}, "one coherent source_mtime group"
+        assert {m["authored_at"] for m in metas} == {"2026-02-02T00:00:00"}
+        chunk0 = next(
+            r["metadata"] for r in col.records.values() if r["metadata"]["chunk_index"] == 0
+        )
+        assert chunk0["content_hash"] == "h2", "chunk-0 content_hash tracks the whole file"
+        # Unchanged rows keep their original filed_at and entities.
+        for drawer_id, before in old.items():
+            after = col.records[drawer_id]["metadata"]
+            assert after["filed_at"] == before["filed_at"]
+            assert after["entities"] == before["entities"]
+        assert sum(len(ids) for ids in col.update_calls) == 3
+
+    def test_touched_but_unchanged_file_embeds_nothing(self):
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(5))
+        col.upserted_docs.clear()
+
+        drawers, _rooms, skipped = self._mine(col, _chunks(5))
+
+        assert skipped is False
+        assert drawers == 0
+        assert col.upserted_docs == []
+        assert col.deleted_ids == []
+        assert sum(len(ids) for ids in col.update_calls) == 5
+
+    def test_changed_chunk_is_re_embedded(self):
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(3))
+        col.upserted_docs.clear()
+
+        chunks = _chunks(3)
+        chunks[1]["content"] = "rewritten by /compact " * 5
+        self._mine(col, chunks)
+
+        assert col.upserted_docs == ["rewritten by /compact " * 5]
+
+    def test_shrunk_file_deletes_only_orphans(self):
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(6))
+        ids_before = dict(zip(range(6), col.upserted_ids))
+        col.upserted_docs.clear()
+
+        self._mine(col, _chunks(4))
+
+        assert sorted(col.deleted_ids) == sorted([ids_before[4], ids_before[5]])
+        assert col.upserted_docs == []
+        assert len(col.records) == 4
+
+    def test_registry_sentinel_is_not_purged_as_orphan(self):
+        from mempalace.ids import make_convo_sentinel_id
+
+        sentinel = make_convo_sentinel_id(self.src, "exchange")
+        col = _IncrementalFakeCol(
+            {
+                sentinel: {
+                    "document": f"[registry] {self.src}",
+                    "metadata": {
+                        "source_file": self.src,
+                        "ingest_mode": "registry",
+                        "extract_mode": "exchange",
+                    },
+                }
+            }
+        )
+        self._mine(col, _chunks(2))
+        assert sentinel not in col.deleted_ids
+        assert sentinel in col.records
+
+    def test_nul_stripped_stored_document_counts_as_unchanged(self):
+        col = _IncrementalFakeCol()
+        chunks = _chunks(2)
+        chunks[0]["content"] = "tool output \x00 with NUL " * 5
+        self._mine(col, chunks)
+        # Simulate the backend's write-boundary NUL strip.
+        for r in col.records.values():
+            r["document"] = r["document"].replace("\x00", "")
+        col.upserted_docs.clear()
+
+        self._mine(col, chunks)
+
+        assert col.upserted_docs == [], "NUL-stripped storage must not force a re-embed"
+
+    def test_prefetch_failure_falls_back_to_full_rebuild(self):
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(3))
+        ids_before = list(col.upserted_ids)
+        col.upserted_docs.clear()
+        col.fail_get_with_documents = True
+
+        drawers, _rooms, skipped = self._mine(col, _chunks(4))
+
+        assert skipped is False
+        assert sorted(col.deleted_ids) == sorted(ids_before), "legacy path purges every drawer"
+        assert drawers == 4, "legacy path rewrites every chunk"
+        assert len(col.records) == 4
+
+    def test_update_failure_refiles_unchanged_chunks_in_full(self):
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(3))
+        col.upserted_docs.clear()
+        col.fail_update = True
+
+        drawers, _rooms, skipped = self._mine(col, _chunks(4))
+
+        assert skipped is False
+        assert drawers == 4, "metadata refresh failed -> every chunk re-filed (never lossy)"
+        assert len(col.records) == 4
+
+    def test_mid_pass_failure_keeps_unchanged_drawers_and_drops_new_rows(self):
+        col = _IncrementalFakeCol()
+        self._mine(col, _chunks(3))
+        old_ids = set(col.upserted_ids)
+        col.upserted_docs.clear()
+        col.upserted_ids.clear()
+        # First pass: 3 chunks -> 2 batches (size 2). Second pass adds 3 new
+        # chunks -> 2 batches; fail the second of those (upsert call #4).
+        col.fail_upsert_on_call = 4
+
+        with pytest.raises(RuntimeError, match="simulated upsert failure"):
+            self._mine(col, _chunks(6))
+
+        assert set(col.records) == old_ids, (
+            "unchanged drawers must survive a mid-pass crash and the rows written "
+            "by the failed pass must be removed"
+        )
+        # Survivors carry the new chunk_total but are short of it, so the
+        # completeness rule re-mines this file next pass (#2183).
+        assert all(r["metadata"]["chunk_total"] == 6 for r in col.records.values())
+        assert len(col.records) < 6
+
+    def test_general_mode_room_change_orphans_old_id(self):
+        col = _IncrementalFakeCol()
+        chunks = [{"content": "decided on X " * 10, "chunk_index": 0, "memory_type": "decisions"}]
+        _file_chunks_locked(col, self.src, chunks, "wing", None, "agent", "general")
+        old_id = col.upserted_ids[0]
+        col.upserted_docs.clear()
+
+        chunks[0]["memory_type"] = "problems"
+        _file_chunks_locked(col, self.src, chunks, "wing", None, "agent", "general")
+
+        assert col.deleted_ids == [old_id], "a chunk routed to a new room orphans its old id"
+        assert len(col.upserted_docs) == 1
+        assert list(col.records) != [old_id]
+
+
+class TestSourceFileStoredDocuments:
+    def test_maps_ids_to_documents_and_skips_registry(self):
+        from mempalace.convo_miner import _source_file_stored_documents
+
+        class FakeCol:
+            def get(self, where=None, limit=None, offset=0, include=None, **kwargs):
+                if offset > 0:
+                    return {"ids": [], "metadatas": [], "documents": []}
+                return {
+                    "ids": ["a", "reg", "sweep", "general"],
+                    "metadatas": [
+                        {"source_file": "chat.txt", "extract_mode": "exchange"},
+                        {"source_file": "chat.txt", "ingest_mode": "registry"},
+                        {"ingest_mode": "sweep", "session_id": "s1", "role": "user"},
+                        {"source_file": "chat.txt", "extract_mode": "general"},
+                    ],
+                    "documents": ["doc a", "[registry] chat.txt", "sweep doc", "general doc"],
+                }
+
+        stored = _source_file_stored_documents(FakeCol(), "chat.txt", "exchange")
+        assert stored == {"a": "doc a"}
+
+
+class TestChunkMatchesStored:
+    def test_exact_and_nul_stripped_match(self):
+        from mempalace.convo_miner import _chunk_matches_stored
+
+        assert _chunk_matches_stored("abc", "abc")
+        assert _chunk_matches_stored("a\x00bc", "abc")
+        assert not _chunk_matches_stored("abc", "abd")
+        assert not _chunk_matches_stored("abc", None)
+        assert not _chunk_matches_stored("abc", "a\x00bc")

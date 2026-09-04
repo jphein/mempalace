@@ -1131,3 +1131,129 @@ def test_mine_convos_dry_run_single_file_does_not_scan_siblings(
     assert "[DRY RUN] selected.txt" in output
     assert "sibling.txt" not in output
     assert not palace_path.exists()
+
+
+def _count_embeds(monkeypatch):
+    """Wrap the embedding wrapper's text embedder with a call counter."""
+    import mempalace.backends.embedding_wrapper as embedding_wrapper
+
+    counter = {"texts": 0}
+    inner = embedding_wrapper._embed_texts
+
+    def counting(texts):
+        counter["texts"] += len(texts)
+        return inner(texts)
+
+    monkeypatch.setattr(embedding_wrapper, "_embed_texts", counting)
+    return counter
+
+
+def _exchanges(n, marker="EXCHANGE"):
+    return "".join(
+        f"> Question number {i} about {marker}?\n"
+        f"Answer {i}: the {marker} detail is settled here with enough words to chunk.\n\n"
+        for i in range(n)
+    )
+
+
+def test_mine_convos_grown_file_embeds_only_new_exchanges(tmp_path, capsys, monkeypatch):
+    """#414: re-mining an appended transcript must embed only the appended
+    exchanges, keep every earlier drawer in place, and leave one coherent
+    ``chunk_total`` / ``source_mtime`` group behind."""
+    counter = _count_embeds(monkeypatch)
+    convo_dir = tmp_path / "convos"
+    convo_dir.mkdir()
+    convo_path = convo_dir / "session.txt"
+    convo_path.write_text(_exchanges(12), encoding="utf-8")
+    palace_path = str(tmp_path / "palace")
+
+    mine_convos(str(convo_dir), palace_path, wing="test")
+    capsys.readouterr()
+    first_pass = counter["texts"]
+    assert first_pass >= 12
+
+    client = chromadb.PersistentClient(path=palace_path)
+    col = client.get_collection("mempalace_drawers")
+    before = col.get(include=["metadatas"])
+    before_ids = set(before["ids"])
+    before_filed_at = {i: m["filed_at"] for i, m in zip(before["ids"], before["metadatas"])}
+
+    convo_path.write_text(_exchanges(12) + _exchanges(4, marker="APPENDED"), encoding="utf-8")
+    future = time.time() + 60
+    os.utime(convo_path, (future, future))
+    counter["texts"] = 0
+
+    mine_convos(str(convo_dir), palace_path, wing="test")
+    out = capsys.readouterr().out
+    assert "unchanged drawer(s) kept" in out
+
+    after = col.get(include=["metadatas", "documents"])
+    new_ids = set(after["ids"]) - before_ids
+    assert counter["texts"] == len(new_ids), (
+        f"re-mine embedded {counter['texts']} texts for {len(new_ids)} new drawers"
+    )
+    assert counter["texts"] < first_pass
+    assert before_ids <= set(after["ids"]), "earlier drawers must survive the re-mine"
+    assert sum("APPENDED" in d for d in after["documents"]) == 4
+
+    metas = [m for m in after["metadatas"] if m.get("ingest_mode") == "convos"]
+    assert len({m["chunk_total"] for m in metas}) == 1
+    assert len({m["source_mtime"] for m in metas}) == 1
+    assert all(m["chunk_total"] == len(metas) for m in metas)
+    for drawer_id, meta in zip(after["ids"], after["metadatas"]):
+        if drawer_id in before_filed_at:
+            assert meta["filed_at"] == before_filed_at[drawer_id], (
+                "unchanged drawer's filed_at was rewritten"
+            )
+
+    # Third pass: mtime bumped, content identical -> nothing embedded, file
+    # still reconciled (not skipped by the exact-mtime fast path).
+    os.utime(convo_path, (future + 60, future + 60))
+    counter["texts"] = 0
+    mine_convos(str(convo_dir), palace_path, wing="test")
+    capsys.readouterr()
+    assert counter["texts"] == 0
+    final = col.get(include=["metadatas"])
+    assert set(final["ids"]) == set(after["ids"])
+    finals = [m for m in final["metadatas"] if m.get("ingest_mode") == "convos"]
+    assert all(m["source_mtime"] == pytest.approx(future + 60) for m in finals)
+
+    # And a fourth, untouched pass takes the cheap exact-mtime skip.
+    mine_convos(str(convo_dir), palace_path, wing="test")
+    assert "Files skipped (already filed): 1" in capsys.readouterr().out
+
+
+def test_mine_convos_rewritten_file_reembeds_changed_and_drops_orphans(
+    tmp_path, capsys, monkeypatch
+):
+    """A transcript rewritten in place (/compact) re-embeds only the chunks
+    whose content changed and deletes stored chunks the new pass no longer
+    produces — never leaving stale text behind."""
+    counter = _count_embeds(monkeypatch)
+    convo_dir = tmp_path / "convos"
+    convo_dir.mkdir()
+    convo_path = convo_dir / "session.txt"
+    convo_path.write_text(_exchanges(10, marker="ORIGINAL"), encoding="utf-8")
+    palace_path = str(tmp_path / "palace")
+
+    mine_convos(str(convo_dir), palace_path, wing="test")
+    capsys.readouterr()
+
+    # Keep the first 6 exchanges verbatim, rewrite the rest into 2 exchanges.
+    convo_path.write_text(
+        _exchanges(6, marker="ORIGINAL") + _exchanges(2, marker="REWRITTEN"),
+        encoding="utf-8",
+    )
+    future = time.time() + 60
+    os.utime(convo_path, (future, future))
+    counter["texts"] = 0
+
+    mine_convos(str(convo_dir), palace_path, wing="test")
+    capsys.readouterr()
+
+    client = chromadb.PersistentClient(path=palace_path)
+    col = client.get_collection("mempalace_drawers")
+    docs = col.get(include=["documents"])["documents"]
+    assert sum("REWRITTEN" in d for d in docs) == 2
+    assert sum("ORIGINAL" in d for d in docs) == 6, "stale rewritten-away exchanges survived"
+    assert counter["texts"] == 2, f"expected only the 2 rewritten chunks embedded, got {counter}"
